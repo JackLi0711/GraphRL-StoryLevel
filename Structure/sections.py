@@ -385,7 +385,7 @@ BEAM_SECTION_DATASET = [
      B600x350x25x45, B600x350x25x50, B600x400x25x50
 ]
 
-beam_sections = BEAM_SECTION_DATASET[0:15]  # original - 0:9
+beam_sections = BEAM_SECTION_DATASET[0:9]  # original - 0:9
 
 
 
@@ -704,7 +704,7 @@ COLUMN_SECTION_DATASET = [
      C600x600x40, C600x600x45, C600x600x50,
 ]
 
-column_sections = COLUMN_SECTION_DATASET[0:15]  # original - 0:9
+column_sections = COLUMN_SECTION_DATASET[0:9]  # original - 0:9
 
 
 
