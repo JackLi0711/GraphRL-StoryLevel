@@ -11,6 +11,7 @@ from copy import deepcopy
 from Structure import check
 from Structure import check_nda
 from Structure import structure
+from RL import new_strategy
 
 
 class Environment:
@@ -77,9 +78,14 @@ class Environment:
             z_span_lens = [z_span_len for i in range(z_span_num)]
             story_num = 5
             story_height = 3200
+
+        story_level_sections = new_strategy.sample_initial_story_sections(x_span_num, x_span_len, 
+                                                                          z_span_num, z_span_len, 
+                                                                          story_num)
         self._testing_structure_kwargs = {"x_span_num": x_span_num, "x_span_lens": x_span_lens, 
                             "z_span_num": z_span_num, "z_span_lens": z_span_lens, 
                             "story_num": story_num, "story_height": story_height,
+                            "story_level_sections": story_level_sections, 
                             "add_structure_geometry": self.add_structure_geometry, 
                             "do_nonlinear_dynamic_analysis": self.do_nonlinear_dynamic_analysis,
                             "nda_norm_dict": self.nda_norm_dict,
@@ -121,6 +127,7 @@ class Environment:
         """Return a random generated structure."""
         if testing:
             self.init_records(self._testing_structure)
+            self.logger.info(f"testing_story_level_sections: {self._testing_structure.story_level_sections}")
             return deepcopy(self._testing_structure)
         elif taller:
             x_span_num = 3
@@ -157,10 +164,14 @@ class Environment:
                 z_span_lens = [z_span_len for i in range(z_span_num)]
                 story_num = np.random.randint(4, 8)
                 story_height = 3200
-            
+
+        story_level_sections = new_strategy.sample_initial_story_sections(x_span_num, x_span_len, 
+                                                                          z_span_num, z_span_len, 
+                                                                          story_num)            
         structure_kwargs = {"x_span_num": x_span_num, "x_span_lens": x_span_lens, 
                             "z_span_num": z_span_num, "z_span_lens": z_span_lens, 
                             "story_num": story_num, "story_height": story_height,
+                            "story_level_sections": story_level_sections, 
                             "add_structure_geometry": self.add_structure_geometry,
                             "do_nonlinear_dynamic_analysis": self.do_nonlinear_dynamic_analysis, 
                             "nda_norm_dict": self.nda_norm_dict,
@@ -171,6 +182,7 @@ class Environment:
             random_structure = self.reset(testing=testing, taller=taller)
         else:    
             self.logger.info(random_structure)
+            self.logger.info(f"story_level_sections: {random_structure.story_level_sections}")
             self.init_records(random_structure)
 
         return random_structure
@@ -181,8 +193,8 @@ class Environment:
         reward = 0.0
         if "material" in self.reward_type:
             print(f"saved_material_record len: {len(self.saved_material_record)}")
-            #print(f"material saved: {material_saved} m3")
-            #print(f"material usage difference: {self.material_usage_record[-2] - self.material_usage_record[-1]} m3")
+            print(f"material saved: {material_saved} m3")
+            print(f"material usage difference: {self.material_usage_record[-2] - self.material_usage_record[-1]} m3")
             
             # normalized reward: decrement / initial amount
             if "normalized" in self.reward_type:

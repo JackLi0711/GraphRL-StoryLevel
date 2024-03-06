@@ -55,13 +55,14 @@ GRAPH_NORM_DICT = {
 
 class Structure:
     def __init__(self, 
-                 x_span_num, x_span_lens, 
-                 z_span_num, z_span_lens, 
-                 story_num, story_height,
-                 analysis_dir,
-                 add_structure_geometry, 
-                 do_nonlinear_dynamic_analysis, 
-                 nda_norm_dict):
+                 x_span_num: int, x_span_lens: List[int], 
+                 z_span_num: int, z_span_lens: List[int], 
+                 story_num: int, story_height: float,
+                 story_level_sections: List[int]=None,
+                 analysis_dir: str=None,
+                 add_structure_geometry=True, 
+                 do_nonlinear_dynamic_analysis=False, 
+                 nda_norm_dict: Dict=None):
         
         self.x_span_num = x_span_num
         self.x_span_lens = x_span_lens
@@ -70,6 +71,7 @@ class Structure:
         self.story_num = story_num
         self.story_height = story_height
         self.story_height_1F = story_height + 1000
+        self.story_level_sections = story_level_sections if story_level_sections is not None else None
         self.analysis_dir = analysis_dir
         self.add_structure_geometry = add_structure_geometry
         self.do_nonlinear_dynamic_analysis = do_nonlinear_dynamic_analysis
@@ -246,6 +248,10 @@ class Structure:
         story_column_member = []
         story_inner_column_member = []
         story_outer_column_member = []
+
+        # prepare story level member group sections for member_section_dict
+        if self.story_level_sections is not None:
+            story_xdir_beam_section, story_zdir_beam_section, story_outer_column_section, story_inner_column_section = np.array_split(self.story_level_sections, 4)
         
         member_index = 0
         for i, y in enumerate(y_grid):
@@ -283,8 +289,14 @@ class Structure:
                             member_same_location_dict[column_XZ] = []
                         member_same_location_dict[column_XZ].append(member_name)
             
-                        init_section = len(column_sections) - 1
-                        member_section_dict[member_name] = init_section
+                        if self.story_level_sections is None:
+                            init_section = len(column_sections) - 1
+                        else:
+                            if x == 0 or x == x_grid[-1] or z == 0 or z == z_grid[-1]:
+                                init_section = story_outer_column_section[y_grid.index(y)]
+                            else:
+                                init_section = story_inner_column_section[y_grid.index(y)]
+                        member_section_dict[member_name] = int(init_section)
                         member_category_dict[member_name] = 'y'
 
                         # Fcr
@@ -335,9 +347,11 @@ class Structure:
                             member_same_location_dict[beam_XZ] = []
                         member_same_location_dict[beam_XZ].append(member_name)
                         
-                        
-                        init_section = len(beam_sections) - 1
-                        member_section_dict[member_name] = init_section
+                        if self.story_level_sections is None:
+                            init_section = len(beam_sections) - 1
+                        else:
+                            init_section = story_xdir_beam_section[x_grid.index(x)]
+                        member_section_dict[member_name] = int(init_section)
                         member_category_dict[member_name] = 'x'
 
                         # Fcr
@@ -378,8 +392,11 @@ class Structure:
                             member_same_location_dict[beam_XZ] = []
                         member_same_location_dict[beam_XZ].append(member_name)
                         
-                        init_section = len(beam_sections) - 1
-                        member_section_dict[member_name] = init_section
+                        if self.story_level_sections is None:
+                            init_section = len(beam_sections) - 1
+                        else:
+                            init_section = story_zdir_beam_section[z_grid.index(z)]
+                        member_section_dict[member_name] = int(init_section)
                         member_category_dict[member_name] = 'z'
 
                         # Fcr
@@ -426,14 +443,21 @@ class Structure:
         self.story_outer_column_member = story_outer_column_member
         self.story_inner_column_member = story_inner_column_member
 
-        self.story_xdir_beam_section = [len(beam_sections) - 1 for _ in range(len(story_xdir_beam_member))]
-        self.story_zdir_beam_section = [len(beam_sections) - 1 for _ in range(len(story_zdir_beam_member))]
-        self.story_outer_column_section = [len(column_sections) - 1 for _ in range(len(story_outer_column_member))]
-        self.story_inner_column_section = [len(column_sections) - 1 for _ in range(len(story_inner_column_member))]
+        if self.story_level_sections is None:
+            self.story_xdir_beam_section = [len(beam_sections) - 1 for _ in range(len(self.story_xdir_beam_member))]
+            self.story_zdir_beam_section = [len(beam_sections) - 1 for _ in range(len(self.story_zdir_beam_member))]
+            self.story_outer_column_section = [len(column_sections) - 1 for _ in range(len(self.story_outer_column_member))]
+            self.story_inner_column_section = [len(column_sections) - 1 for _ in range(len(self.story_inner_column_member))]
+            self.story_level_sections = self.story_xdir_beam_section + self.story_zdir_beam_section + self.story_outer_column_section + self.story_inner_column_section
+        else:
+            xdir_beam, zdir_beam, outer_column, inner_column = np.array_split(self.story_level_sections, 4)
+            self.story_xdir_beam_section = list(xdir_beam)
+            self.story_zdir_beam_section = list(zdir_beam)
+            self.story_outer_column_section = list(outer_column)
+            self.story_inner_column_section = list(inner_column)
 
-        self.story_level_actions = story_xdir_beam_member + story_zdir_beam_member + story_outer_column_member + story_inner_column_member
-        self.story_level_sections = self.story_xdir_beam_section + self.story_zdir_beam_section + self.story_outer_column_section + self.story_inner_column_section
-        self.story_level_categories = ['xdir_beam' for _ in range(len(story_xdir_beam_member))] + ['zdir_beam' for _ in range(len(story_zdir_beam_member))] + ['outer_column' for _ in range(len(story_outer_column_member))] + ['inner_column' for _ in range(len(story_inner_column_member))]
+        self.story_level_actions = self.story_xdir_beam_member + self.story_zdir_beam_member + self.story_outer_column_member + self.story_inner_column_member
+        self.story_level_categories = ['xdir_beam' for _ in range(len(self.story_xdir_beam_member))] + ['zdir_beam' for _ in range(len(self.story_zdir_beam_member))] + ['outer_column' for _ in range(len(self.story_outer_column_member))] + ['inner_column' for _ in range(len(self.story_inner_column_member))]
         self.full_section_sum = sum(self.story_level_sections)
 
         # update member feature into node feature and the node neighbor Mp list, and embedding node
@@ -929,8 +953,9 @@ class Structure:
         """Don't choose the member that change section will cause upper members are thicker than lower members"""
         dont_select_story_member_indexes = []
         
-        # start_story_beam_index = 0
-        # start_story_outer_column_index = start_story_beam_index + len(self.story_beam_section)
+        # start_story_xdir_beam_index = 0
+        # start_story_zdir_beam_index = start_story_xdir_beam_index + len(self.start_story_xdir_beam_index)
+        # start_story_outer_column_index = start_story_zdir_beam_index + len(self.start_story_zdir_beam_index)
         # start_story_inner_column_index = start_story_outer_column_index + len(self.story_outer_column_section)
 
         start_story_member_index = 0

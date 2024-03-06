@@ -30,11 +30,11 @@ def parse_args() -> Namespace:
 	parser.add_argument("--pretrained_ckpt_dir", type=Path, default=None)
 
 	# checkpoint
-	parser.add_argument("--ckpt_dir", type=Path, default="./Results/MaterialReward_RestrictAction/")
+	parser.add_argument("--ckpt_dir", type=Path, default="./Results/MaterialReward_AdjustedMoreSections/")
 	#parser.add_argument("--ckpt_dir", type=Path, default="./Results/AccelerationReward/")
 
 	# suffix
-	parser.add_argument("--suffix", type=str, default="AdjustedMoreSections_RestrictAction_BatchSize256_Epoch300")  # material
+	parser.add_argument("--suffix", type=str, default="NewStrategy_RestrictAction_StraightDecay0.1_BufferSize20000_BatchSize256_Epoch300")  # material
 	#parser.add_argument("--suffix", type=str, default="doNDA_NormalizedReward_RestrictAction_NoColStrength_Epoch300")  # acceleration
 
 	# nonlinear dynamic analysis simulator
@@ -56,7 +56,7 @@ def parse_args() -> Namespace:
 	parser.add_argument("--num_layers", type=int, default=3)
 
 	# buffer
-	parser.add_argument("--buffer_size", type=int, default=10000)
+	parser.add_argument("--buffer_size", type=int, default=20000)
 	parser.add_argument("--update_frequency", type=int, default=1)
 	parser.add_argument("--add_experience_frequency", type=int, default=1)
 
@@ -66,7 +66,7 @@ def parse_args() -> Namespace:
 	parser.add_argument("--synchronize_steps", type=int, default=50)
 	parser.add_argument("--soft_update_alpha", type=float, default=None)
 	parser.add_argument("--test_frequency", type=int, default=5)
-	parser.add_argument("--batch_size", type=int, default=256)  # original: 256
+	parser.add_argument("--batch_size", type=int, default=512)  # original: 256
 	parser.add_argument("--lr", type=float, default=1e-5)
 	parser.add_argument("--num_epoch", type=int, default=300, help="epoch == episode")
 	parser.add_argument("--random_seed", type=int, default=731, help="fixed random seed")
@@ -243,6 +243,6 @@ def main(args):
 
 if __name__ == "__main__":
 	args = parse_args()
-	#main(args)
+	main(args)
 
 

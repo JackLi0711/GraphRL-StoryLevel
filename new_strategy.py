@@ -16,7 +16,7 @@ sys.path.append("./Visualization/")
 sys.path.append("./NonlinearDynamicAnalysisSimulator/")
 
 from Structure import structure as struc
-from Structure import check
+from Structure import check, sections
 
 from RL import agent
 from RL import environment
@@ -24,6 +24,17 @@ from RL.agent import train
 from Visualization import plot
 from Visualization import visualize
 from NonlinearDynamicAnalysisSimulator import load_simulator
+
+
+def set_random_seed(SEED: int):
+	random.seed(SEED)
+	np.random.seed(SEED)
+	torch.manual_seed(SEED)
+	torch.cuda.manual_seed(SEED)
+	torch.backends.cudnn.deterministic = True
+	torch.backends.cudnn.enabled = True
+	torch.backends.cudnn.benchmark = True
+	torch.autograd.set_detect_anomaly(True)
 
 
 def get_loggings(ckpt_dir, name="record"):
@@ -44,6 +55,8 @@ def get_loggings(ckpt_dir, name="record"):
 	logger.addHandler(file_handler)
      
 	return logger
+
+
 
 
 def test_section_pool_lower_bound(logger, analysis_dir):
@@ -144,11 +157,70 @@ def test_original_section_quick_failure(logger, analysis_dir):
                 logger.info(f"fail_name: {fail_name} , fail_reason: {fail_reason}\n")
                 
 
+
+def sample_story_sections(x_span_num, x_span_len, z_span_num, z_span_len, story_num) -> list[int]:
+    min_geo_sum = (2+6) + (2+6) + 4
+    max_geo_sum = (6+8) + (6+8) + 7
+    geo_sum = (x_span_num + x_span_len) + (z_span_num + z_span_len) + story_num
+    main_type = geo_sum - min_geo_sum
+    section_pool = np.array([i for i in range(len(sections.beam_sections))])
+    distance = np.abs(section_pool - main_type)
+
+    exp_negative_distance = np.exp(-1 * distance * 0.25)
+    sample_prob = exp_negative_distance / np.sum(exp_negative_distance)
+    #plt.figure(figsize=(6,4))
+    #plt.bar(section_pool, sample_prob, label=f"({x_span_num}, {story_num}, {z_span_num}) ({x_span_len*1000}, {z_span_len*1000})\n{geo_sum = }, {main_type = }")
+    #plt.legend(loc="best")
+    #plt.show()
+
+    story_outer_column_section = sorted(random.choices(section_pool, weights=sample_prob, k=story_num), reverse=True)
+    story_inner_column_section = sorted(random.choices(section_pool, weights=sample_prob, k=story_num), reverse=True)
+    mean_column_section = round(np.mean(story_outer_column_section + story_inner_column_section))
+    story_xdir_beam_section = [mean_column_section for _ in range(story_num)]
+    story_zdir_beam_section = [mean_column_section for _ in range(story_num)]
+
+    story_level_sections = story_xdir_beam_section + story_zdir_beam_section + story_outer_column_section + story_inner_column_section
+    
+    return story_level_sections
+
+
+def test_sample_initial_story_sections(structure_num, logger, analysis_dir):
+    for i in range(structure_num):
+        x_span_num = np.random.randint(2, 7)
+        z_span_num = np.random.randint(2, 7)
+        x_span_len = np.random.randint(6, 9)  # unit: m
+        z_span_len = np.random.randint(6, 9)  # unit: m
+        x_span_lens = [(x_span_len * 1000) for _ in range(x_span_num)]  # unit: mm
+        z_span_lens = [(z_span_len * 1000) for _ in range(z_span_num)]  # unit: mm
+        story_num = np.random.randint(4, 8)
+        story_height = 3200
+
+        story_level_sections = sample_story_sections(x_span_num, x_span_len, z_span_num, z_span_len, story_num)
+
+        structure_kwargs = {"x_span_num": x_span_num, "x_span_lens": x_span_lens, 
+                            "z_span_num": z_span_num, "z_span_lens": z_span_lens, 
+                            "story_num": story_num, "story_height": story_height,
+                            "story_level_sections": story_level_sections,
+                            "add_structure_geometry": True, 
+                            "do_nonlinear_dynamic_analysis": False,
+                            "nda_norm_dict": None,
+                            "analysis_dir": analysis_dir}
+
+        random_structure = struc.Structure(**structure_kwargs)
+        logger.info(random_structure.__str__())
+        logger.info(f"story_level_sections: {random_structure.story_level_sections}")
+
+        whether_pass, fail_name, fail_reason, auxiliary_values = check.check(random_structure, True, analysis_dir)
+        logger.info(f"fail_name: {fail_name} , fail_reason: {fail_reason}\n")
+
+
 if __name__ == "__main__":
+    set_random_seed(731)
     ckpt_dir = Path("./NewStrategy/")
     analysis_dir = ckpt_dir / "PISA_Analysis"
     analysis_dir.mkdir(parents=True, exist_ok=True)
 
-    logger = get_loggings(ckpt_dir, name="quick_fail")
+    logger = get_loggings(ckpt_dir, name="sample_initial_section")
     #test_section_pool_lower_bound(logger, analysis_dir)
-    test_original_section_quick_failure(logger, analysis_dir)
+    #test_original_section_quick_failure(logger, analysis_dir)
+    test_sample_initial_story_sections(300, logger, analysis_dir)
