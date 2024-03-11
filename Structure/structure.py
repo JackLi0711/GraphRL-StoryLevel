@@ -71,7 +71,7 @@ class Structure:
         self.story_num = story_num
         self.story_height = story_height
         self.story_height_1F = story_height + 1000
-        self.story_level_sections = story_level_sections if story_level_sections is not None else None
+        self.story_level_sections = story_level_sections
         self.analysis_dir = analysis_dir
         self.add_structure_geometry = add_structure_geometry
         self.do_nonlinear_dynamic_analysis = do_nonlinear_dynamic_analysis
@@ -350,7 +350,7 @@ class Structure:
                         if self.story_level_sections is None:
                             init_section = len(beam_sections) - 1
                         else:
-                            init_section = story_xdir_beam_section[x_grid.index(x)]
+                            init_section = story_xdir_beam_section[y_grid.index(y)-1]
                         member_section_dict[member_name] = int(init_section)
                         member_category_dict[member_name] = 'x'
 
@@ -395,7 +395,7 @@ class Structure:
                         if self.story_level_sections is None:
                             init_section = len(beam_sections) - 1
                         else:
-                            init_section = story_zdir_beam_section[z_grid.index(z)]
+                            init_section = story_zdir_beam_section[y_grid.index(y)-1]
                         member_section_dict[member_name] = int(init_section)
                         member_category_dict[member_name] = 'z'
 
@@ -434,7 +434,7 @@ class Structure:
 
         self.member_column_index_list = member_column_index_list
         self.member_beam_index_list = member_beam_index_list
-        self.already_minimum_section_story_indexes = []
+        self.already_minimum_section_story_indexes = [] if self.story_level_sections is None else [i for i in range(len(self.story_level_sections)) if self.story_level_sections[i] == 0]
 
         self.story_beam_member = story_beam_member
         self.story_xdir_beam_member = story_xdir_beam_member

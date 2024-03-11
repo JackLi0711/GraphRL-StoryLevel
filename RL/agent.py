@@ -333,7 +333,7 @@ def _train_an_episode(agent: DeepQAgent,
                       Q_values: List[float],
                       fail_names: List[str],
                       fail_reasons: List[str],
-                      logger: logging.Logger) -> float:
+                      logger: logging.Logger) -> tuple[float, float]:
     """Train the agent until the agent meets the terminal state."""
     structure = env.reset()  # generate a new random graph
     graph = structure.graph.clone()
@@ -345,19 +345,24 @@ def _train_an_episode(agent: DeepQAgent,
         with torch.no_grad():
             graph = graph.to(agent.device)
             state = agent.gnn(graph.x, graph.edge_index, graph.edge_attr, None, structure.aux["story_batch"].to(agent.device), None)
-        print(f"sotry_xdir_beam_section: {structure.story_xdir_beam_section}")
-        print(f"sotry_zdir_beam_section: {structure.story_zdir_beam_section}")
-        print(f"sotry_outer_column_section: {structure.story_outer_column_section}")
-        print(f"sotry_inner_column_section: {structure.story_inner_column_section}")
         dont_select_story_member_indexes = structure.restrict_action_space() if agent.restrict_action else None
         action, q_val = agent.choose_action(state, 
                                             structure.already_minimum_section_story_indexes,
                                             dont_select_story_member_indexes)
+        print(f"\n-----episode: {agent._number_episodes+1:4d}, timestep: {agent._number_timesteps+1:3d}, story_level_sections: {structure.story_level_sections}")
+        print(f"-----episode: {agent._number_episodes+1:4d}, timestep: {agent._number_timesteps+1:3d}, action: {action:3d}")
         structure, reward, done, fail_name, fail_reason = env.step(structure, action)
 
         # record
         score += reward
-        logger.info(f"episode: {agent._number_episodes+1:4d}, timestep: {agent._number_timesteps+1:3d}, action: {action:3d}, reward: {reward:4f},  acculmulate_score: {score:.4f}")
+        logger.info(f"episode: {agent._number_episodes+1:4d}, timestep: {agent._number_timesteps+1:3d}, action: {action:3d}, reward: {reward:4f},  acculmulate_score: {score:.4f} [ORIGINAL]")
+        
+        actions_SCWB = '_'.join([str(a) for a in env.update_actions_record_SCWB[-1]])
+        reward_SCWB = env.saved_material_record_SCWB[-1]
+        score_SCWB = sum(env.saved_material_record_SCWB)
+        if env.saved_material_record_SCWB[-1] != 0:
+            logger.info(f"episode: {agent._number_episodes+1:4d}, timestep: {agent._number_timesteps+1:3d}, action: {actions_SCWB}, reward: {reward_SCWB:4f},  acculmulate_score: {score_SCWB:.4f} [SCWB]")
+        
         if q == 0 and q_val > 0:
             q = q_val
 
@@ -370,16 +375,17 @@ def _train_an_episode(agent: DeepQAgent,
     fail_names.append(fail_name)
     fail_reasons.append(fail_reason)
     logger.info("---> Constraint not satisfied, found optimal section:")
-    logger.info(list(structure.member_section_dict.values()))
+    #logger.info(list(structure.member_section_dict.values()))
+    logger.info(structure.story_level_sections)
     logger.info(f"episode: {agent._number_episodes:4d}, fail name: {fail_name}, fail reason: {fail_reason}")
-    return score
+    return score, score_SCWB
 
 
 def _testing(agent: DeepQAgent, 
              env: Environment, 
              test_fail_names: List[str],
              test_fail_reasons: List[str], 
-             logger: logging.Logger) -> Tuple[float, List[int]]:
+             logger: logging.Logger) -> Tuple[float, float, List[int]]:
     """Test agent's performance with prescribed condition and greedy policy."""
     structure = env.reset(testing=True)  # generate a fix-shaped structure
     graph = structure.graph.clone()
@@ -392,15 +398,13 @@ def _testing(agent: DeepQAgent,
         with torch.no_grad():
             graph = graph.to(agent.device)
             state = agent.gnn(graph.x, graph.edge_index, graph.edge_attr, None, structure.aux["story_batch"].to(agent.device), None)
-        print(f"sotry_xdir_beam_section: {structure.story_xdir_beam_section}")
-        print(f"sotry_zdir_beam_section: {structure.story_zdir_beam_section}")
-        print(f"sotry_outer_column_section: {structure.story_outer_column_section}")
-        print(f"sotry_inner_column_section: {structure.story_inner_column_section}")
+
         dont_select_story_member_indexes = structure.restrict_action_space() if agent.restrict_action else None
         action, _ = agent.choose_action(state, 
                                         structure.already_minimum_section_story_indexes,
                                         dont_select_story_member_indexes, 
                                         greedy=True)
+        print(f"\n*****Testing Episode, story_level_sections: {structure.story_level_sections}")
         structure, reward, done, fail_name, fail_reason = env.step(structure, action)
 
         # get next state
@@ -410,14 +414,21 @@ def _testing(agent: DeepQAgent,
         score += reward
         timestep += 1
         actions.append(action)
-        logger.info(f"*****Testing Episode, timestep: {timestep:3d}, action: {action:3d}, reward: {reward:4f},  acculmulate_score: {score:.4f}")
+        logger.info(f"*****Testing Episode, timestep: {timestep:3d}, action: {action:3d}, reward: {reward:4f},  acculmulate_score: {score:.4f} [ORIGINAL]")
+
+        reward_SCWB = env.saved_material_record_SCWB[-1]
+        score_SCWB = sum(env.saved_material_record_SCWB)
+        actions_SCWB = '_'.join([str(a) for a in env.update_actions_record_SCWB[-1]])
+        if env.saved_material_record_SCWB[-1] != 0:
+            logger.info(f"*****Testing Episode, timestep: {timestep:3d}, action: {actions_SCWB}, reward: {reward_SCWB:4f},  acculmulate_score: {score_SCWB:.4f} [SCWB]")
     
     test_fail_names.append(fail_name)
     test_fail_reasons.append(fail_reason)
     logger.info("---> Constraint not satisfied, found optimal section:")
-    logger.info(list(structure.member_section_dict.values()))
+    #logger.info(list(structure.member_section_dict.values()))
+    logger.info(structure.story_level_sections)
     logger.info(f"testing, fail name: {fail_name}, fail reason: {fail_reason}")
-    return score, actions
+    return score, score_SCWB, actions
 
 
 def _inference(agent: DeepQAgent, 
@@ -515,8 +526,8 @@ def train(agent: DeepQAgent,
           logger: logging.Logger) -> List[float]:
     """Reinforcement learning training loop."""
     learn_losses = []
-    train_scores = []
-    test_scores = []
+    train_scores, train_scores_SCWB = [], []
+    test_scores, test_scores_SCWB = [], []
     Q_values = []
     
     fail_names = []
@@ -527,20 +538,22 @@ def train(agent: DeepQAgent,
     test_actions = []
     best_test_score = 0
     for i in range(number_episodes):
-        score = _train_an_episode(agent, env, learn_losses, Q_values, fail_names, fail_reasons, logger)
+        score, score_SCWB = _train_an_episode(agent, env, learn_losses, Q_values, fail_names, fail_reasons, logger)
         train_scores.append(score)
-        logger.critical(f"Episode: {i+1}, score: {score:.3f}\n\n\n")
+        train_scores_SCWB.append(score_SCWB)
+        logger.critical(f"Episode: {i+1}, score: {score:.3f}, score_SCWB: {score_SCWB:.3f}\n\n\n")
 
         if (i+1) % agent._test_frequency == 0:
-            test_score, test_action = _testing(agent, env, test_fail_names, test_fail_reasons, logger)
+            test_score, test_score_SCWB, test_action = _testing(agent, env, test_fail_names, test_fail_reasons, logger)
             test_scores.append(test_score)
+            test_scores_SCWB.append(test_score_SCWB)
             test_actions.append(test_action)
-            logger.critical(f"Testing score: {test_score:.3f}\n\n")
+            logger.critical(f"Testing score: {test_score:.3f}, score_SCWB: {test_score_SCWB:.3f}\n\n")
             
             if test_score > best_test_score:
                 best_test_score = test_score
                 _save_model(agent, env, logger)
 
-    return train_scores, test_scores, learn_losses, Q_values, fail_names, fail_reasons, test_fail_names, test_fail_reasons, test_actions
+    return train_scores, train_scores_SCWB, test_scores, test_scores_SCWB, learn_losses, Q_values, fail_names, fail_reasons, test_fail_names, test_fail_reasons, test_actions
 
 

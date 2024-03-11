@@ -216,7 +216,7 @@ def main(args):
 	}
 
 
-	train_scores, test_scores, learn_losses, Q_values, fail_names, fail_reasons, test_fail_names, test_fail_reasons, test_actions = train(**_train_kwargs)
+	train_scores, train_scores_SCWB, test_scores, test_socres_SCWB, learn_losses, Q_values, fail_names, fail_reasons, test_fail_names, test_fail_reasons, test_actions = train(**_train_kwargs)
 	plot.plot_reward(train_scores, test_scores, args.ckpt_dir)
 	plot.plot_loss(learn_losses, args.ckpt_dir)
 	plot.plot_Qvalues(Q_values, args.ckpt_dir)
