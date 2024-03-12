@@ -216,7 +216,7 @@ def main(args):
 	}
 
 
-	train_scores, train_scores_SCWB, test_scores, test_socres_SCWB, learn_losses, Q_values, fail_names, fail_reasons, test_fail_names, test_fail_reasons, test_actions = train(**_train_kwargs)
+	train_scores, train_scores_SCWB, test_scores, test_scores_SCWB, learn_losses, Q_values, fail_names, fail_reasons, test_fail_names, test_fail_reasons, test_actions = train(**_train_kwargs)
 	plot.plot_reward(train_scores, test_scores, args.ckpt_dir)
 	plot.plot_loss(learn_losses, args.ckpt_dir)
 	plot.plot_Qvalues(Q_values, args.ckpt_dir)
@@ -227,18 +227,22 @@ def main(args):
 	plot.plot_test_behaviors(test_scores, test_actions, args.ckpt_dir)
 
 	# inference
-	visualize.visualize_design_process(double_dqn_agent, env, logger, args.ckpt_dir, testing_structure=True)
-	visualize.visualize_design_process(double_dqn_agent, env, logger, args.ckpt_dir, taller_structure=True)
+	#visualize.visualize_design_process(double_dqn_agent, env, logger, args.ckpt_dir, testing_structure=True)
+	#visualize.visualize_design_process(double_dqn_agent, env, logger, args.ckpt_dir, taller_structure=True)
 	#visualize.visualize_edge_embedding(double_dqn_agent, env, logger, args.ckpt_dir)
 	
-	logger.critical(f"\n\n\n Testing Scores: {test_scores}")
-	logger.critical(f"\n\n\n Testing Actions: {test_actions}")
+	logger.critical(f"\n\n\nTraining Scores: {train_scores}")
+	logger.critical(f"\n\n\nTraining Scores(SCWB): {train_scores_SCWB}")
+
+	logger.critical(f"\n\n\nTesting Scores: {test_scores}")
+	logger.critical(f"\n\n\nTesting Scores(SCWB): {test_scores_SCWB}")
+	logger.critical(f"\n\n\nTesting Actions: {test_actions}")
 
 	best_score = np.max(np.array(test_scores))
 	best_episode = np.argmax(np.array(test_scores))
 	best_action = test_actions[best_episode]
-	logger.critical(f"\n\n\n Best Score: {best_score}")
-	logger.critical(f"\n\n\n Best Action: {best_action}")
+	logger.critical(f"\n\n\nBest Score: {best_score}")
+	logger.critical(f"\n\n\nBest Action: {best_action}")
 
 
 if __name__ == "__main__":

@@ -1,6 +1,7 @@
 import torch
 import logging
 import numpy as np
+from pathlib import Path
 from Structure import load
 from Structure import pisa
 from Structure import earthquake
@@ -8,25 +9,41 @@ from Structure.sections import *
 from Structure.structure import Structure
 
 
-def check(structure: Structure, 
-          check_displacement: bool, 
-          analysis_dir: str,
-          logger: logging.Logger=None):
+def get_response(structure: Structure, analysis_dir: Path) -> tuple[dict[str, float], list[load.NodalLoad], list[pisa.Response]]:
+    '''
+    get load cases and responses of static analysis run by PISA3D
+    '''
     first_mode_period, second_mode_period = pisa.dynamic_analysis_period(structure, analysis_dir)[0:2]
     earthquake_forces, Fus = earthquake.design_earthquake_force(structure, first_mode_period, second_mode_period)
     auxiliary_values = {"first_mode_period": first_mode_period, 
                         "second_mode_period": second_mode_period, 
                         "Fu1": Fus[0],
                         "Fu2": Fus[1]}
+    load_cases = load.get_load_cases(structure, earthquake_forces, Fus)
+    responses = []
+    for load_case in load_cases:
+        response = pisa.run_load_case(structure, load_case, analysis_dir)
+        responses.append(response)
+    return auxiliary_values, load_cases, responses
+
+
+def check(structure: Structure, 
+          analysis_dir: Path,
+          auxiliary_values: dict[str, float]=None,
+          load_cases: list[load.NodalLoad]=None,
+          responses: list[pisa.Response]=None,
+          check_displacement: bool=True) -> tuple[bool, str, str, dict[str, float]]:
+    '''
+    check structural responses whether pass constraints or not under various load cases 
+    '''
+    if auxiliary_values is None:
+        auxiliary_values, load_cases, responses = get_response(structure, analysis_dir)
 
     if _too_much_minimum_section(structure): return False, None, "minimum_section", auxiliary_values
 
-    load_cases = load.get_load_cases(structure, earthquake_forces, Fus)
-    for load_case in load_cases:
-        response = pisa.run_load_case(structure, load_case, analysis_dir)
+    for load_case, response in list(zip(load_cases, responses)):
         whether_pass, fail_reason = _check_code(structure, response, load_case, check_displacement)
         if whether_pass is False:
-            #logger.info(f"fail at load case: {load_case.load_name}")
             return False, load_case.load_name, fail_reason, auxiliary_values
         
     return True, None, None, auxiliary_values

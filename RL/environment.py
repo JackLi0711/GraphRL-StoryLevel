@@ -248,9 +248,7 @@ class Environment:
         material_usage = structure.calculate_material_usage()
 
         # 2. update structure, graph and get saved material amount(m^3) (STRONG-COLUMN-WEAK-BEAM)
-        material_saved_SCWB, update_actions_SCWB = new_strategy.strong_column_weak_beam_driven_update(structure, 
-                                                                                                    self.code_analysis_dir, 
-                                                                                                    self.logger)
+        material_saved_SCWB, update_actions_SCWB, structural_behaviors = new_strategy.strong_column_weak_beam_driven_update(structure, self.code_analysis_dir, self.logger)
         if material_saved_SCWB != 0:
             print(f"before_SCWB_update, story_level_sections: {original_structure.story_level_sections}")
             print(f"after_SCWB_update,  story_level_sections: {structure.story_level_sections}")
@@ -275,9 +273,11 @@ class Environment:
         
         # 4. check if linear static analysis response pass regulation
         whether_pass, fail_name, fail_reason, auxiliary_values = check.check(structure, 
-                                                                             self.check_displacement,
                                                                              self.code_analysis_dir,
-                                                                             self.logger)
+                                                                             structural_behaviors["auxiliary_value"],
+                                                                             structural_behaviors["load_case"],
+                                                                             structural_behaviors["response"],
+                                                                             self.check_displacement)
 
         # 5. check if nonlinear dynamic analysis response pass regulation if needed
         if self.do_nonlinear_dynamic_analysis and whether_pass == True:

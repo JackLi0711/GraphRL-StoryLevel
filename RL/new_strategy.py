@@ -5,7 +5,7 @@ import numpy as np
 from pathlib import Path
 from logging import Logger
 
-from Structure import pisa, earthquake, load
+from Structure import pisa, check
 from Structure.sections import *
 from Structure.structure import Structure
 
@@ -35,14 +35,9 @@ def sample_initial_story_sections(x_span_num: int, x_span_len: int,
 
 
 
-def check_strong_column_weak_beam(structure: Structure, analysis_dir: Path) -> np.ndarray:
-    first_mode_period, second_mode_period = pisa.dynamic_analysis_period(structure, analysis_dir)[0:2]
-    earthquake_forces, Fus = earthquake.design_earthquake_force(structure, first_mode_period, second_mode_period)
-    
+def check_strong_column_weak_beam(structure: Structure, responses: list[pisa.Response]) -> np.ndarray:
     fail_conditions = np.zeros((structure.node_number, 2))  # X-dir(0), Z-dir(1)
-    load_cases = load.get_load_cases(structure, earthquake_forces, Fus)
-    for load_case in load_cases:
-        response = pisa.run_load_case(structure, load_case, analysis_dir)
+    for response in responses:
         # calculate strong-column-weak-beam ratio
         Zc = structure.node_neighbor_Zz_matrix
         Puc = response.node_neighbor_Puc_matrix
@@ -89,8 +84,9 @@ def strong_column_weak_beam_driven_action(structure: Structure, fail_conditions:
     return xdir_beam_update_action, zdir_beam_update_action
 
 
-def strong_column_weak_beam_driven_update(structure: Structure, analysis_dir: Path, logger: Logger) -> tuple[float, list[int]]:    
-    fail_conditions = check_strong_column_weak_beam(structure, analysis_dir)
+def strong_column_weak_beam_driven_update(structure: Structure, analysis_dir: Path, logger: Logger) -> tuple[float, list[int], dict]:    
+    auxiliary_values, load_cases, responses = check.get_response(structure, analysis_dir)
+    fail_conditions = check_strong_column_weak_beam(structure, responses)
     xdir_beam_update_action, zdir_beam_update_action = strong_column_weak_beam_driven_action(structure, fail_conditions)
     update_actions = xdir_beam_update_action + zdir_beam_update_action
     
@@ -110,9 +106,16 @@ def strong_column_weak_beam_driven_update(structure: Structure, analysis_dir: Pa
         print(f"{score:.3f}, {initial_usage - final_usage:.3f}")
         print(f"{structure.story_level_sections}\n")
         material_saved += score
-
-        fail_conditions = check_strong_column_weak_beam(structure, analysis_dir)
+    
+        auxiliary_values, load_cases, responses = check.get_response(structure, analysis_dir)
+        fail_conditions = check_strong_column_weak_beam(structure, responses)
         xdir_beam_update_action, zdir_beam_update_action = strong_column_weak_beam_driven_action(structure, fail_conditions)
         update_actions = xdir_beam_update_action + zdir_beam_update_action
+    
+    structural_behaviors = {
+        "auxiliary_value": auxiliary_values,
+        "load_case": load_cases,
+        "response": responses
+    }
 
-    return material_saved, all_update_actions
+    return material_saved, all_update_actions, structural_behaviors
