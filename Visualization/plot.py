@@ -5,7 +5,7 @@ from pathlib import Path
 
 
 def plot_reward(train_scores: List[float], test_scores: List[float], checkpoint_dir: Path) -> None:
-    """Plot train scores during every episode and test score every few epusode."""
+    """Plot train scores during every episode and test score every few episode."""
     train_episodes = np.arange(1, len(train_scores)+1)
     episode_per_test = len(train_scores) / len(test_scores)
     test_episodes = np.arange(episode_per_test, len(train_scores)+1, episode_per_test)

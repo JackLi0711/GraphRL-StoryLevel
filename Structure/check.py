@@ -10,9 +10,7 @@ from Structure.structure import Structure
 
 
 def get_response(structure: Structure, analysis_dir: Path) -> tuple[dict[str, float], list[load.NodalLoad], list[pisa.Response]]:
-    '''
-    get load cases and responses of static analysis run by PISA3D
-    '''
+    '''Get load cases and responses of static analysis run by PISA3D.'''
     first_mode_period, second_mode_period = pisa.dynamic_analysis_period(structure, analysis_dir)[0:2]
     earthquake_forces, Fus = earthquake.design_earthquake_force(structure, first_mode_period, second_mode_period)
     auxiliary_values = {"first_mode_period": first_mode_period, 
@@ -33,9 +31,7 @@ def check(structure: Structure,
           load_cases: list[load.NodalLoad]=None,
           responses: list[pisa.Response]=None,
           check_displacement: bool=True) -> tuple[bool, str, str, dict[str, float]]:
-    '''
-    check structural responses whether pass constraints or not under various load cases 
-    '''
+    '''Check structural responses whether pass constraints or not under various load cases.'''
     if auxiliary_values is None:
         auxiliary_values, load_cases, responses = get_response(structure, analysis_dir)
 

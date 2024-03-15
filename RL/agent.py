@@ -341,6 +341,7 @@ def _train_an_episode(agent: DeepQAgent,
     done = False
     q = 0
     while not done:
+        original_structure = deepcopy(structure)
         # select and perform an action
         with torch.no_grad():
             graph = graph.to(agent.device)
@@ -374,10 +375,12 @@ def _train_an_episode(agent: DeepQAgent,
     Q_values.append(q)
     fail_names.append(fail_name)
     fail_reasons.append(fail_reason)
-    logger.info("---> Constraint not satisfied, found optimal section:")
-    #logger.info(list(structure.member_section_dict.values()))
-    logger.info(structure.story_level_sections)
+    logger.info("---> Constraint not satisfied, found optimal section at previous timestep")
+    logger.info(f"final_story_level_sections: ", original_structure.story_level_sections)
     logger.info(f"episode: {agent._number_episodes:4d}, fail name: {fail_name}, fail reason: {fail_reason}")
+    
+    score = sum(env.saved_material_record)
+    score_SCWB = sum(env.saved_material_record_SCWB)
     return score, score_SCWB
 
 
@@ -385,7 +388,7 @@ def _testing(agent: DeepQAgent,
              env: Environment, 
              test_fail_names: List[str],
              test_fail_reasons: List[str], 
-             logger: logging.Logger) -> Tuple[float, float, List[int]]:
+             logger: logging.Logger) -> Tuple[float, float, float, List[int], List[int]]:
     """Test agent's performance with prescribed condition and greedy policy."""
     structure = env.reset(testing=True)  # generate a fix-shaped structure
     graph = structure.graph.clone()
@@ -394,6 +397,7 @@ def _testing(agent: DeepQAgent,
     actions = []
     done = False
     while not done:
+        original_structure = deepcopy(structure)
         # select and perform an action
         with torch.no_grad():
             graph = graph.to(agent.device)
@@ -424,11 +428,15 @@ def _testing(agent: DeepQAgent,
     
     test_fail_names.append(fail_name)
     test_fail_reasons.append(fail_reason)
-    logger.info("---> Constraint not satisfied, found optimal section:")
-    #logger.info(list(structure.member_section_dict.values()))
-    logger.info(structure.story_level_sections)
+    final_story_level_sections = original_structure.story_level_sections
+    logger.info("---> Constraint not satisfied, found optimal section at previous timestep")
+    logger.info(f"{final_story_level_sections = }")
     logger.info(f"testing, fail name: {fail_name}, fail reason: {fail_reason}")
-    return score, score_SCWB, actions
+    
+    score = sum(env.saved_material_record)
+    score_SCWB = sum(env.saved_material_record_SCWB)
+    final_material_usage = original_structure.calculate_material_usage()
+    return score, score_SCWB, final_material_usage, actions[:-1], final_story_level_sections
 
 
 def _inference(agent: DeepQAgent, 
@@ -523,37 +531,57 @@ def _load_model(agent: DeepQAgent, load_ckpt_dir, logger: logging.Logger) -> Non
 def train(agent: DeepQAgent,
           env: Environment,
           number_episodes: int,
-          logger: logging.Logger) -> List[float]:
+          logger: logging.Logger) -> tuple[dict[str,list[float]], dict[str,list[str]], dict[str,list]]:
     """Reinforcement learning training loop."""
-    learn_losses = []
+    
     train_scores, train_scores_SCWB = [], []
     test_scores, test_scores_SCWB = [], []
-    Q_values = []
     
-    fail_names = []
-    fail_reasons = []
+    fail_names, fail_reasons = [], []
+    test_fail_names, test_fail_reasons = [], []
 
-    test_fail_names = []
-    test_fail_reasons = []
-    test_actions = []
-    best_test_score = 0
+    learn_losses, Q_values = [], []
+    test_actions, test_final_material_usages, test_final_designs = [], [], []
+
     for i in range(number_episodes):
         score, score_SCWB = _train_an_episode(agent, env, learn_losses, Q_values, fail_names, fail_reasons, logger)
         train_scores.append(score)
         train_scores_SCWB.append(score_SCWB)
         logger.critical(f"Episode: {i+1}, score: {score:.3f}, score_SCWB: {score_SCWB:.3f}\n\n\n")
+        print(f"Total reduction amount: {env.material_usage_record[0] - env.material_usage_record[-1]:.3f}")
 
         if (i+1) % agent._test_frequency == 0:
-            test_score, test_score_SCWB, test_action = _testing(agent, env, test_fail_names, test_fail_reasons, logger)
+            test_score, test_score_SCWB, test_final_material_usage, test_action, test_final_design = _testing(agent, env, test_fail_names, test_fail_reasons, logger)
             test_scores.append(test_score)
             test_scores_SCWB.append(test_score_SCWB)
             test_actions.append(test_action)
+            test_final_designs.append(test_final_design)
             logger.critical(f"Testing score: {test_score:.3f}, score_SCWB: {test_score_SCWB:.3f}\n\n")
-            
-            if test_score > best_test_score:
-                best_test_score = test_score
-                _save_model(agent, env, logger)
+            print(f"Total reduction amount: {env.material_usage_record[0] - env.material_usage_record[-1]:.3f}")
 
-    return train_scores, train_scores_SCWB, test_scores, test_scores_SCWB, learn_losses, Q_values, fail_names, fail_reasons, test_fail_names, test_fail_reasons, test_actions
+            if test_final_material_usage < min(test_final_material_usages): _save_model(agent, env, logger)
+            test_final_material_usages.append(test_final_material_usage)
+
+    score_info = {
+        "train_score": train_scores,
+        "train_score_SCWB": train_scores_SCWB,
+        "test_score": test_scores,
+        "test_score_SCWB": test_scores_SCWB
+    }
+    fail_info = {
+        "fail_name": fail_names,
+        "fail_reason": fail_reasons,
+        "test_fail_name": test_fail_names,
+        "test_fail_reason": test_fail_reasons
+    }
+    other_info = {
+        "learn_loss": learn_losses,
+        "Q-value": Q_values,
+        "test_action": test_actions,
+        "test_final_material_usage": test_final_material_usages,
+        "test_final_design": test_final_designs
+    }
+
+    return score_info, fail_info, other_info
 
 

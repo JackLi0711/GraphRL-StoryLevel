@@ -216,33 +216,33 @@ def main(args):
 	}
 
 
-	train_scores, train_scores_SCWB, test_scores, test_scores_SCWB, learn_losses, Q_values, fail_names, fail_reasons, test_fail_names, test_fail_reasons, test_actions = train(**_train_kwargs)
-	plot.plot_reward(train_scores, test_scores, args.ckpt_dir)
-	plot.plot_loss(learn_losses, args.ckpt_dir)
-	plot.plot_Qvalues(Q_values, args.ckpt_dir)
+	score_info, fail_info, other_info = train(**_train_kwargs)
+	plot.plot_reward(score_info["train_score"], score_info["test_score"], args.ckpt_dir)
+	plot.plot_loss(other_info["learn_loss"], args.ckpt_dir)
+	plot.plot_Qvalues(other_info["Q_value"], args.ckpt_dir)
 
-	plot.plot_fail_names(fail_names, test_fail_names, args.ckpt_dir)
-	plot.plot_fail_reasons(fail_reasons, test_fail_reasons, args.ckpt_dir)
+	plot.plot_fail_names(fail_info["fail_name"], fail_info["test_fail_name"], args.ckpt_dir)
+	plot.plot_fail_reasons(fail_info["fail_reason"], fail_info["test_fail_reason"], args.ckpt_dir)
 	
-	plot.plot_test_behaviors(test_scores, test_actions, args.ckpt_dir)
+	plot.plot_test_behaviors(score_info["test_score"], other_info["test_action"], args.ckpt_dir)
 
 	# inference
 	#visualize.visualize_design_process(double_dqn_agent, env, logger, args.ckpt_dir, testing_structure=True)
 	#visualize.visualize_design_process(double_dqn_agent, env, logger, args.ckpt_dir, taller_structure=True)
 	#visualize.visualize_edge_embedding(double_dqn_agent, env, logger, args.ckpt_dir)
 	
-	logger.critical(f"\n\n\nTraining Scores: {train_scores}")
-	logger.critical(f"\n\n\nTraining Scores(SCWB): {train_scores_SCWB}")
+	logger.critical("\n\n\nTraining Scores: ", score_info["train_score"])
+	logger.critical("\n\n\nTraining Scores(SCWB): ", score_info["train_score_SCWB"])
 
-	logger.critical(f"\n\n\nTesting Scores: {test_scores}")
-	logger.critical(f"\n\n\nTesting Scores(SCWB): {test_scores_SCWB}")
-	logger.critical(f"\n\n\nTesting Actions: {test_actions}")
+	logger.critical("\n\n\nTesting Scores: ", score_info["test_score"])
+	logger.critical("\n\n\nTesting Scores(SCWB): ", score_info["test_score_SCWB"])
+	logger.critical("\n\n\nTesting Actions: ", other_info["test_action"])
 
-	best_score = np.max(np.array(test_scores))
-	best_episode = np.argmax(np.array(test_scores))
-	best_action = test_actions[best_episode]
-	logger.critical(f"\n\n\nBest Score: {best_score}")
-	logger.critical(f"\n\n\nBest Action: {best_action}")
+	best_performance = min(other_info["test_final_material_usage"])
+	best_episode = np.argmin(np.array(other_info["test_final_material_usage"]))
+	best_design = other_info["test_final_design"][best_episode]
+	logger.critical(f"\n\n\Minimum Material Usage: {best_performance:.3f}")
+	logger.critical(f"\n\n\nBest Story Level Sections: ", best_design)
 
 
 if __name__ == "__main__":

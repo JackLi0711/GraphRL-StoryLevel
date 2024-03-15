@@ -9,11 +9,14 @@ import matplotlib.patheffects as pe
 import matplotlib.patches as mpatches
 
 from PIL import Image
+from pathlib import Path
+from logging import Logger
 from copy import deepcopy
 from sklearn.manifold import TSNE
 from torch_geometric.loader import DataLoader
 
-from Structure import pisa
+from RL import agent, environment
+from Structure import structure, pisa
 from Structure.sections import *
 
 
@@ -118,7 +121,12 @@ def visualize_edge_embedding(agent, env, logger, ckpt_dir):
 
 
 
-def _visualize_one_iteration(structure, iteration, env, accumulated_reward, q_values, save_fig_path):
+def _visualize_one_iteration(structure: structure.Structure, 
+                             iteration: int, 
+                             env: environment.Environment, 
+                             accumulated_reward: float, 
+                             q_values: torch.Tensor, 
+                             save_fig_path: Path):
     # plot 3d
     fig = plt.figure(figsize=(20, 15), facecolor="w")
 
@@ -225,7 +233,8 @@ def _visualize_one_iteration(structure, iteration, env, accumulated_reward, q_va
 
         
     # total_saved_material == total_material_difference
-    total_saved_material = np.sum(env.saved_material_record)
+    saved_material = np.sum(env.saved_material_record)
+    saved_material_SCWB = np.sum(env.saved_material_record_SCWB)
     #total_material_difference = env.material_usage_record[0] - env.material_usage_record[-1]
 
     if env.do_nonlinear_dynamic_analysis and "acceleration" in env.reward_type:
@@ -235,7 +244,7 @@ def _visualize_one_iteration(structure, iteration, env, accumulated_reward, q_va
     else: 
         total_acc_decrement = 0
 
-    infos = f"reduced material: {total_saved_material:5.2f} m3\n" + f"reduced acceleration: {total_acc_decrement:6.4f} g"
+    infos = f"reduced material: {saved_material:5.2f} m3\n" + f"reduced material(SCWB): {saved_material_SCWB:5.2f} m3"
     title = f"Reward: {env.reward_type}\n" + f"Iteration: {iteration:4d}\n" + infos
 
     ax.set_title(title, fontsize=30)
@@ -244,7 +253,12 @@ def _visualize_one_iteration(structure, iteration, env, accumulated_reward, q_va
     plt.close()
 
 
-def _frames_to_video(ckpt_dir, frame_dir, testing, taller=False, short=False, chances=0):
+def _frames_to_video(ckpt_dir: Path, 
+                     frame_dir: Path, 
+                     testing: bool=True, 
+                     taller: bool=False, 
+                     short: bool=False, 
+                     chances: int=0):
     frame_names = [image for image in glob.glob(f"{frame_dir}/*.png")]
     # adjust the order
     frame_names = [str(frame_dir / f"{i}.png") for i in range(0, len(frame_names))]
@@ -271,7 +285,13 @@ def _frames_to_video(ckpt_dir, frame_dir, testing, taller=False, short=False, ch
     frame_one.save(ckpt_dir / animation_name, format="GIF", append_images=frames, save_all=True, duration=frame_duration_ms, loop=0)
 
 
-def visualize_design_process(agent, env, logger, trained_ckpt_dir, testing_structure=False, taller_structure=False, chances=0):
+def visualize_design_process(agent: agent.DeepQAgent, 
+                             env: environment.Environment, 
+                             logger: Logger, 
+                             trained_ckpt_dir: Path, 
+                             testing_structure: bool=False, 
+                             taller_structure: bool=False, 
+                             chances: int=0):
     logger.info(f"Visualizing design process......")
     
     # Make directory
@@ -317,12 +337,9 @@ def visualize_design_process(agent, env, logger, trained_ckpt_dir, testing_struc
             state = agent.gnn(graph.x, graph.edge_index, graph.edge_attr, None, structure.aux["story_batch"].to(device), None)
 
         # select action and update structure
+        print(f"story level sections: {structure.story_level_sections}")
         print(f"original minimum: {structure.already_minimum_section_story_indexes}")
         print(f"restrict actions: {structure.restrict_action_space()}")
-        print(f"xdir beam: {structure.story_xdir_beam_section}")
-        print(f"zdir beam: {structure.story_zdir_beam_section}")
-        print(f"out col: {structure.story_outer_column_section}")
-        print(f"in col: {structure.story_inner_column_section}")
         
         dont_select_story_member_indexes = structure.restrict_action_space() if agent.restrict_action else None
         action, _ = agent.choose_action(state, 
@@ -344,6 +361,8 @@ def visualize_design_process(agent, env, logger, trained_ckpt_dir, testing_struc
             
             # remove the record of current design which didn't pass the constraints
             env.saved_material_record.pop(-1)
+            env.saved_material_record_SCWB.pop(-1)
+            env.update_actions_record_SCWB.pop(-1)
             env.material_usage_record.pop(-1)
             if env.do_nonlinear_dynamic_analysis and "acceleration" in env.reward_type:
                 env.acc_record['X-dir'].pop(-1)
@@ -354,13 +373,10 @@ def visualize_design_process(agent, env, logger, trained_ckpt_dir, testing_struc
             
             dont_select_during_cahnce_loop.append(action)
             print(f"dont select during chance loop: {dont_select_during_cahnce_loop}")
+            
+            print(f"story level sections: {structure.story_level_sections}")
             print(f"original minimum: {structure.already_minimum_section_story_indexes}")
-
             print(f"restrict actions: {structure.restrict_action_space()}")
-            print(f"xdir beam: {structure.story_xdir_beam_section}")
-            print(f"zdir beam: {structure.story_zdir_beam_section}")
-            print(f"out col: {structure.story_outer_column_section}")
-            print(f"in col: {structure.story_inner_column_section}")
 
             if agent.restrict_action:
                 dont_select = list(set(dont_select_during_cahnce_loop + structure.already_minimum_section_story_indexes + structure.restrict_action_space()))

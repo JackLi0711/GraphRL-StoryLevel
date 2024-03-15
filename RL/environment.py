@@ -49,8 +49,10 @@ class Environment:
         self.code_analysis_dir.mkdir(parents=True, exist_ok=True)        
         self.modal_analysis_dir.mkdir(parents=True, exist_ok=True)        
 
-        # the prescribed, test ge
+        # the prescribed, test generalization ability
         self._testing_structure = None
+
+        # prepare various record to track difference during design process
         self.saved_material_record = None
         self.saved_material_record_SCWB = None
         self.update_actions_record_SCWB = None
@@ -58,7 +60,7 @@ class Environment:
         self.acc_record, self.disp_record = None, None
     
         # initiaization
-        self._init_testing_structure()
+        #self._init_testing_structure()
         self.init_check_setting(check_acceleration, check_displacement)
         
     
@@ -72,13 +74,13 @@ class Environment:
             story_num = 3
             story_height = 3500
         elif self.structure_shape == "random":
-            x_span_num = 3
-            z_span_num = 3
+            x_span_num = 4  # original: 3
+            z_span_num = 4  # original: 3
             x_span_len = 6000
             z_span_len = 8000
             x_span_lens = [x_span_len for i in range(x_span_num)]
             z_span_lens = [z_span_len for i in range(z_span_num)]
-            story_num = 5
+            story_num = 6  # original: 5
             story_height = 3200
 
         story_level_sections = new_strategy.sample_initial_story_sections(x_span_num, x_span_len, 
@@ -94,7 +96,7 @@ class Environment:
                                           "analysis_dir": self.modal_analysis_dir}
         self._testing_structure = structure.Structure(**self._testing_structure_kwargs)
         # update beam sections based on strong-column-weak-beam principle
-        self.logger.info("Initializing precribed testing structure...")
+        #self.logger.info("Initializing precribed testing structure...")
         self.logger.info(f"before_SCWB_update, testing_story_level_sections: {self._testing_structure.story_level_sections}")
         new_strategy.strong_column_weak_beam_driven_update(self._testing_structure,
                                                            self.code_analysis_dir,
@@ -137,7 +139,9 @@ class Environment:
     def reset(self, testing=False, taller=False) -> structure.Structure:
         """Return a random generated structure."""
         if testing:
-            self.logger.info(f"testing_story_level_sections: {self._testing_structure.story_level_sections}")
+            # increase the variety of initial design for testing structure to prove model's capability
+            self._init_testing_structure()
+            #self.logger.info(f"testing_story_level_sections: {self._testing_structure.story_level_sections}")
             self.init_records(self._testing_structure)
             return deepcopy(self._testing_structure)
         elif taller:
@@ -235,29 +239,28 @@ class Environment:
         return reward
 
 
-    def step(self, structure: structure.Structure, action: int) -> typing.Tuple[structure.Structure, float, bool]:
+    def step(self, structure: structure.Structure, action: int) -> typing.Tuple[structure.Structure, float, bool, str, str]:
         """
         1. Based on the member action, update the structure & graph.
         2. Based on the analysis result, see whether meets the code.
         3. Return [updated structure, reward, whether meet terminal state, fail load name, fail reason].
         """
 
-        # 1. update structure, graph and get saved material amount(m^3) (ORIGINAL)
+        # 1-1. update structure, graph and get saved material amount(m^3) (ORIGINAL)
         material_saved = structure.update_action(action)
-        original_structure = deepcopy(structure)
-        material_usage = structure.calculate_material_usage()
+        before_SCWB_structure = deepcopy(structure)
 
-        # 2. update structure, graph and get saved material amount(m^3) (STRONG-COLUMN-WEAK-BEAM)
+        # 1-2. update structure, graph and get saved material amount(m^3) (STRONG-COLUMN-WEAK-BEAM)
         material_saved_SCWB, update_actions_SCWB, structural_behaviors = new_strategy.strong_column_weak_beam_driven_update(structure, self.code_analysis_dir, self.logger)
         if material_saved_SCWB != 0:
-            print(f"before_SCWB_update, story_level_sections: {original_structure.story_level_sections}")
+            print(f"before_SCWB_update, story_level_sections: {before_SCWB_structure.story_level_sections}")
             print(f"after_SCWB_update,  story_level_sections: {structure.story_level_sections}")
 
         # 2. record the information after updating structure and graph
         self.saved_material_record.append(material_saved)
         self.saved_material_record_SCWB.append(material_saved_SCWB)
         self.update_actions_record_SCWB.append(update_actions_SCWB)
-        self.material_usage_record.append(material_usage)
+        self.material_usage_record.append(structure.calculate_material_usage())
         
         if self.do_nonlinear_dynamic_analysis and "acceleration" in self.reward_type:
             self.acc_record = check_nda.record_acc(structure, 
@@ -292,7 +295,12 @@ class Environment:
                                                         self.device,
                                                         self.logger)
 
-        done = True if whether_pass == False else False
+        if whether_pass == False:
+            self.saved_material_record.pop(-1)
+            self.saved_material_record_SCWB.pop(-1)
+            self.update_actions_record_SCWB.pop(-1)
+            self.material_usage_record.pop(-1)
+            done = True
 
         return structure, reward, done, fail_name, fail_reason
         
