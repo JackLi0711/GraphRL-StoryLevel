@@ -1,3 +1,4 @@
+import json
 import torch
 import random
 import logging
@@ -121,7 +122,7 @@ def main(args):
 	logger.critical(args)
 
 	# set device
-	device = "cuda" if torch.cuda.is_available() else "cpu"
+	device = "cpu"#"cuda" if torch.cuda.is_available() else "cpu"
 
 	# setupt nonliear dynamic analysis simulator
 	nda_simulator = None
@@ -216,33 +217,35 @@ def main(args):
 	}
 
 
-	score_info, fail_info, other_info = train(**_train_kwargs)
-	plot.plot_reward(score_info["train_score"], score_info["test_score"], args.ckpt_dir)
+	score_info, fail_info, test_info, other_info = train(**_train_kwargs)
+
+	logger.critical(f"Testing Scores: {score_info['test_score']}\n\n\n")
+	logger.critical(f"Testing Scores(SCWB): {score_info['test_score_SCWB']}\n\n\n")
+	logger.critical(f"Testing Final Design: {test_info['test_final_design']}\n\n\n")
+	logger.critical(f"Testing Final Material Usage: {test_info['test_final_material_usage']}\n\n\n")
+
+	best_performance = min(test_info["test_final_material_usage"])
+	best_episode = np.argmin(np.array(test_info["test_final_material_usage"]))
+	best_design = test_info["test_final_design"][best_episode]
+	logger.critical(f"Minimum Material Usage: {best_performance:.3f} m3")
+	logger.critical(f"Best Story Level Sections: {best_design}")
+
+	plot.plot_reward(score_info, args.ckpt_dir)
 	plot.plot_loss(other_info["learn_loss"], args.ckpt_dir)
 	plot.plot_Qvalues(other_info["Q_value"], args.ckpt_dir)
-
 	plot.plot_fail_names(fail_info["fail_name"], fail_info["test_fail_name"], args.ckpt_dir)
-	plot.plot_fail_reasons(fail_info["fail_reason"], fail_info["test_fail_reason"], args.ckpt_dir)
-	
-	plot.plot_test_behaviors(score_info["test_score"], other_info["test_action"], args.ckpt_dir)
+	plot.plot_fail_reasons(fail_info["fail_reason"], fail_info["test_fail_reason"], args.ckpt_dir)	
+	plot.plot_test_behaviors(env, score_info, test_info, args.ckpt_dir)
 
 	# inference
 	#visualize.visualize_design_process(double_dqn_agent, env, logger, args.ckpt_dir, testing_structure=True)
 	#visualize.visualize_design_process(double_dqn_agent, env, logger, args.ckpt_dir, taller_structure=True)
 	#visualize.visualize_edge_embedding(double_dqn_agent, env, logger, args.ckpt_dir)
-	
-	logger.critical("\n\n\nTraining Scores: ", score_info["train_score"])
-	logger.critical("\n\n\nTraining Scores(SCWB): ", score_info["train_score_SCWB"])
 
-	logger.critical("\n\n\nTesting Scores: ", score_info["test_score"])
-	logger.critical("\n\n\nTesting Scores(SCWB): ", score_info["test_score_SCWB"])
-	logger.critical("\n\n\nTesting Actions: ", other_info["test_action"])
-
-	best_performance = min(other_info["test_final_material_usage"])
-	best_episode = np.argmin(np.array(other_info["test_final_material_usage"]))
-	best_design = other_info["test_final_design"][best_episode]
-	logger.critical(f"\n\n\Minimum Material Usage: {best_performance:.3f}")
-	logger.critical(f"\n\n\nBest Story Level Sections: ", best_design)
+	with open(args.ckpt_dir / "score_info.txt", "w") as f: json.dump(score_info, f)
+	with open(args.ckpt_dir / "fail_info.txt", "w") as f: json.dump(fail_info, f)
+	with open(args.ckpt_dir / "test_info.txt", "w") as f: json.dump(test_info, f)
+	with open(args.ckpt_dir / "other_info.txt", "w") as f: json.dump(other_info, f)
 
 
 if __name__ == "__main__":

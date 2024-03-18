@@ -18,8 +18,8 @@ def sample_initial_story_sections(x_span_num: int, x_span_len: int,
     geo_sum = (x_span_num + x_span_len/1000) + (z_span_num + z_span_len/1000) + story_num
     main_type = geo_sum - min_geo_sum
     
-    section_pool = np.array([i for i in range(len(column_sections))])
-    distance = np.abs(section_pool - main_type)
+    section_pool = [i for i in range(len(column_sections))]
+    distance = np.abs(np.array(section_pool) - main_type)
     exp_negative_distance = np.exp(-1 * distance * 0.25)
     sample_prob = exp_negative_distance / np.sum(exp_negative_distance)
 

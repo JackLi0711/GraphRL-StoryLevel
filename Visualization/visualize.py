@@ -360,10 +360,6 @@ def visualize_design_process(agent: agent.DeepQAgent,
             print(f"----- Fails, current failed action: {action:3d}, current chances: {chances:3d}")
             
             # remove the record of current design which didn't pass the constraints
-            env.saved_material_record.pop(-1)
-            env.saved_material_record_SCWB.pop(-1)
-            env.update_actions_record_SCWB.pop(-1)
-            env.material_usage_record.pop(-1)
             if env.do_nonlinear_dynamic_analysis and "acceleration" in env.reward_type:
                 env.acc_record['X-dir'].pop(-1)
                 env.acc_record['Z-dir'].pop(-1)

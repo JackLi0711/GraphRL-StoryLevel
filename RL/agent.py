@@ -322,7 +322,7 @@ class DeepQAgent(Agent):
             if self._number_timesteps % self._update_frequency == 0 and self._has_sufficient_experience():
                 experiences = self._buffer.sample()
                 loss = self._learn(experiences)    
-                learn_losses.append(loss.detach().cpu().numpy())
+                learn_losses.append(loss.detach().cpu().numpy().item())
     
         
 
@@ -376,7 +376,7 @@ def _train_an_episode(agent: DeepQAgent,
     fail_names.append(fail_name)
     fail_reasons.append(fail_reason)
     logger.info("---> Constraint not satisfied, found optimal section at previous timestep")
-    logger.info(f"final_story_level_sections: ", original_structure.story_level_sections)
+    logger.info(f"final_story_level_sections: {original_structure.story_level_sections}")
     logger.info(f"episode: {agent._number_episodes:4d}, fail name: {fail_name}, fail reason: {fail_reason}")
     
     score = sum(env.saved_material_record)
@@ -436,7 +436,9 @@ def _testing(agent: DeepQAgent,
     score = sum(env.saved_material_record)
     score_SCWB = sum(env.saved_material_record_SCWB)
     final_material_usage = original_structure.calculate_material_usage()
-    return score, score_SCWB, final_material_usage, actions[:-1], final_story_level_sections
+    actions = actions[:-1]
+    actions_SCWB = ['_'.join(list(map(str, actions))) if len(actions) > 0 else '_' for actions in env.update_actions_record_SCWB[:-1]]
+    return score, score_SCWB, final_material_usage, actions, actions_SCWB, final_story_level_sections
 
 
 def _inference(agent: DeepQAgent, 
@@ -531,7 +533,7 @@ def _load_model(agent: DeepQAgent, load_ckpt_dir, logger: logging.Logger) -> Non
 def train(agent: DeepQAgent,
           env: Environment,
           number_episodes: int,
-          logger: logging.Logger) -> tuple[dict[str,list[float]], dict[str,list[str]], dict[str,list]]:
+          logger: logging.Logger) -> tuple[dict[str,list[float]], dict[str,list[str]], dict[str,list[float]], dict[str,list]]:
     """Reinforcement learning training loop."""
     
     train_scores, train_scores_SCWB = [], []
@@ -541,26 +543,28 @@ def train(agent: DeepQAgent,
     test_fail_names, test_fail_reasons = [], []
 
     learn_losses, Q_values = [], []
-    test_actions, test_final_material_usages, test_final_designs = [], [], []
+    test_actions, test_actions_SCWB = [], []
+    test_final_material_usages, test_final_designs = [], []
 
     for i in range(number_episodes):
         score, score_SCWB = _train_an_episode(agent, env, learn_losses, Q_values, fail_names, fail_reasons, logger)
         train_scores.append(score)
         train_scores_SCWB.append(score_SCWB)
-        logger.critical(f"Episode: {i+1}, score: {score:.3f}, score_SCWB: {score_SCWB:.3f}\n\n\n")
-        print(f"Total reduction amount: {env.material_usage_record[0] - env.material_usage_record[-1]:.3f}")
+        logger.critical(f"Episode: {i+1}, score: {score:.3f}, score_SCWB: {score_SCWB:.3f}")
+        logger.critical(f"Episode: {i+1}, total_reduction_amount: {env.material_usage_record[0] - env.material_usage_record[-1]:.3f}\n\n\n")
 
         if (i+1) % agent._test_frequency == 0:
-            test_score, test_score_SCWB, test_final_material_usage, test_action, test_final_design = _testing(agent, env, test_fail_names, test_fail_reasons, logger)
+            test_score, test_score_SCWB, test_final_material_usage, test_action, test_action_SCWB, test_final_design = _testing(agent, env, test_fail_names, test_fail_reasons, logger)
             test_scores.append(test_score)
             test_scores_SCWB.append(test_score_SCWB)
             test_actions.append(test_action)
+            test_actions_SCWB.append(test_action_SCWB)
             test_final_designs.append(test_final_design)
-            logger.critical(f"Testing score: {test_score:.3f}, score_SCWB: {test_score_SCWB:.3f}\n\n")
-            print(f"Total reduction amount: {env.material_usage_record[0] - env.material_usage_record[-1]:.3f}")
-
-            if test_final_material_usage < min(test_final_material_usages): _save_model(agent, env, logger)
+            logger.critical(f"Testing score: {test_score:.3f}, score_SCWB: {test_score_SCWB:.3f}")
+            logger.critical(f"Testing total_reduction_amount: {env.material_usage_record[0] - env.material_usage_record[-1]:.3f}\n\n\n")
+            
             test_final_material_usages.append(test_final_material_usage)
+            if np.argmin(test_final_material_usages) == len(test_final_material_usages)-1: _save_model(agent, env, logger)
 
     score_info = {
         "train_score": train_scores,
@@ -574,14 +578,17 @@ def train(agent: DeepQAgent,
         "test_fail_name": test_fail_names,
         "test_fail_reason": test_fail_reasons
     }
-    other_info = {
-        "learn_loss": learn_losses,
-        "Q-value": Q_values,
+    test_info = {
         "test_action": test_actions,
+        "test_action_SCWB": test_actions_SCWB,
         "test_final_material_usage": test_final_material_usages,
         "test_final_design": test_final_designs
     }
+    other_info = {
+        "learn_loss": learn_losses,
+        "Q_value": Q_values
+    }
 
-    return score_info, fail_info, other_info
+    return score_info, fail_info, test_info, other_info
 
 

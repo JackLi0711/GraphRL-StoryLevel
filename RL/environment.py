@@ -60,7 +60,7 @@ class Environment:
         self.acc_record, self.disp_record = None, None
     
         # initiaization
-        #self._init_testing_structure()
+        self._init_testing_structure()
         self.init_check_setting(check_acceleration, check_displacement)
         
     
@@ -193,7 +193,7 @@ class Environment:
                             "analysis_dir": self.modal_analysis_dir}
         random_structure = structure.Structure(**structure_kwargs)
 
-        if structure_kwargs == self._testing_structure_kwargs:
+        if list(structure_kwargs.values())[:6] == list(self._testing_structure_kwargs.values())[:6]:
             random_structure = self.reset(testing=testing, taller=taller)
         else:    
             self.logger.info(random_structure)
@@ -301,6 +301,8 @@ class Environment:
             self.update_actions_record_SCWB.pop(-1)
             self.material_usage_record.pop(-1)
             done = True
+        else:
+            done = False
 
         return structure, reward, done, fail_name, fail_reason
         
