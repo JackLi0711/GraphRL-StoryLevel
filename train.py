@@ -49,7 +49,7 @@ def parse_args() -> Namespace:
 	# structure
 	parser.add_argument("--structure_shape", type=str, default="random", help="fixed, small_random, random")
 	parser.add_argument("--add_structure_geometry", action="store_true", default=True)
-	parser.add_argument("--reward_type", type=str, default="material", help="material, acceleration, displacement, normalized")
+	parser.add_argument("--reward_type", type=str, default="material", help="material, acceleration, displacement, normalized, total")
 	parser.add_argument("--restrict_action", action="store_true", default=True)
 
 	# model

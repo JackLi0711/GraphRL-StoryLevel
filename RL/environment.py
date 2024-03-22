@@ -210,18 +210,16 @@ class Environment:
     
     def calculate_reward(self, material_saved: float, material_saved_SCWB: float) -> float:
         """Combine various target into total reward"""
-        reward = 0.0
+        reward = 0
         if "material" in self.reward_type:
             print(f"saved_material_record len: {len(self.saved_material_record)}")
             print(f"{material_saved = :.3f} m3")
             print(f"{material_saved_SCWB = :.3f} m3")
             print(f"material usage difference: {(self.material_usage_record[-2] - self.material_usage_record[-1]):.3f} m3")
             
-            # normalized reward: decrement / initial amount
-            if "normalized" in self.reward_type:
-                reward += (material_saved / self.material_usage_record[0])
-            else:
-                reward += material_saved
+            reward += material_saved
+            if "total" in self.reward_type: reward += material_saved_SCWB
+            if "normalized" in self.reward_type: reward /= self.material_usage_record[0]
             
         if "acceleration" in self.reward_type:
             acc_record_x = np.array(self.acc_record['X-dir'])
@@ -296,12 +294,19 @@ class Environment:
                                                         self.logger)
 
         if whether_pass == False:
+            # fail constraints
             self.saved_material_record.pop(-1)
             self.saved_material_record_SCWB.pop(-1)
             self.update_actions_record_SCWB.pop(-1)
             self.material_usage_record.pop(-1)
             done = True
+        elif whether_pass == True and sum(structure.story_level_sections) == 0:  
+            # pass all constraints & already has minimum sections
+            done = True
+            fail_name = None
+            fail_reason = "minimum_section"
         else:
+            # pass all constraints & still has sections to reduce
             done = False
 
         return structure, reward, done, fail_name, fail_reason

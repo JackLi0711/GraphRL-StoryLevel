@@ -375,9 +375,10 @@ def _train_an_episode(agent: DeepQAgent,
     Q_values.append(q)
     fail_names.append(fail_name)
     fail_reasons.append(fail_reason)
+    final_story_level_sections = structure.story_level_sections if fail_reason == "minimum_section" else original_structure.story_level_sections
     logger.info("---> Constraint not satisfied, found optimal section at previous timestep")
-    logger.info(f"final_story_level_sections: {original_structure.story_level_sections}")
-    logger.info(f"episode: {agent._number_episodes:4d}, fail name: {fail_name}, fail reason: {fail_reason}")
+    logger.info(f"{final_story_level_sections = }")
+    logger.info(f"Episode: {agent._number_episodes:4d}, fail name: {fail_name}, fail reason: {fail_reason}")
     
     score = sum(env.saved_material_record)
     score_SCWB = sum(env.saved_material_record_SCWB)
@@ -428,17 +429,17 @@ def _testing(agent: DeepQAgent,
     
     test_fail_names.append(fail_name)
     test_fail_reasons.append(fail_reason)
-    final_story_level_sections = original_structure.story_level_sections
+    test_final_story_level_sections = original_structure.story_level_sections
     logger.info("---> Constraint not satisfied, found optimal section at previous timestep")
-    logger.info(f"{final_story_level_sections = }")
-    logger.info(f"testing, fail name: {fail_name}, fail reason: {fail_reason}")
+    logger.info(f"{test_final_story_level_sections = }")
+    logger.info(f"Testing, fail name: {fail_name}, fail reason: {fail_reason}")
     
     score = sum(env.saved_material_record)
     score_SCWB = sum(env.saved_material_record_SCWB)
     final_material_usage = original_structure.calculate_material_usage()
     actions = actions[:-1]
     actions_SCWB = ['_'.join(list(map(str, actions))) if len(actions) > 0 else '_' for actions in env.update_actions_record_SCWB[:-1]]
-    return score, score_SCWB, final_material_usage, actions, actions_SCWB, final_story_level_sections
+    return score, score_SCWB, final_material_usage, actions, actions_SCWB, test_final_story_level_sections
 
 
 def _inference(agent: DeepQAgent, 
@@ -560,8 +561,8 @@ def train(agent: DeepQAgent,
             test_actions.append(test_action)
             test_actions_SCWB.append(test_action_SCWB)
             test_final_designs.append(test_final_design)
-            logger.critical(f"Testing score: {test_score:.3f}, score_SCWB: {test_score_SCWB:.3f}")
-            logger.critical(f"Testing total_reduction_amount: {env.material_usage_record[0] - env.material_usage_record[-1]:.3f}\n\n\n")
+            logger.critical(f"Testing, score: {test_score:.3f}, score_SCWB: {test_score_SCWB:.3f}")
+            logger.critical(f"Testing, total_reduction_amount: {env.material_usage_record[0] - env.material_usage_record[-1]:.3f}\n\n\n")
             
             test_final_material_usages.append(test_final_material_usage)
             if np.argmin(test_final_material_usages) == len(test_final_material_usages)-1: _save_model(agent, env, logger)

@@ -35,12 +35,12 @@ def check(structure: Structure,
     if auxiliary_values is None:
         auxiliary_values, load_cases, responses = get_response(structure, analysis_dir)
 
-    if _too_much_minimum_section(structure): return False, None, "minimum_section", auxiliary_values
-
     for load_case, response in list(zip(load_cases, responses)):
         whether_pass, fail_reason = _check_code(structure, response, load_case, check_displacement)
         if whether_pass is False:
             return False, load_case.load_name, fail_reason, auxiliary_values
+    
+    #if _too_much_minimum_section(structure): return False, None, "minimum_section", auxiliary_values
         
     return True, None, None, auxiliary_values
 
