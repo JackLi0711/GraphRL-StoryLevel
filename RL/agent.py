@@ -438,7 +438,7 @@ def _testing(agent: DeepQAgent,
     score_SCWB = sum(env.saved_material_record_SCWB)
     final_material_usage = original_structure.calculate_material_usage()
     actions = actions[:-1]
-    actions_SCWB = ['_'.join(list(map(str, actions))) if len(actions) > 0 else '_' for actions in env.update_actions_record_SCWB[:-1]]
+    actions_SCWB = ['_'.join(list(map(str, actions))) if len(actions) > 0 else '_' for actions in env.update_actions_record_SCWB]
     return score, score_SCWB, final_material_usage, actions, actions_SCWB, test_final_story_level_sections
 
 
@@ -511,8 +511,8 @@ def _inference(agent: DeepQAgent,
 
 
 
-def _save_model(agent: DeepQAgent, env: Environment, logger: logging.Logger) -> None:
-    save_model_path = env.checkpoint_dir / "model.pt"
+def _save_model(agent: DeepQAgent, env: Environment, name: str, logger: logging.Logger) -> None:
+    save_model_path = env.checkpoint_dir / "models" / f"model_{name}.pt"
     torch.save({
         'gnn': agent.gnn.state_dict(),
         'online_q_network': agent.online_q_network.state_dict(),
@@ -565,7 +565,10 @@ def train(agent: DeepQAgent,
             logger.critical(f"Testing, total_reduction_amount: {env.material_usage_record[0] - env.material_usage_record[-1]:.3f}\n\n\n")
             
             test_final_material_usages.append(test_final_material_usage)
-            if np.argmin(test_final_material_usages) == len(test_final_material_usages)-1: _save_model(agent, env, logger)
+            if np.argmin(test_final_material_usages) == len(test_final_material_usages)-1: _save_model(agent, env, name="MinimumUsage", logger=logger)
+            if np.argmax(np.array(test_scores)+np.array(test_scores_SCWB)) == len(test_scores)-1: _save_model(agent, env, name="HighestScore", logger=logger)
+            if (i+1) % 50 == 0: _save_model(agent, env, name=f"Episode{str(i+1)}", logger=logger)
+
 
     score_info = {
         "train_score": train_scores,

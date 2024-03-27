@@ -46,8 +46,10 @@ class Environment:
         self.checkpoint_dir = checkpoint_dir
         self.code_analysis_dir = checkpoint_dir / "Code_Analysis"
         self.modal_analysis_dir = checkpoint_dir / "Modal_Analysis"
+        self.model_dir = checkpoint_dir / "models"
         self.code_analysis_dir.mkdir(parents=True, exist_ok=True)        
-        self.modal_analysis_dir.mkdir(parents=True, exist_ok=True)        
+        self.modal_analysis_dir.mkdir(parents=True, exist_ok=True)   
+        self.model_dir.mkdir(parents=True, exist_ok=True)     
 
         # the prescribed, test generalization ability
         self._testing_structure = None
@@ -64,7 +66,7 @@ class Environment:
         self.init_check_setting(check_acceleration, check_displacement)
         
     
-    def _init_testing_structure(self):
+    def _init_testing_structure(self, initial_design=None):
         """Initialize the prescribed structure."""
         if self.structure_shape in ["fixed", "small_random"]:
             x_span_num = 3
@@ -83,9 +85,7 @@ class Environment:
             story_num = 6  # original: 5
             story_height = 3200
 
-        story_level_sections = new_strategy.sample_initial_story_sections(x_span_num, x_span_len, 
-                                                                          z_span_num, z_span_len, 
-                                                                          story_num)
+        story_level_sections = initial_design if initial_design is not None else new_strategy.sample_initial_story_sections(x_span_num, x_span_len, z_span_num, z_span_len, story_num)
         self._testing_structure_kwargs = {"x_span_num": x_span_num, "x_span_lens": x_span_lens, 
                                           "z_span_num": z_span_num, "z_span_lens": z_span_lens, 
                                           "story_num": story_num, "story_height": story_height,
@@ -95,8 +95,8 @@ class Environment:
                                           "nda_norm_dict": self.nda_norm_dict,
                                           "analysis_dir": self.modal_analysis_dir}
         self._testing_structure = structure.Structure(**self._testing_structure_kwargs)
+        
         # update beam sections based on strong-column-weak-beam principle
-        #self.logger.info("Initializing precribed testing structure...")
         self.logger.info(f"before_SCWB_update, testing_story_level_sections: {self._testing_structure.story_level_sections}")
         new_strategy.strong_column_weak_beam_driven_update(self._testing_structure,
                                                            self.code_analysis_dir,
@@ -136,12 +136,11 @@ class Environment:
 
 
 
-    def reset(self, testing=False, taller=False) -> structure.Structure:
+    def reset(self, testing=False, taller=False, initial_design=None) -> structure.Structure:
         """Return a random generated structure."""
         if testing:
             # increase the variety of initial design for testing structure to prove model's capability
-            self._init_testing_structure()
-            #self.logger.info(f"testing_story_level_sections: {self._testing_structure.story_level_sections}")
+            self._init_testing_structure(initial_design)
             self.init_records(self._testing_structure)
             return deepcopy(self._testing_structure)
         elif taller:
@@ -180,9 +179,7 @@ class Environment:
                 story_num = np.random.randint(4, 8)
                 story_height = 3200
 
-        story_level_sections = new_strategy.sample_initial_story_sections(x_span_num, x_span_len, 
-                                                                          z_span_num, z_span_len, 
-                                                                          story_num)            
+        story_level_sections = initial_design if initial_design is not None else new_strategy.sample_initial_story_sections(x_span_num, x_span_len, z_span_num, z_span_len, story_num)            
         structure_kwargs = {"x_span_num": x_span_num, "x_span_lens": x_span_lens, 
                             "z_span_num": z_span_num, "z_span_lens": z_span_lens, 
                             "story_num": story_num, "story_height": story_height,

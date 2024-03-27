@@ -291,6 +291,7 @@ def visualize_design_process(agent: agent.DeepQAgent,
                              trained_ckpt_dir: Path, 
                              testing_structure: bool=False, 
                              taller_structure: bool=False, 
+                             initial_design: list[int]=None,
                              chances: int=0):
     logger.info(f"Visualizing design process......")
     
@@ -315,11 +316,11 @@ def visualize_design_process(agent: agent.DeepQAgent,
     # get testing structure & graph
     device = agent.device
     if testing_structure:
-        structure = env.reset(testing=True)
+        structure = env.reset(testing=True, initial_design=initial_design)
     elif taller_structure:
-        structure = env.reset(taller=True)
+        structure = env.reset(taller=True, initial_design=initial_design)
     else:
-        structure = env.reset()
+        structure = env.reset(initial_design=initial_design)
     graph = structure.graph.clone()
 
     done = None

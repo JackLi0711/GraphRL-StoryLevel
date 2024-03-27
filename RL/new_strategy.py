@@ -84,7 +84,7 @@ def strong_column_weak_beam_driven_action(structure: Structure, fail_conditions:
     return xdir_beam_update_action, zdir_beam_update_action
 
 
-def strong_column_weak_beam_driven_update(structure: Structure, analysis_dir: Path, logger: Logger) -> tuple[float, list[int], dict]:    
+def strong_column_weak_beam_driven_update(structure: Structure, analysis_dir: Path, logger: Logger=None) -> tuple[float, list[int], dict]:    
     auxiliary_values, load_cases, responses = check.get_response(structure, analysis_dir)
     fail_conditions = check_strong_column_weak_beam(structure, responses)
     xdir_beam_update_action, zdir_beam_update_action = strong_column_weak_beam_driven_action(structure, fail_conditions)

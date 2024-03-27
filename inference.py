@@ -28,7 +28,7 @@ def parse_args() -> Namespace:
 	#parser.add_argument("--trained_ckpt_dir", type=Path, default="./Results/3d_random/2023_05_06__21_36_03__test/")  # without doNDA
 	#parser.add_argument("--trained_ckpt_dir", type=Path, default="./Results/3d_random/2023_05_07__11_39_51__test/")  # with doNDA
 
-	parser.add_argument("--trained_ckpt_dir", type=Path, default="./Results/MaterialReward_RestrictAction/2024_01_12__13_06_35__AdjustedMoreSections_RestrictAction_StraightDecay1e-1_BufferSize20000_BatchSize512_Epoch500")
+	parser.add_argument("--trained_ckpt_dir", type=Path, default="./Results/MaterialReward_AdjustedMoreSections/2024_03_18__00_55_05__NewStrategy_RestrictAction_StraightDecay0.1_BufferSize20000_BatchSize256_Epoch300")
 	#parser.add_argument("--trained_ckpt_dir", type=Path, default="./Results/AccelerationReward/")
 
 	# chances
@@ -45,13 +45,13 @@ def parse_args() -> Namespace:
 	parser.add_argument("--ground_motion_number", type=int, default=11, help="ASCE says 11 is better")
 
 	# checkpoint
-	parser.add_argument("--ckpt_dir", type=Path, default="./Results/MaterialReward_RestrictAction/2024_01_12__13_06_35__AdjustedMoreSections_RestrictAction_StraightDecay1e-1_BufferSize20000_BatchSize512_Epoch500")
+	parser.add_argument("--ckpt_dir", type=Path, default="./Results/MaterialReward_AdjustedMoreSections/2024_03_18__00_55_05__NewStrategy_RestrictAction_StraightDecay0.1_BufferSize20000_BatchSize256_Epoch300")
 	#parser.add_argument("--ckpt_dir", type=Path, default="./Results/AccelerationReward/")
 
 	# structure
 	parser.add_argument("--structure_shape", type=str, default="random", help="fixed, small_random, random")
 	parser.add_argument("--add_structure_geometry", action="store_true", default=True)
-	parser.add_argument("--reward_type", type=str, default="material", help="material, acceleration, displacement, normalized")
+	parser.add_argument("--reward_type", type=str, default="material", help="material, acceleration, displacement, normalized, total")
 	parser.add_argument("--restrict_action", action="store_true", default=True)
 
 	# model
@@ -201,8 +201,9 @@ def main(args):
 	}
 	env = environment.Environment(**_env_kwargs)
 
+	initial_design = [14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 13, 9, 5, 4, 4, 1, 13, 12, 10, 9, 8, 4]
 
-	visualize.visualize_design_process(double_dqn_agent, env, logger, args.trained_ckpt_dir, testing_structure=True, taller_structure=False, chances=args.chances)
+	visualize.visualize_design_process(double_dqn_agent, env, logger, args.trained_ckpt_dir, testing_structure=True, initial_design=initial_design, chances=args.chances)
 	# visualize.visualize_edge_embedding(double_dqn_agent, env, logger, args.trained_ckpt_dir)
 	# visualize.visualize_design_process(double_dqn_agent, env, logger, args.trained_ckpt_dir, taller_structure=True)
 
