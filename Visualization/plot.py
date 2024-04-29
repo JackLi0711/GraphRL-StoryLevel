@@ -3,15 +3,16 @@ import matplotlib.pyplot as plt
 from typing import List
 from pathlib import Path
 
+from RL.record import Record
 from RL.environment import Environment
 
 
-def plot_reward(score_info: dict[str,list[float]], checkpoint_dir: Path) -> None:
+def plot_reward(rec: Record, checkpoint_dir: Path) -> None:
     """Plot train scores during every episode and test score every few episode."""
-    train_scores = score_info["train_score"]
-    train_scores_SCWB = score_info["train_score_SCWB"]
-    test_scores = score_info["test_score"]
-    test_scores_SCWB = score_info["test_score_SCWB"]
+    train_scores = rec.training_record["score"]
+    train_scores_SCWB = rec.training_record["score_SCWB"]
+    test_scores = rec.testing_record["score"]
+    test_scores_SCWB = rec.testing_record["score_SCWB"]
 
     train_scores_total = np.array(train_scores) + np.array(train_scores_SCWB)
     test_scores_total = np.array(test_scores) + np.array(test_scores_SCWB)
@@ -116,9 +117,9 @@ def plot_fail_reasons(train_fail_reasons: List[str], test_fail_reasons: List[str
     plt.close()
 
 
-def plot_test_behaviors(env: Environment, score_info: dict[str,list[float]], test_info: dict[str,list], checkpoint_dir: Path) -> None:
-    test_scores, test_scores_SCWB = score_info["test_score"], score_info["test_score_SCWB"]
-    test_actions, test_actions_SCWB = test_info["test_action"], test_info["test_action_SCWB"]
+def plot_test_behaviors(rec: Record, env: Environment, checkpoint_dir: Path) -> None:
+    test_scores, test_scores_SCWB = rec.testing_record["score"], rec.testing_record["score_SCWB"]
+    test_actions, test_actions_SCWB = rec.testing_record["action"], rec.testing_record["action_SCWB"]
     test_scores_total = np.array(test_scores) + np.array(test_scores_SCWB)
     story_num = env._testing_structure.story_num
 

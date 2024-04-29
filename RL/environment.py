@@ -19,6 +19,7 @@ class Environment:
                  structure_shape: str,
                  add_structure_geometry: bool,
                  reward_type: str,
+                 scwb_driven_design: bool,
                  do_nonlinear_dynamic_analysis: bool,
                  check_acceleration: bool,
                  check_displacement: bool,
@@ -33,6 +34,7 @@ class Environment:
         self.structure_shape = structure_shape
         self.add_structure_geometry = add_structure_geometry
         self.reward_type = reward_type
+        self.scwb_driven_design = scwb_driven_design
         self.do_nonlinear_dynamic_analysis = do_nonlinear_dynamic_analysis
 
         self.nda_simulator = nda_simulator
@@ -53,13 +55,6 @@ class Environment:
 
         # the prescribed, test generalization ability
         self._testing_structure = None
-
-        # prepare various record to track difference during design process
-        self.saved_material_record = None
-        self.saved_material_record_SCWB = None
-        self.update_actions_record_SCWB = None
-        self.material_usage_record = None
-        self.acc_record, self.disp_record = None, None
     
         # initiaization
         self._init_testing_structure()
@@ -85,7 +80,7 @@ class Environment:
             story_num = 6  # original: 5
             story_height = 3200
 
-        story_level_sections = initial_design if initial_design is not None else new_strategy.sample_initial_story_sections(x_span_num, x_span_len, z_span_num, z_span_len, story_num)
+        story_level_sections = initial_design if initial_design is not None else new_strategy.sample_initial_story_sections(x_span_num, x_span_len, z_span_num, z_span_len, story_num, thickest_prob=1.0)
         self._testing_structure_kwargs = {"x_span_num": x_span_num, "x_span_lens": x_span_lens, 
                                           "z_span_num": z_span_num, "z_span_lens": z_span_lens, 
                                           "story_num": story_num, "story_height": story_height,
@@ -98,9 +93,8 @@ class Environment:
         
         # update beam sections based on strong-column-weak-beam principle
         self.logger.info(f"before_SCWB_update, testing_story_level_sections: {self._testing_structure.story_level_sections}")
-        new_strategy.strong_column_weak_beam_driven_update(self._testing_structure,
-                                                           self.code_analysis_dir,
-                                                           self.logger)
+        if self.scwb_driven_design:
+            new_strategy.strong_column_weak_beam_driven_update(self._testing_structure, self.code_analysis_dir)
         self.logger.info(f"after_SCWB_update, testing_story_level_sections: {self._testing_structure.story_level_sections}\n")
 
 
@@ -118,6 +112,7 @@ class Environment:
         """Initialize various records corresponding to different reward types"""
         self.saved_material_record = []
         self.saved_material_record_SCWB = []
+        self.update_actions_record = []
         self.update_actions_record_SCWB = []
         self.material_usage_record = [structure.calculate_material_usage()]
 
@@ -179,7 +174,7 @@ class Environment:
                 story_num = np.random.randint(4, 8)
                 story_height = 3200
 
-        story_level_sections = initial_design if initial_design is not None else new_strategy.sample_initial_story_sections(x_span_num, x_span_len, z_span_num, z_span_len, story_num)            
+        story_level_sections = initial_design if initial_design is not None else new_strategy.sample_initial_story_sections(x_span_num, x_span_len, z_span_num, z_span_len, story_num, thickest_prob=0.1)            
         structure_kwargs = {"x_span_num": x_span_num, "x_span_lens": x_span_lens, 
                             "z_span_num": z_span_num, "z_span_lens": z_span_lens, 
                             "story_num": story_num, "story_height": story_height,
@@ -196,9 +191,8 @@ class Environment:
             self.logger.info(random_structure)
             # update beam sections based on strong-column-weak-beam principle
             self.logger.info(f"before_SCWB_update, story_level_sections: {random_structure.story_level_sections}")
-            new_strategy.strong_column_weak_beam_driven_update(random_structure,
-                                                               self.code_analysis_dir,
-                                                               self.logger)
+            if self.scwb_driven_design:
+                new_strategy.strong_column_weak_beam_driven_update(random_structure, self.code_analysis_dir)
             self.logger.info(f"after_SCWB_update, story_level_sections: {random_structure.story_level_sections}")
             self.init_records(random_structure)
 
@@ -246,13 +240,19 @@ class Environment:
         before_SCWB_structure = deepcopy(structure)
 
         # 1-2. update structure, graph and get saved material amount(m^3) (STRONG-COLUMN-WEAK-BEAM)
-        material_saved_SCWB, update_actions_SCWB, structural_behaviors = new_strategy.strong_column_weak_beam_driven_update(structure, self.code_analysis_dir, self.logger)
-        if material_saved_SCWB != 0:
-            print(f"before_SCWB_update, story_level_sections: {before_SCWB_structure.story_level_sections}")
-            print(f"after_SCWB_update,  story_level_sections: {structure.story_level_sections}")
+        if self.scwb_driven_design:
+            material_saved_SCWB, update_actions_SCWB, auxiliary_values, load_cases, responses = new_strategy.strong_column_weak_beam_driven_update(structure, self.code_analysis_dir, self.logger)
+            if material_saved_SCWB != 0:
+                print(f"before_SCWB_update, story_level_sections: {before_SCWB_structure.story_level_sections}")
+                print(f"after_SCWB_update,  story_level_sections: {structure.story_level_sections}")
+        else:
+            material_saved_SCWB = 0
+            update_actions_SCWB = []
+            auxiliary_values, load_cases, responses = check.get_response(structure, self.code_analysis_dir)
 
         # 2. record the information after updating structure and graph
         self.saved_material_record.append(material_saved)
+        self.update_actions_record.append(action)
         self.saved_material_record_SCWB.append(material_saved_SCWB)
         self.update_actions_record_SCWB.append(update_actions_SCWB)
         self.material_usage_record.append(structure.calculate_material_usage())
@@ -272,9 +272,9 @@ class Environment:
         # 4. check if linear static analysis response pass regulation
         whether_pass, fail_name, fail_reason, auxiliary_values = check.check(structure, 
                                                                              self.code_analysis_dir,
-                                                                             structural_behaviors["auxiliary_value"],
-                                                                             structural_behaviors["load_case"],
-                                                                             structural_behaviors["response"],
+                                                                             auxiliary_values,
+                                                                             load_cases,
+                                                                             responses,
                                                                              self.check_displacement)
 
         # 5. check if nonlinear dynamic analysis response pass regulation if needed
@@ -292,11 +292,12 @@ class Environment:
 
         if whether_pass == False:
             # fail constraints
+            done = True
             self.saved_material_record.pop(-1)
+            self.update_actions_record.pop(-1)
             self.saved_material_record_SCWB.pop(-1)
             self.update_actions_record_SCWB.pop(-1)
             self.material_usage_record.pop(-1)
-            done = True
         elif whether_pass == True and sum(structure.story_level_sections) == 0:  
             # pass all constraints & already has minimum sections
             done = True
@@ -305,6 +306,10 @@ class Environment:
         else:
             # pass all constraints & still has sections to reduce
             done = False
+        
+        if done:
+            self.fail_name = fail_name
+            self.fail_reason = fail_reason
 
         return structure, reward, done, fail_name, fail_reason
         

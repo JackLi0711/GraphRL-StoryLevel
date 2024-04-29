@@ -12,7 +12,7 @@ from Structure.structure import Structure
 
 def sample_initial_story_sections(x_span_num: int, x_span_len: int, 
                                   z_span_num: int, z_span_len: int, 
-                                  story_num: int) -> list[int]:
+                                  story_num: int, thickest_prob: float=1e-1) -> list[int]:
     min_geo_sum = (2+6) + (2+6) + 4
     max_geo_sum = (6+8) + (6+8) + 7
     geo_sum = (x_span_num + x_span_len/1000) + (z_span_num + z_span_len/1000) + story_num
@@ -23,8 +23,14 @@ def sample_initial_story_sections(x_span_num: int, x_span_len: int,
     exp_negative_distance = np.exp(-1 * distance * 0.25)
     sample_prob = exp_negative_distance / np.sum(exp_negative_distance)
 
-    story_outer_column_section = sorted(random.choices(section_pool, weights=sample_prob, k=story_num), reverse=True)
-    story_inner_column_section = sorted(random.choices(section_pool, weights=sample_prob, k=story_num), reverse=True)
+    if random.random() >= thickest_prob:
+        # mainly for training --> various initial design
+        story_outer_column_section = sorted(random.choices(section_pool, weights=sample_prob, k=story_num), reverse=True)
+        story_inner_column_section = sorted(random.choices(section_pool, weights=sample_prob, k=story_num), reverse=True)
+    else:
+        # mainly for testing --> same initial design
+        story_outer_column_section = [len(column_sections)-1 for _ in range(story_num)]
+        story_inner_column_section = [len(column_sections)-1 for _ in range(story_num)]
     story_xdir_beam_section = [len(beam_sections)-1 for _ in range(story_num)]
     story_zdir_beam_section = [len(beam_sections)-1 for _ in range(story_num)]
 
@@ -111,11 +117,5 @@ def strong_column_weak_beam_driven_update(structure: Structure, analysis_dir: Pa
         fail_conditions = check_strong_column_weak_beam(structure, responses)
         xdir_beam_update_action, zdir_beam_update_action = strong_column_weak_beam_driven_action(structure, fail_conditions)
         update_actions = xdir_beam_update_action + zdir_beam_update_action
-    
-    structural_behaviors = {
-        "auxiliary_value": auxiliary_values,
-        "load_case": load_cases,
-        "response": responses
-    }
 
-    return material_saved, all_update_actions, structural_behaviors
+    return material_saved, all_update_actions, auxiliary_values, load_cases, responses

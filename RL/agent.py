@@ -17,6 +17,7 @@ sys.path.append("../Structure")
 import RL.model as model
 import RL.buffer as buffer
 import RL.q_algorithm as q_algorithm
+from RL.record import Record
 from RL.environment import Environment
 from RL.model import synchronize_q_networks, soft_update_q_network_parameters
 
@@ -123,7 +124,7 @@ class DeepQAgent(Agent):
 
         # initialize optimizer
         params = list(self.gnn.parameters()) + list(self.online_q_network.parameters())
-        self._optimizer = optim.Adam(params, lr=lr)  # or optim.RMSprop(params, lr=lr)
+        self._optimizer = optim.RMSprop(params, lr=lr)  # Japan: RMSprop / Tony: Adam
         
         # initialize some counters
         self._number_episodes = 0
@@ -175,17 +176,14 @@ class DeepQAgent(Agent):
     def choose_action(self, 
                       state: torch.Tensor, 
                       already_minimum_section_story_indexes: List[int],
-                      dont_select_story_member_indexes: List[int]=None, 
+                      dont_select_story_member_indexes: List[int]=[], 
                       greedy: bool=False) -> Tuple[int, float]:
         """
         Return the action for given state as per current policy.
         action: update_story_index
         """
         q_val = 0
-        if dont_select_story_member_indexes == None:
-            dont_select_story_indexes = already_minimum_section_story_indexes
-        else: 
-            dont_select_story_indexes = list(set(already_minimum_section_story_indexes + dont_select_story_member_indexes))
+        dont_select_story_indexes = list(set(already_minimum_section_story_indexes + dont_select_story_member_indexes))
         
         # if testing time, always select the greedy action
         if greedy:
@@ -329,13 +327,11 @@ class DeepQAgent(Agent):
 
 def _train_an_episode(agent: DeepQAgent, 
                       env: Environment, 
-                      learn_losses: List[float],
-                      Q_values: List[float],
-                      fail_names: List[str],
-                      fail_reasons: List[str],
+                      rec: Record,
                       logger: logging.Logger) -> tuple[float, float]:
     """Train the agent until the agent meets the terminal state."""
     structure = env.reset()  # generate a new random graph
+    rec.record_in_beginning(structure, testing=False)
     graph = structure.graph.clone()
     score = 0
     done = False
@@ -346,7 +342,7 @@ def _train_an_episode(agent: DeepQAgent,
         with torch.no_grad():
             graph = graph.to(agent.device)
             state = agent.gnn(graph.x, graph.edge_index, graph.edge_attr, None, structure.aux["story_batch"].to(agent.device), None)
-        dont_select_story_member_indexes = structure.restrict_action_space() if agent.restrict_action else None
+        dont_select_story_member_indexes = structure.restrict_action_space() if agent.restrict_action else []
         action, q_val = agent.choose_action(state, 
                                             structure.already_minimum_section_story_indexes,
                                             dont_select_story_member_indexes)
@@ -364,22 +360,23 @@ def _train_an_episode(agent: DeepQAgent,
         if env.saved_material_record_SCWB[-1] != 0:
             logger.info(f"episode: {agent._number_episodes+1:4d}, timestep: {agent._number_timesteps+1:3d}, action: {actions_SCWB}, reward: {reward_SCWB:4f},  acculmulate_score: {score_SCWB:.4f} [SCWB]")
         
-        if q == 0 and q_val > 0:
-            q = q_val
+        if q == 0 and q_val > 0: q = q_val
 
         # get next state and save experience
         next_graph = structure.graph.clone()
-        agent.step(graph, action, reward, next_graph, done, structure.aux, learn_losses)
+        agent.step(graph, action, reward, next_graph, done, structure.aux, rec.learn_losses)
         graph = next_graph.clone()
     
-    Q_values.append(q)
-    fail_names.append(fail_name)
-    fail_reasons.append(fail_reason)
-    final_story_level_sections = structure.story_level_sections if fail_reason == "minimum_section" else original_structure.story_level_sections
+    rec.Q_values.append(q)
+
+    final_structure = structure if fail_reason == "minimum_section" else original_structure
+    final_story_level_sections = final_structure.story_level_sections
     logger.info("---> Constraint not satisfied, found optimal section at previous timestep")
     logger.info(f"{final_story_level_sections = }")
     logger.info(f"Episode: {agent._number_episodes:4d}, fail name: {fail_name}, fail reason: {fail_reason}")
     
+    rec.record_in_end(final_structure, env, testing=False)
+
     score = sum(env.saved_material_record)
     score_SCWB = sum(env.saved_material_record_SCWB)
     return score, score_SCWB
@@ -387,11 +384,11 @@ def _train_an_episode(agent: DeepQAgent,
 
 def _testing(agent: DeepQAgent, 
              env: Environment, 
-             test_fail_names: List[str],
-             test_fail_reasons: List[str], 
-             logger: logging.Logger) -> Tuple[float, float, float, List[int], List[int]]:
+             rec: Record,
+             logger: logging.Logger) -> tuple[float, float]:
     """Test agent's performance with prescribed condition and greedy policy."""
     structure = env.reset(testing=True)  # generate a fix-shaped structure
+    rec.record_in_beginning(structure, testing=True)
     graph = structure.graph.clone()
     score = 0
     timestep = 0
@@ -404,7 +401,7 @@ def _testing(agent: DeepQAgent,
             graph = graph.to(agent.device)
             state = agent.gnn(graph.x, graph.edge_index, graph.edge_attr, None, structure.aux["story_batch"].to(agent.device), None)
 
-        dont_select_story_member_indexes = structure.restrict_action_space() if agent.restrict_action else None
+        dont_select_story_member_indexes = structure.restrict_action_space() if agent.restrict_action else []
         action, _ = agent.choose_action(state, 
                                         structure.already_minimum_section_story_indexes,
                                         dont_select_story_member_indexes, 
@@ -427,19 +424,19 @@ def _testing(agent: DeepQAgent,
         if env.saved_material_record_SCWB[-1] != 0:
             logger.info(f"*****Testing Episode, timestep: {timestep:3d}, action: {actions_SCWB}, reward: {reward_SCWB:4f},  acculmulate_score: {score_SCWB:.4f} [SCWB]")
     
-    test_fail_names.append(fail_name)
-    test_fail_reasons.append(fail_reason)
-    test_final_story_level_sections = original_structure.story_level_sections
+    final_structure = structure if fail_reason == "minimum_section" else original_structure
+    test_final_story_level_sections = final_structure.story_level_sections
     logger.info("---> Constraint not satisfied, found optimal section at previous timestep")
     logger.info(f"{test_final_story_level_sections = }")
     logger.info(f"Testing, fail name: {fail_name}, fail reason: {fail_reason}")
+
+    rec.record_in_end(final_structure, env, testing=True)
     
     score = sum(env.saved_material_record)
     score_SCWB = sum(env.saved_material_record_SCWB)
-    final_material_usage = original_structure.calculate_material_usage()
-    actions = actions[:-1]
-    actions_SCWB = ['_'.join(list(map(str, actions))) if len(actions) > 0 else '_' for actions in env.update_actions_record_SCWB]
-    return score, score_SCWB, final_material_usage, actions, actions_SCWB, test_final_story_level_sections
+    # actions = actions[:-1]
+    # actions_SCWB = ['_'.join(list(map(str, actions))) if len(actions) > 0 else '_' for actions in env.update_actions_record_SCWB]
+    return score, score_SCWB
 
 
 def _inference(agent: DeepQAgent, 
@@ -462,7 +459,7 @@ def _inference(agent: DeepQAgent,
             graph = graph.to(agent.device)
             state = agent.gnn(graph.x, graph.edge_index, graph.edge_attr, None, structure.aux["story_batch"].to(agent.device), None)
         
-        dont_select_story_member_indexes = structure.restrict_action_space() if agent.restrict_action else None
+        dont_select_story_member_indexes = structure.restrict_action_space() if agent.restrict_action else []
         action, _ = agent.choose_action(state, 
                                         structure.already_minimum_section_story_indexes,
                                         dont_select_story_member_indexes, 
@@ -523,7 +520,7 @@ def _save_model(agent: DeepQAgent, env: Environment, name: str, logger: logging.
 
 def _load_model(agent: DeepQAgent, load_ckpt_dir, logger: logging.Logger) -> None:
     # theta_1, theta_2, theta_3, online_q_network, target_q_network
-    save_model_path = load_ckpt_dir / "model.pt"
+    save_model_path = load_ckpt_dir #/ "model.pt"
     checkpoint = torch.load(save_model_path, map_location=torch.device(agent.device))
     agent.gnn.load_state_dict(checkpoint['gnn'])    
     agent.online_q_network.load_state_dict(checkpoint['online_q_network'])    
@@ -533,66 +530,60 @@ def _load_model(agent: DeepQAgent, load_ckpt_dir, logger: logging.Logger) -> Non
 
 def train(agent: DeepQAgent,
           env: Environment,
+          rec: Record,
           number_episodes: int,
-          logger: logging.Logger) -> tuple[dict[str,list[float]], dict[str,list[str]], dict[str,list[float]], dict[str,list]]:
+          logger: logging.Logger):
     """Reinforcement learning training loop."""
-    
-    train_scores, train_scores_SCWB = [], []
-    test_scores, test_scores_SCWB = [], []
-    
-    fail_names, fail_reasons = [], []
-    test_fail_names, test_fail_reasons = [], []
-
-    learn_losses, Q_values = [], []
-    test_actions, test_actions_SCWB = [], []
-    test_final_material_usages, test_final_designs = [], []
 
     for i in range(number_episodes):
-        score, score_SCWB = _train_an_episode(agent, env, learn_losses, Q_values, fail_names, fail_reasons, logger)
-        train_scores.append(score)
-        train_scores_SCWB.append(score_SCWB)
+        score, score_SCWB = _train_an_episode(agent, env, rec, logger)
+        # train_scores.append(score)
+        # train_scores_SCWB.append(score_SCWB)
         logger.critical(f"Episode: {i+1}, score: {score:.3f}, score_SCWB: {score_SCWB:.3f}")
         logger.critical(f"Episode: {i+1}, total_reduction_amount: {env.material_usage_record[0] - env.material_usage_record[-1]:.3f}\n\n\n")
 
         if (i+1) % agent._test_frequency == 0:
-            test_score, test_score_SCWB, test_final_material_usage, test_action, test_action_SCWB, test_final_design = _testing(agent, env, test_fail_names, test_fail_reasons, logger)
-            test_scores.append(test_score)
-            test_scores_SCWB.append(test_score_SCWB)
-            test_actions.append(test_action)
-            test_actions_SCWB.append(test_action_SCWB)
-            test_final_designs.append(test_final_design)
+            test_score, test_score_SCWB = _testing(agent, env, rec, logger)
+            # test_scores.append(test_score)
+            # test_scores_SCWB.append(test_score_SCWB)
+            # test_actions.append(test_action)
+            # test_actions_SCWB.append(test_action_SCWB)
+            # test_final_designs.append(test_final_design)
             logger.critical(f"Testing, score: {test_score:.3f}, score_SCWB: {test_score_SCWB:.3f}")
             logger.critical(f"Testing, total_reduction_amount: {env.material_usage_record[0] - env.material_usage_record[-1]:.3f}\n\n\n")
             
-            test_final_material_usages.append(test_final_material_usage)
-            if np.argmin(test_final_material_usages) == len(test_final_material_usages)-1: _save_model(agent, env, name="MinimumUsage", logger=logger)
-            if np.argmax(np.array(test_scores)+np.array(test_scores_SCWB)) == len(test_scores)-1: _save_model(agent, env, name="HighestScore", logger=logger)
-            if (i+1) % 50 == 0: _save_model(agent, env, name=f"Episode{str(i+1)}", logger=logger)
+            # test_final_material_usages.append(test_final_material_usage)
+            if np.argmin(rec.testing_record["final_volume"]) == len(rec.testing_record["final_volume"])-1: 
+                _save_model(agent, env, name="MinimumUsage", logger=logger)
+            if np.argmax(rec.testing_record["score"]) == len(rec.testing_record["score"])-1: 
+                _save_model(agent, env, name="HighestScore", logger=logger)
+            if (i+1) % 50 == 0: 
+                _save_model(agent, env, name=f"Episode{str(i+1)}", logger=logger)
 
 
-    score_info = {
-        "train_score": train_scores,
-        "train_score_SCWB": train_scores_SCWB,
-        "test_score": test_scores,
-        "test_score_SCWB": test_scores_SCWB
-    }
-    fail_info = {
-        "fail_name": fail_names,
-        "fail_reason": fail_reasons,
-        "test_fail_name": test_fail_names,
-        "test_fail_reason": test_fail_reasons
-    }
-    test_info = {
-        "test_action": test_actions,
-        "test_action_SCWB": test_actions_SCWB,
-        "test_final_material_usage": test_final_material_usages,
-        "test_final_design": test_final_designs
-    }
-    other_info = {
-        "learn_loss": learn_losses,
-        "Q_value": Q_values
-    }
+    # score_info = {
+    #     "train_score": train_scores,
+    #     "train_score_SCWB": train_scores_SCWB,
+    #     "test_score": test_scores,
+    #     "test_score_SCWB": test_scores_SCWB
+    # }
+    # fail_info = {
+    #     "fail_name": fail_names,
+    #     "fail_reason": fail_reasons,
+    #     "test_fail_name": test_fail_names,
+    #     "test_fail_reason": test_fail_reasons
+    # }
+    # test_info = {
+    #     "test_action": test_actions,
+    #     "test_action_SCWB": test_actions_SCWB,
+    #     "test_final_material_usage": test_final_material_usages,
+    #     "test_final_design": test_final_designs
+    # }
+    # other_info = {
+    #     "learn_loss": learn_losses,
+    #     "Q_value": Q_values
+    # }
 
-    return score_info, fail_info, test_info, other_info
+    # return score_info, fail_info, test_info, other_info
 
 

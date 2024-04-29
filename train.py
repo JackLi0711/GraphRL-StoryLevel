@@ -8,15 +8,14 @@ from datetime import datetime
 from argparse import ArgumentParser, Namespace
 
 import os
-os.environ["KMP_DUPLICATE_LIB_OK"]  =  "TRUE"
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 import sys
 sys.path.append("RL/")
 sys.path.append("Structure/")
 sys.path.append("Visualization")
 sys.path.append("NonlinearDynamicAnalysisSimulator/")
 
-from RL import agent
-from RL import environment
+from RL import agent, environment, record
 from RL.agent import train
 from Visualization import plot
 from Visualization import visualize
@@ -50,7 +49,8 @@ def parse_args() -> Namespace:
 	parser.add_argument("--structure_shape", type=str, default="random", help="fixed, small_random, random")
 	parser.add_argument("--add_structure_geometry", action="store_true", default=True)
 	parser.add_argument("--reward_type", type=str, default="material", help="material, acceleration, displacement, normalized, total")
-	parser.add_argument("--restrict_action", action="store_true", default=True)
+	parser.add_argument("--restrict_action", action="store_true", default=False)
+	parser.add_argument("--scwb_driven_design", action="store_true", default=True)
 
 	# model
 	parser.add_argument("--hidden_dim", type=int, default=100)
@@ -122,7 +122,8 @@ def main(args):
 	logger.critical(args)
 
 	# set device
-	device = "cpu"#"cuda" if torch.cuda.is_available() else "cpu"
+	device = "cuda" if torch.cuda.is_available() else "cpu"
+	logger.critical(f"Device: {torch.cuda.get_device_name(device) if device == "cuda" else "CPU"}")
 
 	# setupt nonliear dynamic analysis simulator
 	nda_simulator = None
@@ -145,24 +146,21 @@ def main(args):
 							 minimum_epsilon: float) -> float:
 		"""Power decay schedule found in other practical applications."""
 		return max(decay_factor ** episode_number, minimum_epsilon)
-
-	_epsilon_decay_schedule_kwargs = {
-		"decay_factor": args.epsilon,
-		"minimum_epsilon": 1e-2,
-	}
-	epsilon_decay_schedule = lambda n: power_decay_schedule(n, **_epsilon_decay_schedule_kwargs)
+	epsilon_decay_schedule = lambda n: power_decay_schedule(n, args.epsilon, 1e-2)
 
 	# Linear decay schedule
 	def linear_decay_schedule(episode_number: int,
 						      total_episode: int,
 							  minimum_epsilon: float):
 		return max(1.0 - episode_number/total_episode, minimum_epsilon)
-	
-	_straight_decay_schedule_kwargs = {
-		"total_episode": args.num_epoch,
-		"minimum_epsilon": 1e-1,
-	}
-	straight_decay_schedule = lambda n: linear_decay_schedule(n, **_straight_decay_schedule_kwargs)
+	straight_decay_schedule = lambda n: linear_decay_schedule(n, args.num_epoch, 1e-1)
+
+	# Constant epsilon schedule (Japan: RL for 2D frame)
+	def constant_epsilon_schedule(episode_number: int,
+							   	  constant_epsilon: float=1e-1) -> float:
+		return constant_epsilon
+	fixed_epsilon_schedule = lambda n: constant_epsilon_schedule(n, 1e-1)
+
 
 	# Agent
 	node_feature_dim = 8 if args.add_structure_geometry else 5
@@ -175,7 +173,7 @@ def main(args):
 		"batch_size": args.batch_size,
 		"lr": args.lr,
 		"buffer_size": args.buffer_size,
-		"epsilon_decay_schedule": straight_decay_schedule,
+		"epsilon_decay_schedule": fixed_epsilon_schedule,
 		"synchronize_steps": args.synchronize_steps,
 		"soft_update_alpha": args.soft_update_alpha,
 		"gamma": args.gamma,
@@ -195,6 +193,7 @@ def main(args):
 		"structure_shape": args.structure_shape,
 		"add_structure_geometry": args.add_structure_geometry,
 		"reward_type": args.reward_type,
+		"scwb_driven_design": args.scwb_driven_design,
 		"do_nonlinear_dynamic_analysis": args.do_nonlinear_dynamic_analysis,
 		"check_acceleration": args.check_acceleration,
 		"check_displacement": args.check_displacement,
@@ -208,44 +207,50 @@ def main(args):
 	}
 	env = environment.Environment(**_env_kwargs)
 
+	# Record
+	rec = record.Record()
+	
 	# Training the DeepQAgent using Double DQN
 	_train_kwargs = {
 		"agent": double_dqn_agent,
 		"env": env,
+		"record": rec,
 		"number_episodes": args.num_epoch,
 		"logger": logger,
 	}
 
 
-	score_info, fail_info, test_info, other_info = train(**_train_kwargs)
+	train(**_train_kwargs)
 
-	logger.critical(f"Testing Scores: {score_info['test_score']}\n\n\n")
-	logger.critical(f"Testing Scores(SCWB): {score_info['test_score_SCWB']}\n\n\n")
-	logger.critical(f"Testing Final Design: {test_info['test_final_design']}\n\n\n")
-	logger.critical(f"Testing Final Material Usage: {test_info['test_final_material_usage']}\n\n\n")
+	# logger.critical(f"Testing Scores: {score_info['test_score']}\n\n\n")
+	# logger.critical(f"Testing Scores(SCWB): {score_info['test_score_SCWB']}\n\n\n")
+	# logger.critical(f"Testing Final Design: {test_info['test_final_design']}\n\n\n")
+	# logger.critical(f"Testing Final Material Usage: {test_info['test_final_material_usage']}\n\n\n")
 
-	best_performance = min(test_info["test_final_material_usage"])
-	best_episode = np.argmin(np.array(test_info["test_final_material_usage"]))
-	best_design = test_info["test_final_design"][best_episode]
-	logger.critical(f"Minimum Material Usage: {best_performance:.3f} m3")
-	logger.critical(f"Best Story Level Sections: {best_design}")
+	# best_performance = min(test_info["test_final_material_usage"])
+	# best_episode = np.argmin(np.array(test_info["test_final_material_usage"]))
+	# best_design = test_info["test_final_design"][best_episode]
+	# logger.critical(f"Minimum Material Usage: {best_performance:.3f} m3")
+	# logger.critical(f"Best Story Level Sections: {best_design}")
 
-	plot.plot_reward(score_info, args.ckpt_dir)
-	plot.plot_loss(other_info["learn_loss"], args.ckpt_dir)
-	plot.plot_Qvalues(other_info["Q_value"], args.ckpt_dir)
-	plot.plot_fail_names(fail_info["fail_name"], fail_info["test_fail_name"], args.ckpt_dir)
-	plot.plot_fail_reasons(fail_info["fail_reason"], fail_info["test_fail_reason"], args.ckpt_dir)	
-	plot.plot_test_behaviors(env, score_info, test_info, args.ckpt_dir)
+	plot.plot_reward(rec, args.ckpt_dir)
+	plot.plot_loss(rec.learn_losses, args.ckpt_dir)
+	plot.plot_Qvalues(rec.Q_values, args.ckpt_dir)
+	plot.plot_fail_names(rec.training_record["fail_name"], rec.testing_record["fail_name"], args.ckpt_dir)
+	plot.plot_fail_reasons(rec.training_record["fail_reason"], rec.testing_record["fail_reason"], args.ckpt_dir)	
+	plot.plot_test_behaviors(rec, env, args.ckpt_dir)
 
 	# inference
 	#visualize.visualize_design_process(double_dqn_agent, env, logger, args.ckpt_dir, testing_structure=True)
 	#visualize.visualize_design_process(double_dqn_agent, env, logger, args.ckpt_dir, taller_structure=True)
 	#visualize.visualize_edge_embedding(double_dqn_agent, env, logger, args.ckpt_dir)
 
-	with open(args.ckpt_dir / "score_info.txt", "w") as f: json.dump(score_info, f)
-	with open(args.ckpt_dir / "fail_info.txt", "w") as f: json.dump(fail_info, f)
-	with open(args.ckpt_dir / "test_info.txt", "w") as f: json.dump(test_info, f)
-	with open(args.ckpt_dir / "other_info.txt", "w") as f: json.dump(other_info, f)
+	# output record
+	rec.output(args.ckpt_dir)
+	# with open(args.ckpt_dir / "score_info.txt", "w") as f: json.dump(score_info, f)
+	# with open(args.ckpt_dir / "fail_info.txt", "w") as f: json.dump(fail_info, f)
+	# with open(args.ckpt_dir / "test_info.txt", "w") as f: json.dump(test_info, f)
+	# with open(args.ckpt_dir / "other_info.txt", "w") as f: json.dump(other_info, f)
 
 
 if __name__ == "__main__":
