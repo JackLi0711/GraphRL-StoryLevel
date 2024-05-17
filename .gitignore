@@ -14,11 +14,8 @@
 /參考資料/
 /暫時用不到的程式碼/
 
-check_inference.ipynb
-check_performance.ipynb
-check_section.ipynb
-check_Tony_design.ipynb
-check_new_strategy.ipynb
+/check/
+
 analyize_seismic_behavior.ipynb
 
 .DS_Store

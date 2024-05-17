@@ -40,7 +40,7 @@ DL = 1.0    # kN/m2
 
 GRAPH_NORM_DICT = {
     # node
-    "grid_num": 8,
+    "grid_num": 7,
     "coord": 7,
     # edge
     "L": 8,
@@ -466,10 +466,10 @@ class Structure:
             section_index = member_section_dict[member_name]
             category = member_category_dict[member_name]
             if category == 'y':
-                member_Zz = column_sections[section_index]['Z_z(cm3)']
+                member_Zz = column_sections[section_index]['Z_z(cm3)'] * 1e+3  # mm3
                 member_Ag = column_sections[section_index]['A(cm2)'] * 1e+2    # mm2
             else:
-                member_Zz = beam_sections[section_index]['Z_z(cm3)']
+                member_Zz = beam_sections[section_index]['Z_z(cm3)'] * 1e+3    # mm3
                 member_Ag = beam_sections[section_index]['A(cm2)'] * 1e+2      # mm2
             
             node1_index, node2_index, face_number1, face_number2, _, _ = member_to_nodeIndex_dict[member_name]
@@ -494,8 +494,8 @@ class Structure:
         node_area_dict = dict()                   # m^2
         node_self_weight_dict = dict()            # kN
         node_dead_load_self_weight_dict = dict()  # kN
-        node_translational_mass_dict = dict()     # kN
-        node_inertia_dict = dict()                # kN / (mm/s2) * mm^2
+        node_translational_mass_dict = dict()     # kN / (mm/s^2)
+        node_inertia_dict = dict()                # kN / (mm/s^2) * mm^2
         story_weight_distribution_ratio_dict = dict()
 
         node_index = 0
@@ -514,9 +514,9 @@ class Structure:
                     story_weight += node_self_weight
                     # self weight + dead load: kN
                     node_dead_load_self_weight_dict[node_name] = node_self_weight + distributed_area * DL
-                    # translational mass: kN
+                    # translational mass: kN / (mm/s^2)
                     node_translational_mass_dict[node_name] = self._calculate_translational_mass(node_self_weight)
-                    # node inertia: kN / (mm/s2) * mm^2
+                    # node inertia: kN / (mm/s^2) * mm^2
                     node_inertia_dict[node_name] = self._calculate_moment_inertia(x, y, z)
                     node_index += 1
 
@@ -706,9 +706,6 @@ class Structure:
         node_feature[:, 3] = beta_x
         node_feature[:, 4] = beta_z
 
-        if self.add_structure_geometry:
-            node_feature[:, 5] = len(self.y_grid)
-
         node_index = 0
         for y in self.y_grid:
             for x in self.x_grid:
@@ -726,8 +723,9 @@ class Structure:
 
                     if self.add_structure_geometry:
                         x_grid_coord, y_grid_coord, z_grid_coord = self.node_grid_coord_dict[node_name]
-                        node_feature[node_index, 6] = y_grid_coord
-                        node_feature[node_index, 7] = (y_grid_coord + 1) / len(self.y_grid)  # current height ratio
+                        node_feature[node_index, 5] = self.story_num  # story number
+                        node_feature[node_index, 6] = y_grid_coord  # current story
+                        node_feature[node_index, 7] = y_grid_coord / self.story_num  # current height ratio
 
                     node_index += 1
 
@@ -921,9 +919,9 @@ class Structure:
 
     def _normalize(self):
         if self.add_structure_geometry:
-            self.graph.x[:, 5] /= GRAPH_NORM_DICT["grid_num"]
-            self.graph.x[:, 6] /= GRAPH_NORM_DICT["coord"]
-        self.graph.edge_attr[:, 2] /= GRAPH_NORM_DICT["L"]
+            self.graph.x[:, 5] /= GRAPH_NORM_DICT["grid_num"]  # 7
+            self.graph.x[:, 6] /= GRAPH_NORM_DICT["coord"]  # 7
+        self.graph.edge_attr[:, 2] /= GRAPH_NORM_DICT["L"]  # 8
         self.graph.edge_attr[:, 3] /= GRAPH_NORM_DICT["A"]
         self.graph.edge_attr[:, 4] /= GRAPH_NORM_DICT["Iz"]
         self.graph.edge_attr[:, 5] /= GRAPH_NORM_DICT["Iy"]
@@ -1058,8 +1056,8 @@ class Structure:
             
             # node level update
             node1_index, node2_index, face_number1, face_number2, node_feature_face_index1, node_feature_face_index2 = self.member_to_nodeIndex_dict[member_name]
-            self.node_neighbor_Zz_matrix[node1_index, face_number1] = Zz
-            self.node_neighbor_Zz_matrix[node2_index, face_number2] = Zz
+            self.node_neighbor_Zz_matrix[node1_index, face_number1] = Zz * 1e+3  # mm3
+            self.node_neighbor_Zz_matrix[node2_index, face_number2] = Zz * 1e+3  # mm3
             self.node_neighbor_Ag_matrix[node1_index, face_number1] = A * 1e+2  # mm2
             self.node_neighbor_Ag_matrix[node2_index, face_number2] = A * 1e+2  # mm2
             

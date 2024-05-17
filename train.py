@@ -123,7 +123,8 @@ def main(args):
 
 	# set device
 	device = "cuda" if torch.cuda.is_available() else "cpu"
-	logger.critical(f"Device: {torch.cuda.get_device_name(device) if device == "cuda" else "CPU"}")
+	device_name = torch.cuda.get_device_name(device) if device == "cuda" else "CPU"
+	logger.critical(f"Device: {device_name}")
 
 	# setupt nonliear dynamic analysis simulator
 	nda_simulator = None
@@ -214,7 +215,7 @@ def main(args):
 	_train_kwargs = {
 		"agent": double_dqn_agent,
 		"env": env,
-		"record": rec,
+		"rec": rec,
 		"number_episodes": args.num_epoch,
 		"logger": logger,
 	}
@@ -227,11 +228,11 @@ def main(args):
 	# logger.critical(f"Testing Final Design: {test_info['test_final_design']}\n\n\n")
 	# logger.critical(f"Testing Final Material Usage: {test_info['test_final_material_usage']}\n\n\n")
 
-	# best_performance = min(test_info["test_final_material_usage"])
-	# best_episode = np.argmin(np.array(test_info["test_final_material_usage"]))
-	# best_design = test_info["test_final_design"][best_episode]
-	# logger.critical(f"Minimum Material Usage: {best_performance:.3f} m3")
-	# logger.critical(f"Best Story Level Sections: {best_design}")
+	best_episode = np.argmin(rec.testing_record["final_volume"])
+	best_performance = rec.testing_record["final_volume"][best_episode]
+	best_design = rec.testing_record["final_design"][best_episode]
+	logger.critical(f"Minimum Material Usage: {best_performance:.3f} m3")
+	logger.critical(f"Best Story Level Sections: {best_design}")
 
 	plot.plot_reward(rec, args.ckpt_dir)
 	plot.plot_loss(rec.learn_losses, args.ckpt_dir)
@@ -246,7 +247,6 @@ def main(args):
 	#visualize.visualize_edge_embedding(double_dqn_agent, env, logger, args.ckpt_dir)
 
 	# output record
-	rec.output(args.ckpt_dir)
 	# with open(args.ckpt_dir / "score_info.txt", "w") as f: json.dump(score_info, f)
 	# with open(args.ckpt_dir / "fail_info.txt", "w") as f: json.dump(fail_info, f)
 	# with open(args.ckpt_dir / "test_info.txt", "w") as f: json.dump(test_info, f)

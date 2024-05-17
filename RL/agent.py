@@ -552,6 +552,8 @@ def train(agent: DeepQAgent,
             logger.critical(f"Testing, score: {test_score:.3f}, score_SCWB: {test_score_SCWB:.3f}")
             logger.critical(f"Testing, total_reduction_amount: {env.material_usage_record[0] - env.material_usage_record[-1]:.3f}\n\n\n")
             
+            rec.output(env.checkpoint_dir)
+
             # test_final_material_usages.append(test_final_material_usage)
             if np.argmin(rec.testing_record["final_volume"]) == len(rec.testing_record["final_volume"])-1: 
                 _save_model(agent, env, name="MinimumUsage", logger=logger)

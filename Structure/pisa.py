@@ -1,6 +1,7 @@
 import os
 import numpy as np
 from typing import Tuple
+
 from Structure.sections import *
 
 
@@ -139,7 +140,7 @@ def _generate_analysis_ipt(structure, ipt_path: str, analysis="static", nodal_lo
     # nodal mass, translational mass (Ux, Uy, Uz, Rx, Ry, Rz) | U: translational mass, R: moment of inertia
     mass_string = ''
     for node_name in structure.node_translational_mass_dict.keys():
-        trans_mass = structure.node_translational_mass_dict[node_name]  # kN
+        trans_mass = structure.node_translational_mass_dict[node_name]  # kN / mm/s^2
         Rx, Ry, Rz = structure.node_inertia_dict[node_name]             # kN / (mm/s2) * mm2
         mass_string += '#NodeMass  Mass  ' + node_name + ' ' + f"{trans_mass:.5f}" + ' ' + f"{trans_mass:.5f}" + ' ' + f"{trans_mass:.5f}" + ' ' + str(int(Rx)) + ' ' + str(int(Ry)) + ' ' + str(int(Rz)) + '\n'
     
@@ -147,7 +148,7 @@ def _generate_analysis_ipt(structure, ipt_path: str, analysis="static", nodal_lo
     for master_name in master_node_list:
         trans_mass, Ry = 0, 0
         for slave_name in structure.slave_node_dict[master_name]:
-            trans_mass += structure.node_translational_mass_dict[slave_name]  # kN
+            trans_mass += structure.node_translational_mass_dict[slave_name]  # kN / mm/s^2
             Ry += structure.node_inertia_dict[slave_name][1]                  # kN / (mm/s2) * mm2
         mass_string += 'Mass  ' + master_name + ' ' + f"{trans_mass:.7f}" + ' ' + f"{0}" + ' ' + f"{trans_mass:.7f}" + ' ' + str(0) + ' ' + str(int(Ry)) + ' ' + str(0) + '\n'
 

@@ -51,7 +51,8 @@ class Record:
         """
         record = self.testing_record if testing else self.training_record
         record["geometry"].append([structure.x_span_num, structure.z_span_num, structure.story_num, structure.x_span_lens[0], structure.z_span_lens[0], structure.story_height])
-        record["initial_design"].append(structure.story_level_sections)
+        initial_design = [i for i in structure.story_level_sections]
+        record["initial_design"].append(initial_design)
         record["initial_volume"].append(structure.calculate_material_usage())
 
     def record_in_end(self, structure: Structure, env: Environment, testing: bool=False):
@@ -65,7 +66,8 @@ class Record:
         * fail_reason
         """
         record = self.testing_record if testing else self.training_record
-        record["final_design"].append(structure.story_level_sections)
+        final_design = [i for i in structure.story_level_sections]
+        record["final_design"].append(final_design)
         record["final_volume"].append(structure.calculate_material_usage())
 
         record["action"].append(env.update_actions_record)

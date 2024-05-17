@@ -93,9 +93,12 @@ class NodalLoad:
         self.E_y *= (1.4 * Fu)
 
     def calculate_nodal_load(self, structure) -> Tuple[np.array, np.array, np.array]:
-        # (1)D, (2)L, (3)Ex and Ez, (4)Ey
-        # vertical load: (1), (2), (4)
-        # horizontal load: (3)
+        """
+        * vertical load: self-weight, D, L, Ey
+        * horizontal load: Ex or Ez
+        
+        return: nodal_vertical_load, nodal_horizontal_x_load, nodal_horizontal_z_load
+        """
         nodal_vertical_load = self._distribute_vertical_load(structure)
         nodal_horizontal_x_load, nodal_horizontal_z_load = self._distribute_horizontal_load(structure)
         return nodal_vertical_load, nodal_horizontal_x_load, nodal_horizontal_z_load  # kN

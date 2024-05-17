@@ -84,8 +84,8 @@ def strong_column_weak_beam_driven_action(structure: Structure, fail_conditions:
         story_beam_update_conditions[story-1, 1] = 1
     #print(f"{story_beam_update_conditions = }")
 
-    xdir_beam_update_action = sorted(list(np.where(story_beam_update_conditions[:, 0] == 1)[0]), reverse=True)
-    zdir_beam_update_action = sorted(list(np.where(story_beam_update_conditions[:, 1] == 1)[0] + structure.story_num), reverse=True)
+    xdir_beam_update_action = sorted(np.where(story_beam_update_conditions[:, 0] == 1)[0].tolist(), reverse=True)
+    zdir_beam_update_action = sorted((np.where(story_beam_update_conditions[:, 1] == 1)[0] + structure.story_num).tolist(), reverse=True)
 
     return xdir_beam_update_action, zdir_beam_update_action
 
