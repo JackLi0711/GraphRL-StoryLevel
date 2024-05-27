@@ -172,18 +172,18 @@ def get_strong_column_weak_beam_ratio(structure: Structure, response: pisa.Respo
     Get minimum strong-column-weak-beam ratio given a specific structure and response.
     - [鋼構規範(LRFD) 13.6.5 梁柱彎矩強度比](https://www.nlma.gov.tw/filesys/file/chinese/publication/law/law/0990807042-2.pdf)
     """
-    Zc = structure.node_neighbor_Zz_matrix
+    Zz = structure.node_neighbor_Zz_matrix
+
     Puc = response.node_neighbor_Puc_matrix
     Puc[Puc > 0] = 0       # only consider compression case
     Ag = structure.node_neighbor_Ag_matrix
     Ag[Ag < 1e-5] = 1e+10  # in case area = 0 for faces not connected with members
-    
     #reduced_stress = np.minimum(Puc/Ag, 0.3*YIELDING_STRESS)  # 0.3我自己訂的，最少保留0.7 yielding stress，這個要再找資料怎麼訂
     reduced_stress = torch.abs(Puc / Ag)
 
-    ZcFyc =  (Zc * (YIELDING_STRESS - reduced_stress)) @ np.array([0, 0, 1, 1, 0, 0])               # [node_number, 1]
-    ZbFyb_x = (YIELDING_STRESS * structure.node_neighbor_Zz_matrix) @ np.array([1, 1, 0, 0, 0, 0])  # [node_number, 1]
-    ZbFyb_z = (YIELDING_STRESS * structure.node_neighbor_Zz_matrix) @ np.array([0, 0, 0, 0, 1, 1])  # [node_number, 1]
+    ZcFyc =  (Zz * (YIELDING_STRESS - reduced_stress)) @ np.array([0, 0, 1, 1, 0, 0])  # [node_number, 1]
+    ZbFyb_x = (YIELDING_STRESS * Zz) @ np.array([1, 1, 0, 0, 0, 0])                    # [node_number, 1]
+    ZbFyb_z = (YIELDING_STRESS * Zz) @ np.array([0, 0, 0, 0, 1, 1])                    # [node_number, 1]
 
     """    
     A = torch.abs(Puc[:, 2:4])
@@ -229,12 +229,16 @@ def get_story_drift_ratio(structure: Structure, response: pisa.Response) -> np.f
     Get maximum story-drift ratio given a specific structure and response.
     - [耐震規範 2.16.1 容許層間相對側向位移角](https://www.nlma.gov.tw/filesys/file/EMMA/c1130301-2.pdf)
     """
-    node_disp = np.array(list(response.node_response["disp"].values()))
-    bottom_node_disp = node_disp[structure.bottom_node_index_list]
-    member_length = structure.bottom_member_length_array  # mm
-    drift_ratio = np.abs((node_disp - bottom_node_disp) / member_length)
+    node_disp_x = np.array(list(response.node_response["dispX"].values()))
+    node_disp_z = np.array(list(response.node_response["dispZ"].values()))
+    bottom_node_disp_x = node_disp_x[structure.bottom_node_index_list]
+    bottom_node_disp_z = node_disp_z[structure.bottom_node_index_list]
 
-    return np.max(drift_ratio)
+    member_length = structure.bottom_member_length_array  # mm
+    drift_ratio_x = np.abs((node_disp_x - bottom_node_disp_x) / member_length)
+    drift_ratio_z = np.abs((node_disp_z - bottom_node_disp_z) / member_length)
+
+    return np.max(np.maximum(drift_ratio_x, drift_ratio_z))
 
 
 def get_ratio_column_compression_strength(structure: Structure, response: pisa.Response) -> np.float64:

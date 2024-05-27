@@ -28,7 +28,8 @@ class Response:
         self.node_number = structure.node_number
         self.member_number = structure.member_number
         self.node_response = dict()
-        self.node_response["disp"] = dict()
+        self.node_response["dispX"] = dict()
+        self.node_response["dispZ"] = dict()
         self.member_response = dict()
         self.member_response["shearY"] = dict()
         self.member_response["shearZ"] = dict()
@@ -53,8 +54,11 @@ class Response:
                 contents = line.split()
                 node_name = contents[0]
                 UX, UZ = float(contents[DISP_UX_INDEX]), float(contents[DISP_UZ_INDEX])
-                self.node_response["disp"][node_name] = UX if abs(UX) > abs(UZ) else UZ
-        assert len(self.node_response["disp"].keys()) == self.node_number
+                #self.node_response["disp"][node_name] = UX if abs(UX) > abs(UZ) else UZ
+                self.node_response["dispX"][node_name] = UX
+                self.node_response["dispZ"][node_name] = UZ
+        assert len(self.node_response["dispX"].keys()) == self.node_number
+        assert len(self.node_response["dispZ"].keys()) == self.node_number
 
     def _load_elem(self, elem_file):
         for line in elem_file:
