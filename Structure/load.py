@@ -84,7 +84,10 @@ class NodalLoad:
         return info
 
     def update_E(self, Fu):
-        # 鋼構規範(LRFD) 13.4.1
+        """
+        鋼構規範(LRFD) 13.3 設計放大地震力
+        https://www.nlma.gov.tw/filesys/file/chinese/publication/law/law/0990807042-2.pdf
+        """
         Fu = min(Fu, 2.5)
         self.E_x_n *= (1.4 * Fu)
         self.E_x_p *= (1.4 * Fu)

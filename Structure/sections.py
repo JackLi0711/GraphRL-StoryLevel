@@ -35,6 +35,7 @@ Dx x Dy x t
 (14) 600x600x45
 (15) 600x600x50
 '''
+from math import e, pi, sqrt
 from Structure.sections_more import *
 
 
@@ -709,25 +710,34 @@ column_sections = COLUMN_SECTION_DATASET[0:15]  # original - 0:9
 
 
 
-from typing import Tuple
-
 def _Fcr(I, A, L) -> float:
-        Fy = YIELDING_STRESS    # kN/mm2
-        Fy_MPa = Fy * 1e+3      # MPa (1e+3 kN/m2)
-        Fy_cm = Fy * 1e+2       # kN/cm2
-        e = 2.71828
-        K = 1.2
-        PI = 3.1415
-        E = 200 * 1e+3   # 200 GPa = 200 * 1e+3 MPa
-        r = (I / A) ** 0.5  # cm
-        lambda_c = K * L / (PI * r) * ((Fy_MPa / E) ** 0.5) # constant
-        Fcr = e ** (-0.419 * lambda_c * lambda_c) * Fy_cm    # kN/cm2
-        Fcr /= 1e+2     # kN/mm2
-        return Fcr  # kN/mm2
+     """
+     計算桿件之設計受壓強度
+      - [鋼構規範(LRFD) 6.2 設計受壓強度](https://www.nlma.gov.tw/filesys/file/chinese/publication/law/law/3495-6.pdf)
+     """
+     Fy = YIELDING_STRESS  # kN/mm2
+     Fy_MPa = Fy * 1e+3    # MPa (1e+3 kN/m2)
+     Fy_cm = Fy * 1e+2     # kN/cm2
+     K = 1.2
+     E = 200 * 1e+3  # 200 GPa = 200 * 1e+3 MPa
+     r = (I / A) ** 0.5  # cm
+     lambda_c = K * L / (pi * r) * ((Fy_MPa / E) ** 0.5)  # constant
+     if lambda_c <= 1.5:
+          Fcr = e ** (-0.419 * (lambda_c ** 2)) * Fy_cm  # kN/cm2
+     else:
+          Fcr = (0.877 / (lambda_c ** 2)) * Fy_cm  # kN/cm2
+          
+     Fcr /= 1e+2  # kN/mm2
+
+     return Fcr
 
 
 Cb = 2.0
-def _Mn(beam_section_index, Lb) -> Tuple[float, float]:
+def _Mn(beam_section_index, Lb) -> tuple[float, float]:
+    """
+    計算梁之設計撓曲強度
+     - [鋼構規範(LRFD) 7.2.2 受強軸彎曲之結實斷面構材](https://www.nlma.gov.tw/filesys/file/chinese/publication/law/law/3495-7.pdf)
+    """
     section = beam_sections[beam_section_index]
     Lp = section["Lp(m)"]
     Lr = section["Lr(m)"]
@@ -772,14 +782,12 @@ def _Mn(beam_section_index, Lb) -> Tuple[float, float]:
 
 
 
-from math import sqrt, pi
-
 # 1 kN/mm2 = 10.197 tf/cm2
 KN_MM2_TO_TF_CM2 = 10.197
 TF_CM2_TO_KN_MM2 = 1 / 10.197
 GPA_TO_TF_CM2 = 10.197
 
-# E = 200GPa, G = 79.3GPa
+# E = 200 GPa, G = 79.3 GPa
 E = 200 * GPA_TO_TF_CM2
 G = 79.3 * GPA_TO_TF_CM2
 
@@ -788,7 +796,7 @@ for section in beam_sections:
      # Lp = 80ry / sqrt(Fyf)
      ry = sqrt(section["I_y(cm4)"] / section["A(cm2)"])
      Fyf = YIELDING_STRESS * KN_MM2_TO_TF_CM2
-     Lp = 80 * ry / sqrt(Fyf) # cm
+     Lp = 80 * ry / sqrt(Fyf)  # cm
      section["Lp(m)"] = Lp / 100
 
      # Lr = (ry*X1/FL) * sqrt(1 + sqrt(1 + X2 * FL**2))
