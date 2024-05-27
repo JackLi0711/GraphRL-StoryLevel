@@ -10,21 +10,14 @@ from RL.environment import Environment
 def plot_reward(rec: Record, checkpoint_dir: Path) -> None:
     """Plot train scores during every episode and test score every few episode."""
     train_scores = rec.training_record["score"]
-    train_scores_SCWB = rec.training_record["score_SCWB"]
     test_scores = rec.testing_record["score"]
-    test_scores_SCWB = rec.testing_record["score_SCWB"]
-
-    train_scores_total = np.array(train_scores) + np.array(train_scores_SCWB)
-    test_scores_total = np.array(test_scores) + np.array(test_scores_SCWB)
 
     train_episodes = np.arange(1, len(train_scores)+1)
     episode_per_test = len(train_scores) / len(test_scores)
     test_episodes = np.arange(episode_per_test, len(train_scores)+1, episode_per_test)
     plt.figure(figsize=(12, 6))
-    plt.plot(train_episodes, train_scores_total, label="training (total)", color='black', linestyle='-', linewidth=1)
-    plt.plot(train_episodes, train_scores, label="training (original)", color='grey', linestyle='--', linewidth=1)
-    plt.plot(test_episodes, test_scores_total, label="testing (total)", color='red', linestyle='-', linewidth=1)
-    plt.plot(test_episodes, test_scores, label="testing (original)", color='orangered', linestyle='--', linewidth=1)
+    plt.plot(train_episodes, train_scores, label="training", color='black', linestyle='-', linewidth=1)
+    plt.plot(test_episodes, test_scores, label="testing", color='red', linestyle='-', linewidth=1)
     plt.legend(fontsize=14)
     plt.grid()
     plt.xlabel("trained episodes", fontsize=16)
@@ -118,9 +111,8 @@ def plot_fail_reasons(train_fail_reasons: List[str], test_fail_reasons: List[str
 
 
 def plot_test_behaviors(rec: Record, env: Environment, checkpoint_dir: Path) -> None:
-    test_scores, test_scores_SCWB = rec.testing_record["score"], rec.testing_record["score_SCWB"]
+    test_scores = rec.testing_record["score"]
     test_actions, test_actions_SCWB = rec.testing_record["action"], rec.testing_record["action_SCWB"]
-    test_scores_total = np.array(test_scores) + np.array(test_scores_SCWB)
     story_num = env._testing_structure.story_num
 
     action_types = []
@@ -150,8 +142,7 @@ def plot_test_behaviors(rec: Record, env: Environment, checkpoint_dir: Path) -> 
     ax1.tick_params(labelsize=14)
 
     ax2 = ax1.twinx()
-    ax2.plot(test_episodes, test_scores_total, color='black', linestyle='-', linewidth=2, label='test score (total)', zorder=2)
-    ax2.plot(test_episodes, test_scores, color='grey', linewidth=2, linestyle='-', label='test score (original)', zorder=2)
+    ax2.plot(test_episodes, test_scores, color='black', linestyle='-', linewidth=1, label='test score (total)', zorder=2)
     ax2.set_ylabel('Test score', fontsize=16)
     ax2.tick_params(labelsize=14)
     ax2.grid(zorder=0)

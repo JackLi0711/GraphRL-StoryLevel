@@ -34,7 +34,7 @@ def parse_args() -> Namespace:
 	#parser.add_argument("--ckpt_dir", type=Path, default="./Results/AccelerationReward/")
 
 	# suffix
-	parser.add_argument("--suffix", type=str, default="NewStrategy_RestrictAction_StraightDecay0.1_BufferSize20000_BatchSize256_Epoch300")  # material
+	parser.add_argument("--suffix", type=str, default="NewReward_RMSprop_RandomShape_FixedEpsilon0.1_BufferSize10000_BatchSize256_Test")  # material
 	#parser.add_argument("--suffix", type=str, default="doNDA_NormalizedReward_RestrictAction_NoColStrength_Epoch300")  # acceleration
 
 	# nonlinear dynamic analysis simulator
@@ -48,16 +48,16 @@ def parse_args() -> Namespace:
 	# structure
 	parser.add_argument("--structure_shape", type=str, default="random", help="fixed, small_random, random")
 	parser.add_argument("--add_structure_geometry", action="store_true", default=True)
-	parser.add_argument("--reward_type", type=str, default="material", help="material, acceleration, displacement, normalized, total")
+	parser.add_argument("--reward_type", type=str, default="combined", help="material, acceleration, displacement, normalized, total, combined")
 	parser.add_argument("--restrict_action", action="store_true", default=False)
-	parser.add_argument("--scwb_driven_design", action="store_true", default=True)
+	parser.add_argument("--scwb_driven_design", action="store_true", default=False)
 
 	# model
 	parser.add_argument("--hidden_dim", type=int, default=100)
 	parser.add_argument("--num_layers", type=int, default=3)
 
 	# buffer
-	parser.add_argument("--buffer_size", type=int, default=20000)
+	parser.add_argument("--buffer_size", type=int, default=10000)
 	parser.add_argument("--update_frequency", type=int, default=1)
 	parser.add_argument("--add_experience_frequency", type=int, default=1)
 
@@ -67,9 +67,9 @@ def parse_args() -> Namespace:
 	parser.add_argument("--synchronize_steps", type=int, default=50)
 	parser.add_argument("--soft_update_alpha", type=float, default=None)
 	parser.add_argument("--test_frequency", type=int, default=5)
-	parser.add_argument("--batch_size", type=int, default=512)  # original: 256
+	parser.add_argument("--batch_size", type=int, default=256)  # original: 256
 	parser.add_argument("--lr", type=float, default=1e-5)
-	parser.add_argument("--num_epoch", type=int, default=300, help="epoch == episode")
+	parser.add_argument("--num_epoch", type=int, default=10, help="epoch == episode")
 	parser.add_argument("--random_seed", type=int, default=731, help="fixed random seed")
 
 	args = parser.parse_args()
@@ -223,16 +223,8 @@ def main(args):
 
 	train(**_train_kwargs)
 
-	# logger.critical(f"Testing Scores: {score_info['test_score']}\n\n\n")
-	# logger.critical(f"Testing Scores(SCWB): {score_info['test_score_SCWB']}\n\n\n")
-	# logger.critical(f"Testing Final Design: {test_info['test_final_design']}\n\n\n")
-	# logger.critical(f"Testing Final Material Usage: {test_info['test_final_material_usage']}\n\n\n")
-
-	best_episode = np.argmin(rec.testing_record["final_volume"])
-	best_performance = rec.testing_record["final_volume"][best_episode]
-	best_design = rec.testing_record["final_design"][best_episode]
-	logger.critical(f"Minimum Material Usage: {best_performance:.3f} m3")
-	logger.critical(f"Best Story Level Sections: {best_design}")
+	logger.critical(f"Minimum Material Usage: {np.min(rec.testing_record['final_volume']):.3f} m3, Story Level Sections: {rec.testing_record['final_design'][np.argmin(rec.testing_record['final_volume'])]}")
+	logger.critical(f"Highest Score: {np.max(rec.testing_record['score']):.3f}, Story Level Sections: {rec.testing_record['final_design'][np.argmax(rec.testing_record['score'])]}")
 
 	plot.plot_reward(rec, args.ckpt_dir)
 	plot.plot_loss(rec.learn_losses, args.ckpt_dir)
@@ -246,11 +238,7 @@ def main(args):
 	#visualize.visualize_design_process(double_dqn_agent, env, logger, args.ckpt_dir, taller_structure=True)
 	#visualize.visualize_edge_embedding(double_dqn_agent, env, logger, args.ckpt_dir)
 
-	# output record
-	# with open(args.ckpt_dir / "score_info.txt", "w") as f: json.dump(score_info, f)
-	# with open(args.ckpt_dir / "fail_info.txt", "w") as f: json.dump(fail_info, f)
-	# with open(args.ckpt_dir / "test_info.txt", "w") as f: json.dump(test_info, f)
-	# with open(args.ckpt_dir / "other_info.txt", "w") as f: json.dump(other_info, f)
+
 
 
 if __name__ == "__main__":

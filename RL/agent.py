@@ -328,7 +328,7 @@ class DeepQAgent(Agent):
 def _train_an_episode(agent: DeepQAgent, 
                       env: Environment, 
                       rec: Record,
-                      logger: logging.Logger) -> tuple[float, float]:
+                      logger: logging.Logger) -> float:
     """Train the agent until the agent meets the terminal state."""
     structure = env.reset()  # generate a new random graph
     rec.record_in_beginning(structure, testing=False)
@@ -354,11 +354,11 @@ def _train_an_episode(agent: DeepQAgent,
         score += reward
         logger.info(f"episode: {agent._number_episodes+1:4d}, timestep: {agent._number_timesteps+1:3d}, action: {action:3d}, reward: {reward:4f},  acculmulate_score: {score:.4f} [ORIGINAL]")
         
-        actions_SCWB = '_'.join([str(a) for a in env.update_actions_record_SCWB[-1]])
-        reward_SCWB = env.saved_material_record_SCWB[-1]
-        score_SCWB = sum(env.saved_material_record_SCWB)
         if env.saved_material_record_SCWB[-1] != 0:
-            logger.info(f"episode: {agent._number_episodes+1:4d}, timestep: {agent._number_timesteps+1:3d}, action: {actions_SCWB}, reward: {reward_SCWB:4f},  acculmulate_score: {score_SCWB:.4f} [SCWB]")
+            actions_SCWB = '_'.join([str(a) for a in env.update_actions_record_SCWB[-1]])
+            saved_material_SCWB = env.saved_material_record_SCWB[-1]
+            cumulative_saved_material_SCWB = sum(env.saved_material_record_SCWB)
+            logger.info(f"episode: {agent._number_episodes+1:4d}, timestep: {agent._number_timesteps+1:3d}, action: {actions_SCWB}, reward_volume: {saved_material_SCWB:4f},  acculmulate_score_volume: {cumulative_saved_material_SCWB:.4f} [SCWB]")
         
         if q == 0 and q_val > 0: q = q_val
 
@@ -377,15 +377,14 @@ def _train_an_episode(agent: DeepQAgent,
     
     rec.record_in_end(final_structure, env, testing=False)
 
-    score = sum(env.saved_material_record)
-    score_SCWB = sum(env.saved_material_record_SCWB)
-    return score, score_SCWB
+    score = sum(env.reward_record)
+    return score
 
 
 def _testing(agent: DeepQAgent, 
              env: Environment, 
              rec: Record,
-             logger: logging.Logger) -> tuple[float, float]:
+             logger: logging.Logger) -> float:
     """Test agent's performance with prescribed condition and greedy policy."""
     structure = env.reset(testing=True)  # generate a fix-shaped structure
     rec.record_in_beginning(structure, testing=True)
@@ -418,11 +417,11 @@ def _testing(agent: DeepQAgent,
         actions.append(action)
         logger.info(f"*****Testing Episode, timestep: {timestep:3d}, action: {action:3d}, reward: {reward:4f},  acculmulate_score: {score:.4f} [ORIGINAL]")
 
-        reward_SCWB = env.saved_material_record_SCWB[-1]
-        score_SCWB = sum(env.saved_material_record_SCWB)
-        actions_SCWB = '_'.join([str(a) for a in env.update_actions_record_SCWB[-1]])
         if env.saved_material_record_SCWB[-1] != 0:
-            logger.info(f"*****Testing Episode, timestep: {timestep:3d}, action: {actions_SCWB}, reward: {reward_SCWB:4f},  acculmulate_score: {score_SCWB:.4f} [SCWB]")
+            actions_SCWB = '_'.join([str(a) for a in env.update_actions_record_SCWB[-1]])
+            saved_material_SCWB = env.saved_material_record_SCWB[-1]
+            cumulative_saved_material_SCWB = sum(env.saved_material_record_SCWB)
+            logger.info(f"*****Testing Episode, timestep: {timestep:3d}, action: {actions_SCWB}, reward_volume: {saved_material_SCWB:4f},  acculmulate_score_volume: {cumulative_saved_material_SCWB:.4f} [SCWB]")
     
     final_structure = structure if fail_reason == "minimum_section" else original_structure
     test_final_story_level_sections = final_structure.story_level_sections
@@ -432,11 +431,8 @@ def _testing(agent: DeepQAgent,
 
     rec.record_in_end(final_structure, env, testing=True)
     
-    score = sum(env.saved_material_record)
-    score_SCWB = sum(env.saved_material_record_SCWB)
-    # actions = actions[:-1]
-    # actions_SCWB = ['_'.join(list(map(str, actions))) if len(actions) > 0 else '_' for actions in env.update_actions_record_SCWB]
-    return score, score_SCWB
+    score = sum(env.reward_record)
+    return score
 
 
 def _inference(agent: DeepQAgent, 
@@ -536,25 +532,19 @@ def train(agent: DeepQAgent,
     """Reinforcement learning training loop."""
 
     for i in range(number_episodes):
-        score, score_SCWB = _train_an_episode(agent, env, rec, logger)
-        # train_scores.append(score)
-        # train_scores_SCWB.append(score_SCWB)
-        logger.critical(f"Episode: {i+1}, score: {score:.3f}, score_SCWB: {score_SCWB:.3f}")
+        score = _train_an_episode(agent, env, rec, logger)
+        logger.critical(f"Episode: {i+1}, score: {score:.3f}")
+        logger.critical(f"Episode: {i+1}, saved_material: {sum(env.saved_material_record):.3f}, saved_material_SCWB: {sum(env.saved_material_record_SCWB):.3f}")
         logger.critical(f"Episode: {i+1}, total_reduction_amount: {env.material_usage_record[0] - env.material_usage_record[-1]:.3f}\n\n\n")
 
         if (i+1) % agent._test_frequency == 0:
-            test_score, test_score_SCWB = _testing(agent, env, rec, logger)
-            # test_scores.append(test_score)
-            # test_scores_SCWB.append(test_score_SCWB)
-            # test_actions.append(test_action)
-            # test_actions_SCWB.append(test_action_SCWB)
-            # test_final_designs.append(test_final_design)
-            logger.critical(f"Testing, score: {test_score:.3f}, score_SCWB: {test_score_SCWB:.3f}")
+            test_score = _testing(agent, env, rec, logger)
+            logger.critical(f"Testing, score: {test_score:.3f}")
+            logger.critical(f"Testing, saved_material: {sum(env.saved_material_record):.3f}, saved_material_SCWB: {sum(env.saved_material_record_SCWB):.3f}")
             logger.critical(f"Testing, total_reduction_amount: {env.material_usage_record[0] - env.material_usage_record[-1]:.3f}\n\n\n")
             
             rec.output(env.checkpoint_dir)
 
-            # test_final_material_usages.append(test_final_material_usage)
             if np.argmin(rec.testing_record["final_volume"]) == len(rec.testing_record["final_volume"])-1: 
                 _save_model(agent, env, name="MinimumUsage", logger=logger)
             if np.argmax(rec.testing_record["score"]) == len(rec.testing_record["score"])-1: 
