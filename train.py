@@ -16,9 +16,7 @@ sys.path.append("Visualization")
 sys.path.append("NonlinearDynamicAnalysisSimulator/")
 
 from RL import agent, environment, record
-from RL.agent import train
-from Visualization import plot
-from Visualization import visualize
+from Visualization import plot, visualize
 from NonlinearDynamicAnalysisSimulator import load_simulator
 
 
@@ -34,7 +32,7 @@ def parse_args() -> Namespace:
 	#parser.add_argument("--ckpt_dir", type=Path, default="./Results/AccelerationReward/")
 
 	# suffix
-	parser.add_argument("--suffix", type=str, default="NewReward_RMSprop_RandomShape_FixedEpsilon0.1_BufferSize10000_BatchSize256_Test")  # material
+	parser.add_argument("--suffix", type=str, default="FixedShape_ResponseFeatures_RMSprop_EpsilonDecay099_BufferSize3000_BatchSize256_Epoch300")  # material
 	#parser.add_argument("--suffix", type=str, default="doNDA_NormalizedReward_RestrictAction_NoColStrength_Epoch300")  # acceleration
 
 	# nonlinear dynamic analysis simulator
@@ -46,9 +44,10 @@ def parse_args() -> Namespace:
 	parser.add_argument("--ground_motion_number", type=int, default=11, help="ASCE says 11 is better")
 
 	# structure
-	parser.add_argument("--structure_shape", type=str, default="random", help="fixed, small_random, random")
+	parser.add_argument("--structure_shape", type=str, default="fixed", help="fixed, small_random, random")
 	parser.add_argument("--add_structure_geometry", action="store_true", default=True)
-	parser.add_argument("--reward_type", type=str, default="combined", help="material, acceleration, displacement, normalized, total, combined")
+	parser.add_argument("--add_response_features", action="store_true", default=True)
+	parser.add_argument("--reward_type", type=str, default="material", help="material, acceleration, displacement, normalized, total, combined")
 	parser.add_argument("--restrict_action", action="store_true", default=False)
 	parser.add_argument("--scwb_driven_design", action="store_true", default=False)
 
@@ -57,7 +56,7 @@ def parse_args() -> Namespace:
 	parser.add_argument("--num_layers", type=int, default=3)
 
 	# buffer
-	parser.add_argument("--buffer_size", type=int, default=10000)
+	parser.add_argument("--buffer_size", type=int, default=3000)
 	parser.add_argument("--update_frequency", type=int, default=1)
 	parser.add_argument("--add_experience_frequency", type=int, default=1)
 
@@ -69,7 +68,7 @@ def parse_args() -> Namespace:
 	parser.add_argument("--test_frequency", type=int, default=5)
 	parser.add_argument("--batch_size", type=int, default=256)  # original: 256
 	parser.add_argument("--lr", type=float, default=1e-5)
-	parser.add_argument("--num_epoch", type=int, default=10, help="epoch == episode")
+	parser.add_argument("--num_epoch", type=int, default=300, help="epoch == episode")
 	parser.add_argument("--random_seed", type=int, default=731, help="fixed random seed")
 
 	args = parser.parse_args()
@@ -165,7 +164,7 @@ def main(args):
 
 	# Agent
 	node_feature_dim = 8 if args.add_structure_geometry else 5
-	edge_feature_dim = 11
+	edge_feature_dim = 13 if args.add_response_features else 11
 	_agent_kwargs = {
 		"node_feature_dim": node_feature_dim,
 		"edge_feature_dim": edge_feature_dim,
@@ -174,7 +173,7 @@ def main(args):
 		"batch_size": args.batch_size,
 		"lr": args.lr,
 		"buffer_size": args.buffer_size,
-		"epsilon_decay_schedule": fixed_epsilon_schedule,
+		"epsilon_decay_schedule": epsilon_decay_schedule,
 		"synchronize_steps": args.synchronize_steps,
 		"soft_update_alpha": args.soft_update_alpha,
 		"gamma": args.gamma,
@@ -185,7 +184,7 @@ def main(args):
 		"seed": args.random_seed,
 		"logger": logger,
 		"pretrained_ckpt_dir": args.pretrained_ckpt_dir,
-		"device":device,
+		"device": device,
 	}
 	double_dqn_agent = agent.DeepQAgent(**_agent_kwargs)
 
@@ -193,6 +192,7 @@ def main(args):
 	_env_kwargs = {
 		"structure_shape": args.structure_shape,
 		"add_structure_geometry": args.add_structure_geometry,
+		"add_response_features": args.add_response_features,
 		"reward_type": args.reward_type,
 		"scwb_driven_design": args.scwb_driven_design,
 		"do_nonlinear_dynamic_analysis": args.do_nonlinear_dynamic_analysis,
@@ -221,7 +221,7 @@ def main(args):
 	}
 
 
-	train(**_train_kwargs)
+	agent.train(**_train_kwargs)
 
 	logger.critical(f"Minimum Material Usage: {np.min(rec.testing_record['final_volume']):.3f} m3, Story Level Sections: {rec.testing_record['final_design'][np.argmin(rec.testing_record['final_volume'])]}")
 	logger.critical(f"Highest Score: {np.max(rec.testing_record['score']):.3f}, Story Level Sections: {rec.testing_record['final_design'][np.argmax(rec.testing_record['score'])]}")
@@ -244,5 +244,4 @@ def main(args):
 if __name__ == "__main__":
 	args = parse_args()
 	main(args)
-
 

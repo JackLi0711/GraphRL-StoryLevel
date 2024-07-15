@@ -15,7 +15,7 @@ m = 1e+3 * mm
 N = 1e-3 * kN
 Pa = N / m**2
 
-E = 200 * 1e+9 * Pa  # Young's modulud, GPa
+E = 200 * 1e+9 * Pa  # Young's modulus, GPa
 Nu = 0.3  # Poisson's ratio
 G = E / (2 * (1 + Nu))  # Shear modulus, GPa
 
@@ -88,8 +88,8 @@ def run_static_analysis(structure: Structure, load_case: NodalLoad, analysis_dir
         member_sections = column_sections if structure.member_category_dict[member_name] == 'y' else beam_sections
         sections_index = structure.member_section_dict[member_name]
         section = member_sections[sections_index]
-        #J = section["J(cm4)"] * 1e+4  # torsional constant, mm^4
-        Jxx = (section["I_y(cm4)"] + section["I_z(cm4)"]) * 1e+4  # torsional moment of inertia, mm^4
+        J = section["J(cm4)"] * 1e+4  # torsional constant, mm^4
+        #J = (section["I_y(cm4)"] + section["I_z(cm4)"]) * 1e+4  # torsional moment of inertia, mm^4
         Iy = section["I_y(cm4)"] * 1e+4  # moment of inertia, mm^4
         Iz = section["I_z(cm4)"] * 1e+4  # moment of inertia, mm^4
 
@@ -100,7 +100,7 @@ def run_static_analysis(structure: Structure, load_case: NodalLoad, analysis_dir
         else:
             transfTag = ColumnTransfTag
             
-        ops.element('elasticBeamColumn', eleTag, nodeTag_1, nodeTag_2, Area, E, G, Jxx, Iy, Iz, transfTag)
+        ops.element('elasticBeamColumn', eleTag, nodeTag_1, nodeTag_2, Area, E, G, J, Iy, Iz, transfTag)
 
     # master node
     for story, y in enumerate(structure.y_grid):
@@ -114,7 +114,8 @@ def run_static_analysis(structure: Structure, load_case: NodalLoad, analysis_dir
             moment_inertia = 0
             for slave_name in structure.slave_node_dict[master_name]:
                 translational_mass += structure.node_translational_mass_dict[slave_name]  # kN / (mm/s^2)
-                moment_inertia += structure.node_inertia_dict[slave_name]  # kN / (mm/s^2) * mm^2
+                Rx, Ry, Rz = structure.node_inertia_dict[slave_name]  # kN / (mm/s^2) * mm^2
+                moment_inertia += Ry
             mass = [translational_mass, translational_mass, 0] + [0, 0, moment_inertia]
             ops.node(nodeTag, *crds, '-mass',*mass)
             ops.fix(nodeTag, *[0,0,1,1,1,0])
@@ -170,7 +171,9 @@ def run_static_analysis(structure: Structure, load_case: NodalLoad, analysis_dir
     force = np.array([ops.basicForce(i+1) for i in range(structure.member_number)])  # 0: axial force, 1: moment at i end, 2: moment at j end
     
     # 6.31.1 nodeRecorder command (https://openseespydoc.readthedocs.io/en/latest/src/nodeRecorder.html)
-    file_name = analysis_dir / f"{load_case.name}.txt"
-    ops.recorder('Node', '-file',file_name, '-time', '-node',*[i+1 for i in range(structure.node_number)] ,'-dof',1,2,3, 'disp')
+    file_name = str(analysis_dir / f"{load_case.name}.txt")
+    nodeTags = [i+1 for i in range(structure.node_number)]
+    dofs = [1,2,3]
+    ops.recorder('Node', '-file',file_name, '-time', '-node',*nodeTags ,'-dof',*dofs , 'disp')
     
     return disp, force

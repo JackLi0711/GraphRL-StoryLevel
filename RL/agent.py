@@ -200,7 +200,7 @@ class DeepQAgent(Agent):
         return action, q_val
     
     
-    def _learn(self, experiences: np.array) -> None:
+    def _learn(self, experiences: np.ndarray) -> None:
         """Update the agent's Q network based on a collection of prioritized experiences."""
         graphs, actions, rewards, next_graphs, dones, auxs = [vs for vs in zip(*experiences)]
 
@@ -346,8 +346,7 @@ def _train_an_episode(agent: DeepQAgent,
         action, q_val = agent.choose_action(state, 
                                             structure.already_minimum_section_story_indexes,
                                             dont_select_story_member_indexes)
-        print(f"\n-----episode: {agent._number_episodes+1:4d}, timestep: {agent._number_timesteps+1:3d}, story_level_sections: {structure.story_level_sections}")
-        print(f"-----episode: {agent._number_episodes+1:4d}, timestep: {agent._number_timesteps+1:3d}, action: {action:3d}")
+        print(f"\n-----episode: {agent._number_episodes+1:4d}, timestep: {agent._number_timesteps+1:3d}, story_level_sections: {structure.story_level_sections}, action: {action:3d}")
         structure, reward, done, fail_name, fail_reason = env.step(structure, action)
 
         # record
@@ -391,7 +390,6 @@ def _testing(agent: DeepQAgent,
     graph = structure.graph.clone()
     score = 0
     timestep = 0
-    actions = []
     done = False
     while not done:
         original_structure = deepcopy(structure)
@@ -405,7 +403,7 @@ def _testing(agent: DeepQAgent,
                                         structure.already_minimum_section_story_indexes,
                                         dont_select_story_member_indexes, 
                                         greedy=True)
-        print(f"\n*****Testing Episode, story_level_sections: {structure.story_level_sections}")
+        print(f"\n*****Testing Episode, story_level_sections: {structure.story_level_sections}, action: {action:3d}")
         structure, reward, done, fail_name, fail_reason = env.step(structure, action)
 
         # get next state
@@ -414,7 +412,6 @@ def _testing(agent: DeepQAgent,
         # record
         score += reward
         timestep += 1
-        actions.append(action)
         logger.info(f"*****Testing Episode, timestep: {timestep:3d}, action: {action:3d}, reward: {reward:4f},  acculmulate_score: {score:.4f} [ORIGINAL]")
 
         if env.saved_material_record_SCWB[-1] != 0:

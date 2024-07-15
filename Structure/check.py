@@ -13,7 +13,7 @@ PHI_C = 0.85
 BEAM_AXIAL_MOMENT_LIMIT = 1.0
 SCWB_RATIO_LIMIT = 1.25
 STORY_SHEAR_RATIO_LIMIT = 0.80
-STORY_DRIFT_RAIO_LIMIT = 0.005
+STORY_DRIFT_RATIO_LIMIT = 0.005
 
 
 def get_response(structure: Structure, analysis_dir: Path) -> tuple[dict[str, float], list[load.NodalLoad], list[pisa.Response]]:
@@ -32,40 +32,67 @@ def get_response(structure: Structure, analysis_dir: Path) -> tuple[dict[str, fl
     return auxiliary_values, load_cases, responses
 
 
-def check_response(structure: Structure, 
+def process_response(structure: Structure, 
                    load_cases: list[load.NodalLoad],
-                   responses: list[pisa.Response]) -> tuple[np.ndarray, np.ndarray]:
-    '''Check structural responses whether pass constraints or not under various load cases.'''
-
+                   responses: list[pisa.Response]) -> tuple[np.ndarray, dict[str, torch.Tensor], dict[str, np.float64]]:
+    '''Process structural responses and calculate constraint conditions.'''
+    stress_ratios = np.zeros((structure.member_number, len(load_cases)))
+    drift_ratios = np.zeros((structure.member_number, len(load_cases)))
+    scwb_ratios_x = np.zeros((structure.node_number, len(load_cases)))
+    scwb_ratios_z = np.zeros((structure.node_number, len(load_cases)))
     constraint_condition = np.zeros((len(load_cases), 8))
     for i, load_case in enumerate(load_cases):
         response = responses[i]
-        constraint_condition[i, 0] = get_ratio_beam_compression_strength(structure, response)
-        constraint_condition[i, 1] = get_ratio_beam_tension_strength(structure, response)
-        constraint_condition[i, 2] = get_ratio_beam_axial_moment(structure, response)
-        constraint_condition[i, 3] = get_strong_column_weak_beam_ratio(structure, response)
+        beam_compression_ratios = get_ratio_beam_compression_strength(structure, response)
+        beam_tension_ratios = get_ratio_beam_tension_strength(structure, response)
+        column_compression_ratios = get_ratio_column_compression_strength(structure, response) #if load_case.col_strength_case else -1 * np.ones(len(structure.member_column_index_list))
+        column_tension_ratios = get_ratio_column_tension_strength(structure, response) #if load_case.col_strength_case else -1 * np.ones(len(structure.member_column_index_list))
+        stress_ratios[structure.member_beam_index_list, i] = beam_compression_ratios + beam_tension_ratios
+        stress_ratios[structure.member_column_index_list, i] = column_compression_ratios + column_tension_ratios
 
-        constraint_condition[i, 4] = get_story_shear_ratio(structure, response) if load_case.E > 0 else -1
-        constraint_condition[i, 5] = get_story_drift_ratio(structure, response) if load_case.drift_case else -1
-        constraint_condition[i, 6] = get_ratio_column_compression_strength(structure, response) if load_case.col_strength_case else -1
-        constraint_condition[i, 7] = get_ratio_column_tension_strength(structure, response) if load_case.col_strength_case else -1
+        beam_axial_moment_ratios = get_ratio_beam_axial_moment(structure, response)
+        node_scwb_ratios_x, node_scwb_ratios_z = get_strong_column_weak_beam_ratio(structure, response)
+        scwb_ratios_x[:, i] = node_scwb_ratios_x
+        scwb_ratios_z[:, i] = node_scwb_ratios_z
 
-    response_reward = np.zeros(4)
-    # normalized max stress ratio
-    response_reward[0] = np.max(constraint_condition[:, (0,1, 6,7)]) / PHI_C
-    # normalized min stress ratio (not -1)
-    response_reward[1] = np.min(constraint_condition[:, (0,1, 6,7)][constraint_condition[:, (0,1, 6,7)] > 0]) / PHI_C
-    # normalized max drift ratio
-    response_reward[2] = np.max(constraint_condition[:, 5]) / STORY_DRIFT_RAIO_LIMIT
-    # normalized min SCWB ratio
-    response_reward[3] = np.min(constraint_condition[:, 3]) / SCWB_RATIO_LIMIT
+        story_shear_ratios = get_story_shear_ratio(structure, response) #if load_case.E > 0 else -1 * np.ones(structure.story_num - 1)
+        member_drift_ratios = get_member_drift_ratio(structure, response) #if load_case.drift_case else -1 * np.ones(structure.member_number)
+        drift_ratios[:, i] = member_drift_ratios
 
-    return constraint_condition, response_reward
+        constraint_condition[i, 0] = np.max(beam_compression_ratios)
+        constraint_condition[i, 1] = np.max(beam_tension_ratios)
+        constraint_condition[i, 2] = np.max(beam_axial_moment_ratios)
+        constraint_condition[i, 3] = np.min(np.minimum(node_scwb_ratios_x, node_scwb_ratios_z)[structure.node_need_strong_column_weak_beam_list])
+
+        constraint_condition[i, 4] = np.min(story_shear_ratios)
+        constraint_condition[i, 5] = np.max(member_drift_ratios[structure.member_column_index_list])
+        constraint_condition[i, 6] = np.max(column_compression_ratios)
+        constraint_condition[i, 7] = np.max(column_tension_ratios)
+
+    response_features = {
+        # extreme values among all the load cases for each member/node
+        "max_stress_ratio": torch.tensor(np.max(stress_ratios, axis=1) / PHI_C),
+        "max_drift_ratio": torch.tensor(np.max(drift_ratios, axis=1) / STORY_DRIFT_RATIO_LIMIT),
+        "min_SCWB_ratio_x": torch.tensor(np.min(scwb_ratios_x, axis=1) / SCWB_RATIO_LIMIT), 
+        "min_SCWB_ratio_z": torch.tensor(np.min(scwb_ratios_z, axis=1) / SCWB_RATIO_LIMIT)
+    }
+
+    response_rewards = {
+        # extreme values among all the load cases and all the members/nodes
+        "max_stress_ratio": np.max(stress_ratios) / PHI_C,
+        "min_stress_ratio": np.min(np.max(stress_ratios, axis=1)) / PHI_C,
+        "max_drift_ratio": np.max(drift_ratios[structure.member_column_index_list]) / STORY_DRIFT_RATIO_LIMIT,
+        "min_SCWB_ratio": np.min(np.minimum(scwb_ratios_x, scwb_ratios_z)[structure.node_need_strong_column_weak_beam_list]) / SCWB_RATIO_LIMIT
+    }
+    print(f"response_rewards: {response_rewards}")
+
+    return constraint_condition, response_features, response_rewards
 
 
 def check_pass(load_cases: list[load.NodalLoad], 
                constraint_condition: np.ndarray, 
                check_displacement: bool=True) -> tuple[bool, str, str]:
+    '''Check structural responses whether pass constraints or not under various load cases.'''
     for i, load_case in enumerate(load_cases):
         fail_name = load_case.load_name
         if constraint_condition[i, 0] > PHI_C: 
@@ -84,8 +111,8 @@ def check_pass(load_cases: list[load.NodalLoad],
         if load_case.E > 0 and (constraint_condition[i, 4] < STORY_SHEAR_RATIO_LIMIT): 
             print(f"fail at {fail_name}, story_shear: {constraint_condition[i, 4]} < {STORY_SHEAR_RATIO_LIMIT}")
             return False, fail_name, "soft_story"
-        if load_case.drift_case and check_displacement and (constraint_condition[i, 5] > STORY_DRIFT_RAIO_LIMIT): 
-            print(f"fail at {fail_name}, story_drift: {constraint_condition[i, 5]} > {STORY_DRIFT_RAIO_LIMIT}")
+        if load_case.drift_case and check_displacement and (constraint_condition[i, 5] > STORY_DRIFT_RATIO_LIMIT): 
+            print(f"fail at {fail_name}, story_drift: {constraint_condition[i, 5]} > {STORY_DRIFT_RATIO_LIMIT}")
             return False, fail_name, "drift_ratio"
         if load_case.col_strength_case and (constraint_condition[i, 6] > PHI_C): 
             print(f"fail at {fail_name}, column_compression: {constraint_condition[i, 6]} > {PHI_C}")
@@ -104,8 +131,8 @@ def check_pass(load_cases: list[load.NodalLoad],
     return True, None, None
 
 
-def get_ratio_beam_compression_strength(structure: Structure, response: pisa.Response) -> np.float64:
-    """Get maximum beam-compression-strength ratio given a specific structure and response."""
+def get_ratio_beam_compression_strength(structure: Structure, response: pisa.Response) -> np.ndarray:
+    """Get beam-compression-strength ratio given a specific structure and response."""
     beam_axial_force = np.array(list(response.member_response["axial"].values()))[structure.member_beam_index_list]
     beam_axial_force[beam_axial_force > 0] = 0  # only consider compression case
     
@@ -113,23 +140,23 @@ def get_ratio_beam_compression_strength(structure: Structure, response: pisa.Res
     A = np.array(list(structure.member_A_dict.values()))[structure.member_beam_index_list]      # mm^2
     Puc = Fcr * A  # kN
 
-    return np.max(np.abs(beam_axial_force) / Puc)
+    return np.abs(beam_axial_force) / Puc
 
 
-def get_ratio_beam_tension_strength(structure: Structure, response: pisa.Response) -> np.float64:
-    """Get maximum beam-tension-strength ratio given a specific structure and response."""
+def get_ratio_beam_tension_strength(structure: Structure, response: pisa.Response) -> np.ndarray:
+    """Get beam-tension-strength ratio given a specific structure and response."""
     beam_axial_force = np.array(list(response.member_response["axial"].values()))[structure.member_beam_index_list]
     beam_axial_force[beam_axial_force < 0] = 0  # only consider tension case
     
     A = np.array(list(structure.member_A_dict.values()))[structure.member_beam_index_list]  # mm^2
     Put = YIELDING_STRESS * A  # kN
 
-    return np.max(np.abs(beam_axial_force) / Put)
+    return np.abs(beam_axial_force) / Put
 
 
-def get_ratio_beam_axial_moment(structure: Structure, response: pisa.Response) -> np.float64:
+def get_ratio_beam_axial_moment(structure: Structure, response: pisa.Response) -> np.ndarray:
     """
-    Get maximum beam-axial-moment ratio given a specific structure and response.
+    Get beam-axial-moment ratio given a specific structure and response.
     - [鋼構規範(LRFD) 8.2 對稱構材承受彎矩及軸力之作用](https://www.nlma.gov.tw/filesys/file/chinese/publication/law/law/3495-8.pdf)
     """
     PHI, PHI_b = 0.85, 0.90
@@ -164,23 +191,22 @@ def get_ratio_beam_axial_moment(structure: Structure, response: pisa.Response) -
     ratio_2 = ((Pu / (2 * phi_Pn)) + (Mux / phi_Mnx + Muy / phi_Mny)) * case_2
     ratio = ratio_1 + ratio_2
 
-    return np.max(ratio)
+    return ratio
 
 
-def get_strong_column_weak_beam_ratio(structure: Structure, response: pisa.Response) -> np.float64:
+def get_strong_column_weak_beam_ratio(structure: Structure, response: pisa.Response) -> tuple[np.ndarray, np.ndarray]:
     """
-    Get minimum strong-column-weak-beam ratio given a specific structure and response.
+    Get strong-column-weak-beam ratio given a specific structure and response.
     - [鋼構規範(LRFD) 13.6.5 梁柱彎矩強度比](https://www.nlma.gov.tw/filesys/file/chinese/publication/law/law/0990807042-2.pdf)
     """
-    Zz = structure.node_neighbor_Zz_matrix
-
     Puc = response.node_neighbor_Puc_matrix
     Puc[Puc > 0] = 0       # only consider compression case
     Ag = structure.node_neighbor_Ag_matrix
     Ag[Ag < 1e-5] = 1e+10  # in case area = 0 for faces not connected with members
     #reduced_stress = np.minimum(Puc/Ag, 0.3*YIELDING_STRESS)  # 0.3我自己訂的，最少保留0.7 yielding stress，這個要再找資料怎麼訂
     reduced_stress = torch.abs(Puc / Ag)
-
+    
+    Zz = structure.node_neighbor_Zz_matrix
     ZcFyc =  (Zz * (YIELDING_STRESS - reduced_stress)) @ np.array([0, 0, 1, 1, 0, 0])  # [node_number, 1]
     ZbFyb_x = (YIELDING_STRESS * Zz) @ np.array([1, 1, 0, 0, 0, 0])                    # [node_number, 1]
     ZbFyb_z = (YIELDING_STRESS * Zz) @ np.array([0, 0, 0, 0, 1, 1])                    # [node_number, 1]
@@ -199,15 +225,17 @@ def get_strong_column_weak_beam_ratio(structure: Structure, response: pisa.Respo
             node_need_SCWB_list.remove(node_index)
     """
 
-    min_ratio_x = torch.min((ZcFyc / (ZbFyb_x + 1e-6))[structure.node_need_strong_column_weak_beam_list])
-    min_ratio_z = torch.min((ZcFyc / (ZbFyb_z + 1e-6))[structure.node_need_strong_column_weak_beam_list])
+    # min_ratio_x = torch.min((ZcFyc / (ZbFyb_x + 1e-6))[structure.node_need_strong_column_weak_beam_list])
+    # min_ratio_z = torch.min((ZcFyc / (ZbFyb_z + 1e-6))[structure.node_need_strong_column_weak_beam_list])
+    scwb_ratio_x = (ZcFyc / (ZbFyb_x + 1e-6)).numpy()
+    scwb_ratio_z = (ZcFyc / (ZbFyb_z + 1e-6)).numpy()
     
-    return torch.min(min_ratio_x, min_ratio_z).numpy()
+    return scwb_ratio_x, scwb_ratio_z
 
 
-def get_story_shear_ratio(structure: Structure, response: pisa.Response) -> np.float64:
+def get_story_shear_ratio(structure: Structure, response: pisa.Response) -> np.ndarray:
     """
-    Get minimum story-shear ratio given a specific structure and response.
+    Get story-shear ratio given a specific structure and response.
     - [耐震規範 2.17 極限層剪力強度之檢核](https://www.nlma.gov.tw/filesys/file/EMMA/c1130301-2.pdf)
     """
     shears_Y = np.array(list(response.member_response["shearY"].values()))
@@ -221,29 +249,37 @@ def get_story_shear_ratio(structure: Structure, response: pisa.Response) -> np.f
         upper_story_column_idxs = structure.story_column_dict[f"{upper_story+1}F"]
         shear_ratios[lower_story] = np.sum(member_shears[lower_story_column_idxs]) / np.sum(member_shears[upper_story_column_idxs])
 
-    return np.min(shear_ratios)
+    return shear_ratios
 
 
-def get_story_drift_ratio(structure: Structure, response: pisa.Response) -> np.float64:
+def get_member_drift_ratio(structure: Structure, response: pisa.Response) -> np.ndarray:
     """
-    Get maximum story-drift ratio given a specific structure and response.
+    Get member-drift ratio given a specific structure and response.
     - [耐震規範 2.16.1 容許層間相對側向位移角](https://www.nlma.gov.tw/filesys/file/EMMA/c1130301-2.pdf)
     """
+    # node_disp_x = np.array(list(response.node_response["dispX"].values()))
+    # node_disp_z = np.array(list(response.node_response["dispZ"].values()))
+    # bottom_node_disp_x = node_disp_x[structure.bottom_node_index_list]
+    # bottom_node_disp_z = node_disp_z[structure.bottom_node_index_list]
+
+    # member_length = structure.bottom_member_length_array  # mm
+    # drift_ratio_x = np.abs((node_disp_x - bottom_node_disp_x) / member_length)
+    # drift_ratio_z = np.abs((node_disp_z - bottom_node_disp_z) / member_length)
+
     node_disp_x = np.array(list(response.node_response["dispX"].values()))
     node_disp_z = np.array(list(response.node_response["dispZ"].values()))
-    bottom_node_disp_x = node_disp_x[structure.bottom_node_index_list]
-    bottom_node_disp_z = node_disp_z[structure.bottom_node_index_list]
 
-    member_length = structure.bottom_member_length_array  # mm
-    drift_ratio_x = np.abs((node_disp_x - bottom_node_disp_x) / member_length)
-    drift_ratio_z = np.abs((node_disp_z - bottom_node_disp_z) / member_length)
+    member_end_nodes = np.array(list(structure.member_to_nodeIndex_dict.values()))[:, 0:2]  # node1_index, node2_index
+    member_lengths = np.array(list(structure.member_length_dict.values())) * 1e+3  # unit conversion: m --> mm
+    drift_ratio_x = np.abs((node_disp_x[member_end_nodes[:, 1]] - node_disp_x[member_end_nodes[:, 0]]) / member_lengths)
+    drift_ratio_z = np.abs((node_disp_z[member_end_nodes[:, 1]] - node_disp_z[member_end_nodes[:, 0]]) / member_lengths)
 
-    return np.max(np.maximum(drift_ratio_x, drift_ratio_z))
+    return np.maximum(drift_ratio_x, drift_ratio_z)
 
 
-def get_ratio_column_compression_strength(structure: Structure, response: pisa.Response) -> np.float64:
+def get_ratio_column_compression_strength(structure: Structure, response: pisa.Response) -> np.ndarray:
     """
-    Get maximum column-compression-strength ratio given a specific structure and response.
+    Get column-compression-strength ratio given a specific structure and response.
      - [鋼構規範(LRFD) 13.4.1 柱強度要求](https://www.nlma.gov.tw/filesys/file/chinese/publication/law/law/0990807042-2.pdf)
     """
     column_axial_force = np.array(list(response.member_response["axial"].values()))[structure.member_column_index_list]
@@ -253,12 +289,12 @@ def get_ratio_column_compression_strength(structure: Structure, response: pisa.R
     A = np.array(list(structure.member_A_dict.values()))[structure.member_column_index_list]      # mm^2
     Puc = Fcr * A  # kN
 
-    return np.max(np.abs(column_axial_force) / Puc)
+    return np.abs(column_axial_force) / Puc
 
 
-def get_ratio_column_tension_strength(structure: Structure, response: pisa.Response) -> np.float64:
+def get_ratio_column_tension_strength(structure: Structure, response: pisa.Response) -> np.ndarray:
     """
-    Get maximum column-tension-strength ratio given a specific structure and response.
+    Get column-tension-strength ratio given a specific structure and response.
     - [鋼構規範(LRFD) 13.4.1 柱強度要求](https://www.nlma.gov.tw/filesys/file/chinese/publication/law/law/0990807042-2.pdf)
     """
     column_axial_force = np.array(list(response.member_response["axial"].values()))[structure.member_column_index_list]
@@ -267,7 +303,7 @@ def get_ratio_column_tension_strength(structure: Structure, response: pisa.Respo
     A = np.array(list(structure.member_A_dict.values()))[structure.member_column_index_list]  # mm^2
     Put = YIELDING_STRESS * A  # kN
 
-    return np.max(np.abs(column_axial_force) / Put)
+    return np.abs(column_axial_force) / Put
 
 
 
@@ -326,10 +362,10 @@ def _check_drift_ratio_pass(structure: Structure, response: pisa.Response) -> bo
     """
     node_disp = np.array(list(response.node_response["disp"].values()))
     bottom_node_disp = node_disp[structure.bottom_node_index_list]
-    member_length = structure.bottom_member_length_array    # mm
+    member_length = structure.bottom_member_length_array  # mm
     drift_ratio = np.abs((node_disp - bottom_node_disp) / member_length)
     # print("drift ratio:", drift_ratio)
-    if np.max(drift_ratio) > STORY_DRIFT_RAIO_LIMIT:
+    if np.max(drift_ratio) > STORY_DRIFT_RATIO_LIMIT:
         print("Drift ratio didn't pass!")
         return False
     return True
@@ -343,9 +379,9 @@ def _check_column_compression_strength_pass(structure: Structure, response: pisa
     # assume tension is positive value, compression is negative value
     column_axial_force = np.array(list(response.member_response["axial"].values()))[structure.member_column_index_list]
     compression_condition = (column_axial_force <= 0)
-    Fcr = np.array(list(structure.member_Fcr_dict.values()))[structure.member_column_index_list]    # kN/mm2
-    A = np.array(list(structure.member_A_dict.values()))[structure.member_column_index_list]        # mm2
-    Puc = Fcr * A     # kN
+    Fcr = np.array(list(structure.member_Fcr_dict.values()))[structure.member_column_index_list]  # kN/mm2
+    A = np.array(list(structure.member_A_dict.values()))[structure.member_column_index_list]      # mm2
+    Puc = Fcr * A  # kN
     # print("column compress ratio:", (np.abs(column_axial_force) > PHI_C * Puc)[compression_condition])
     if np.any((np.abs(column_axial_force) > PHI_C * Puc)[compression_condition]):
         print("column compression strength didn't pass")
@@ -360,8 +396,8 @@ def _check_column_tension_strength_pass(structure: Structure, response: pisa.Res
     """
     column_axial_force = np.array(list(response.member_response["axial"].values()))[structure.member_column_index_list]
     tension_condition = (column_axial_force > 0)
-    A = np.array(list(structure.member_A_dict.values()))[structure.member_column_index_list]        # mm2
-    Put = YIELDING_STRESS * A    # kN
+    A = np.array(list(structure.member_A_dict.values()))[structure.member_column_index_list]  # mm2
+    Put = YIELDING_STRESS * A  # kN
     # print("column tension ratio:", np.abs((column_axial_force / (PHI_C * Put))[tension_condition]))
     if np.any((np.abs(column_axial_force) > PHI_C * Put)[tension_condition]):
         print("column tension strength didn't pass")
@@ -373,10 +409,10 @@ def _check_beam_strength_pass(structure: Structure, response: pisa.Response) -> 
     beam_axial_force = np.array(list(response.member_response["axial"].values()))[structure.member_beam_index_list]
     tension_condition = (beam_axial_force > 0)
     compression_condition = (beam_axial_force <= 0)
-    Fcr = np.array(list(structure.member_Fcr_dict.values()))[structure.member_beam_index_list]    # kN/mm2
-    A = np.array(list(structure.member_A_dict.values()))[structure.member_beam_index_list]        # mm2
-    Put = YIELDING_STRESS * A    # kN
-    Puc = Fcr * A     # kN
+    Fcr = np.array(list(structure.member_Fcr_dict.values()))[structure.member_beam_index_list]  # kN/mm2
+    A = np.array(list(structure.member_A_dict.values()))[structure.member_beam_index_list]      # mm2
+    Put = YIELDING_STRESS * A  # kN
+    Puc = Fcr * A  # kN
     if np.any((np.abs(beam_axial_force) > PHI_C * Put)[tension_condition]):
         print("beam tension strength didn't pass")
         return False
@@ -457,5 +493,4 @@ def _check_strong_column_weak_beam_pass(structure: Structure, response: pisa.Res
         print("strong column weak beam didn't pass:", torch.min(ratio_x), torch.min(ratio_z))
         return False
     return True
-
 

@@ -4,20 +4,18 @@ import typing
 import logging
 import numpy as np
 
-from typing import List, Dict
 from pathlib import Path
 from copy import deepcopy
 
-from Structure import check
-from Structure import check_nda
-from Structure import structure
 from RL import new_strategy
+from Structure import structure, check, check_nda
 
 
 class Environment:
     def __init__(self, 
                  structure_shape: str,
                  add_structure_geometry: bool,
+                 add_response_features: bool,
                  reward_type: str,
                  scwb_driven_design: bool,
                  do_nonlinear_dynamic_analysis: bool,
@@ -25,14 +23,15 @@ class Environment:
                  check_displacement: bool,
                  nda_simulator: torch.nn.Module,
                  nda_norm_dict: dict,
-                 DBE_ground_motion_set: List[torch.Tensor],
-                 MCE_ground_motion_set: List[torch.Tensor],
+                 DBE_ground_motion_set: list[torch.Tensor],
+                 MCE_ground_motion_set: list[torch.Tensor],
                  checkpoint_dir: Path,
                  logger: logging.Logger,
-                 device = torch.device) -> None:
+                 device: torch.device) -> None:
         
         self.structure_shape = structure_shape
         self.add_structure_geometry = add_structure_geometry
+        self.add_response_features = add_response_features
         self.reward_type = reward_type
         self.scwb_driven_design = scwb_driven_design
         self.do_nonlinear_dynamic_analysis = do_nonlinear_dynamic_analysis
@@ -68,6 +67,8 @@ class Environment:
             z_span_num = 3
             x_span_lens = [7000, 11000, 14000]
             z_span_lens = [12000, 8000, 10000]
+            x_span_len = sum(x_span_lens) / len(x_span_lens)
+            z_span_len = sum(z_span_lens) / len(z_span_lens)
             story_num = 3
             story_height = 3500
         elif self.structure_shape == "random":
@@ -86,6 +87,7 @@ class Environment:
                                           "story_num": story_num, "story_height": story_height,
                                           "story_level_sections": story_level_sections, 
                                           "add_structure_geometry": self.add_structure_geometry, 
+                                          "add_response_features": self.add_response_features, 
                                           "do_nonlinear_dynamic_analysis": self.do_nonlinear_dynamic_analysis,
                                           "nda_norm_dict": self.nda_norm_dict,
                                           "analysis_dir": self.modal_analysis_dir}
@@ -99,7 +101,7 @@ class Environment:
 
 
     def init_check_setting(self, check_acc: bool, check_disp: bool):
-        """Reset whether to check the constraints according to the reward type"""
+        """Reset whether to check the constraints according to the reward type."""
         self.check_acceleration = check_acc
         self.check_displacement = check_disp
         if 'acceleration' in self.reward_type:
@@ -109,7 +111,7 @@ class Environment:
 
 
     def init_records(self, structure: structure.Structure):
-        """Initialize various records corresponding to different reward types"""
+        """Initialize various records corresponding to different reward types."""
         # material usage
         self.saved_material_record = []
         self.saved_material_record_SCWB = []
@@ -121,8 +123,9 @@ class Environment:
 
         # static response: max stress ratio, min stress ratio, max drift ratio, min SCWB ratio (all normalized by limit)
         _, load_cases, responses = check.get_response(structure, self.code_analysis_dir)
-        _, static_response = check.check_response(structure, load_cases, responses)
-        self.static_response_record = [static_response.tolist()]
+        _, static_response_features, static_response_rewards = check.process_response(structure, load_cases, responses)
+        structure._init_graph(static_response_features)
+        self.static_response_record = [list(static_response_rewards.values())]
 
         # dynamic response: acc, disp
         if self.do_nonlinear_dynamic_analysis and "acceleration" in self.reward_type:
@@ -162,6 +165,8 @@ class Environment:
                 z_span_num = 3
                 x_span_lens = [7000, 11000, 14000]
                 z_span_lens = [12000, 8000, 10000]
+                x_span_len = sum(x_span_lens) / len(x_span_lens)
+                z_span_len = sum(z_span_lens) / len(z_span_lens)
                 story_num = 3
                 story_height = np.random.randint(0, 11) * 100 + 3000
 
@@ -170,6 +175,8 @@ class Environment:
                 z_span_num = np.random.randint(2, 5)
                 x_span_lens = [np.random.randint(5, 15) * 1000 for i in range(x_span_num)]
                 z_span_lens = [np.random.randint(5, 15) * 1000 for i in range(z_span_num)]
+                x_span_len = sum(x_span_lens) / len(x_span_lens)
+                z_span_len = sum(z_span_lens) / len(z_span_lens)
                 story_num = np.random.randint(2, 5)
                 story_height = np.random.randint(0, 11) * 100 + 3000
 
@@ -189,6 +196,7 @@ class Environment:
                             "story_num": story_num, "story_height": story_height,
                             "story_level_sections": story_level_sections, 
                             "add_structure_geometry": self.add_structure_geometry,
+                            "add_response_features": self.add_response_features,
                             "do_nonlinear_dynamic_analysis": self.do_nonlinear_dynamic_analysis, 
                             "nda_norm_dict": self.nda_norm_dict,
                             "analysis_dir": self.modal_analysis_dir}
@@ -214,10 +222,10 @@ class Environment:
         volume_saved = self.saved_material_record[-1]
         volume_saved_SCWB = self.saved_material_record_SCWB[-1]
         if "material" in self.reward_type:
-            print(f"saved_material_record len: {len(self.saved_material_record)}")
-            print(f"{volume_saved = :.3f} m3")
-            print(f"{volume_saved_SCWB = :.3f} m3")
-            print(f"material usage difference: {(self.material_usage_record[-2] - self.material_usage_record[-1]):.3f} m3")
+            # print(f"saved_material_record len: {len(self.saved_material_record)}")
+            # print(f"{volume_saved = :.3f} m3")
+            # print(f"{volume_saved_SCWB = :.3f} m3")
+            # print(f"material usage difference: {(self.material_usage_record[-2] - self.material_usage_record[-1]):.3f} m3")
             
             reward += volume_saved
             if "total" in self.reward_type: reward += volume_saved_SCWB
@@ -272,11 +280,12 @@ class Environment:
             update_actions_SCWB = []
             auxiliary_values, load_cases, responses = check.get_response(structure, self.code_analysis_dir)
         
-        # 3. linear static analysis: check if response pass constraints
-        constraint_condition, static_response = check.check_response(structure, load_cases, responses)
+        # 2-1. linear static analysis: check if response pass constraints
+        constraint_condition, static_response_features, static_response_rewards = check.process_response(structure, load_cases, responses)
         whether_pass, fail_name, fail_reason = check.check_pass(load_cases, constraint_condition, self.check_displacement)
+        structure.update_garph(static_response_features)
 
-        # 4. nonlinear dynamic analysis: check if response pass constraints
+        # 2-2. nonlinear dynamic analysis: check if response pass constraints
         if self.do_nonlinear_dynamic_analysis and whether_pass == True:
             whether_pass, fail_reason = check_nda.check(structure, 
                                                         self.nda_simulator, 
@@ -289,7 +298,7 @@ class Environment:
                                                         self.device,
                                                         self.logger)
             
-        # 5. record all information after updating and checking
+        # 3. record all information after updating and checking
         # material usage
         self.saved_material_record.append(material_saved)
         self.saved_material_record_SCWB.append(material_saved_SCWB)
@@ -298,7 +307,7 @@ class Environment:
         self.update_actions_record.append(action)
         self.update_actions_record_SCWB.append(update_actions_SCWB)
         # static response
-        self.static_response_record.append(static_response.tolist())
+        self.static_response_record.append(list(static_response_rewards.values()))
         # dynamic response
         if self.do_nonlinear_dynamic_analysis and "acceleration" in self.reward_type:
             self.acc_record = check_nda.record_acc(structure, 
@@ -309,10 +318,10 @@ class Environment:
                                                    self.acc_record,
                                                    self.logger)
         
-        # 6. calculate reward based on recorded information
+        # 4. calculate reward based on recorded information
         reward = self.calculate_reward()
 
-        # 7. make proper adjustments if structure meets terminal state
+        # 5. make proper adjustments if structure meets terminal state
         if whether_pass == False:
             # fail constraints
             done = True
@@ -340,6 +349,6 @@ class Environment:
 
         return structure, reward, done, fail_name, fail_reason
         
-        
-        
+
+
 

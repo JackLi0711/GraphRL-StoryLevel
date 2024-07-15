@@ -43,18 +43,17 @@ def sample_initial_story_sections(x_span_num: int, x_span_len: int,
 
 def check_strong_column_weak_beam(structure: Structure, responses: list[pisa.Response]) -> np.ndarray:
     fail_conditions = np.zeros((structure.node_number, 2))  # X-dir(0), Z-dir(1)
-    for response in responses:
-        # calculate strong-column-weak-beam ratio
-        Zc = structure.node_neighbor_Zz_matrix
+    for response in responses:        
         Puc = response.node_neighbor_Puc_matrix
         Puc[Puc > 0] = 0       # only consider compression case
         Ag = structure.node_neighbor_Ag_matrix
         Ag[Ag < 1e-5] = 1e+10  # in case area = 0 for faces not connected with members
-        
         reduced_stress = torch.abs(Puc / Ag)
-        ZcFyc =  (Zc * (YIELDING_STRESS - reduced_stress)) @ np.array([0, 0, 1, 1, 0, 0])               # [node_number, 1]
-        ZbFyb_x = (YIELDING_STRESS * structure.node_neighbor_Zz_matrix) @ np.array([1, 1, 0, 0, 0, 0])  # [node_number, 1]
-        ZbFyb_z = (YIELDING_STRESS * structure.node_neighbor_Zz_matrix) @ np.array([0, 0, 0, 0, 1, 1])  # [node_number, 1]
+
+        Zz = structure.node_neighbor_Zz_matrix
+        ZcFyc =  (Zz * (YIELDING_STRESS - reduced_stress)) @ np.array([0, 0, 1, 1, 0, 0])  # [node_number, 1]
+        ZbFyb_x = (YIELDING_STRESS * Zz) @ np.array([1, 1, 0, 0, 0, 0])                    # [node_number, 1]
+        ZbFyb_z = (YIELDING_STRESS * Zz) @ np.array([0, 0, 0, 0, 1, 1])                    # [node_number, 1]
         
         ratio_x = (ZcFyc / (ZbFyb_x + 1e-6)).squeeze()  # [node_number]
         ratio_z = (ZcFyc / (ZbFyb_z + 1e-6)).squeeze()  # [node_number]
