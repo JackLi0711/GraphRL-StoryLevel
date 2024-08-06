@@ -9,7 +9,7 @@ STEEL_DENSITY = 77  # kN/m3
 
 
 class LoadCase:
-    def __init__(self, D=0, L=0, E=0, E_xz='x', E_np='n'):
+    def __init__(self, D=0.0, L=0.0, E=0, E_xz='x', E_np='n'):
         self.D = D
         self.L = L
         self.E = E
@@ -74,7 +74,6 @@ class NodalLoad:
             self.earthquake_load = max(earthquake_load.values())
 
         if col_strength_case:
-            # 鋼構規範(LRFD) 13.4.1
             Fu = Fus[1] if (self.E_x_n or self.E_x_p) else Fus[0]
             self.update_E(Fu)
 
@@ -95,7 +94,7 @@ class NodalLoad:
         self.E_z_p *= (1.4 * Fu)
         self.E_y *= (1.4 * Fu)
 
-    def calculate_nodal_load(self, structure) -> Tuple[np.array, np.array, np.array]:
+    def calculate_nodal_load(self, structure) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
         * vertical load: self-weight, D, L, Ey
         * horizontal load: Ex or Ez
@@ -106,7 +105,7 @@ class NodalLoad:
         nodal_horizontal_x_load, nodal_horizontal_z_load = self._distribute_horizontal_load(structure)
         return nodal_vertical_load, nodal_horizontal_x_load, nodal_horizontal_z_load  # kN
 
-    def _distribute_vertical_load(self, structure: Structure) -> np.array:
+    def _distribute_vertical_load(self, structure: Structure) -> np.ndarray:
         dead_load = self.D * DL * np.array(list(structure.node_area_dict.values()))
         live_load = self.L * LL * np.array(list(structure.node_area_dict.values()))
         self_weight = self.D * np.array(list(structure.node_self_weight_dict.values()))
@@ -116,7 +115,7 @@ class NodalLoad:
             # print(f"Node: {i}, vertical load, DL: {dead_load[i]}, LL: {live_load[i]}, weight: {self_weight[i]}, earthquake: {vertical_eathquake_force[i]}, total: {vertical_load[i]}")
         return vertical_load
 
-    def _distribute_horizontal_load(self, structure: Structure) -> Tuple[np.array, np.array]:
+    def _distribute_horizontal_load(self, structure: Structure) -> Tuple[np.ndarray, np.ndarray]:
         horizontal_x_load = np.zeros((structure.node_number))
         horizontal_z_load = np.zeros((structure.node_number))
         if self.E_x_n > 0:

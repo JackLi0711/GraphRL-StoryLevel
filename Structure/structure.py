@@ -40,7 +40,7 @@ DL = 1.0    # kN/m2
 
 GRAPH_NORM_DICT = {
     # node
-    "grid_num": 7,
+    "story_num": 7,
     "coord": 7,
     # edge
     "L": 8,
@@ -80,9 +80,9 @@ class Structure:
         self.analysis_dir = analysis_dir
         
         self._structure_initialization()
-        # self._init_graph()
-        if do_nonlinear_dynamic_analysis:
-            self._init_nda_graph()
+        # self.init_graph()
+        # if do_nonlinear_dynamic_analysis:
+        #     self._init_nda_graph()
 
     def __str__(self):
         description = f"Structure: x_span_num: {self.x_span_num}, z_span_num: {self.z_span_num}, story_num: {self.story_num}, "
@@ -714,7 +714,7 @@ class Structure:
         return beta_x, beta_z
 
 
-    def _init_graph(self, response_features: dict[str, torch.Tensor] = None):
+    def init_graph(self, response_features: dict[str, torch.Tensor] = None):
         # new node feature: if fix, if top, if side, beta_x, beta_z
         node_feature_num = 8 if self.add_structure_geometry else 5
         node_feature = torch.zeros(self.node_number, node_feature_num)
@@ -824,7 +824,7 @@ class Structure:
             "story_inner_column_member": story_inner_column_member,
             "story_batch": story_batch.to(torch.int64)
         }
-        self.aux = aux
+        self.aux = aux  # don't need to be updated during design process
 
         self.graph = Data(x=node_feature, y=None, edge_index=edge_index, edge_attr=edge_feature)
                         #   story_beam_member=tuple(story_beam_member), 
@@ -946,7 +946,7 @@ class Structure:
 
     def _normalize(self):
         if self.add_structure_geometry:
-            self.graph.x[:, 5] /= GRAPH_NORM_DICT["grid_num"]  # 7
+            self.graph.x[:, 5] /= GRAPH_NORM_DICT["story_num"]  # 7
             self.graph.x[:, 6] /= GRAPH_NORM_DICT["coord"]  # 7
         self.graph.edge_attr[:, 2] /= GRAPH_NORM_DICT["L"]  # 8
         self.graph.edge_attr[:, 3] /= GRAPH_NORM_DICT["A"]

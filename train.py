@@ -28,11 +28,11 @@ def parse_args() -> Namespace:
 	parser.add_argument("--pretrained_ckpt_dir", type=Path, default=None)
 
 	# checkpoint
-	parser.add_argument("--ckpt_dir", type=Path, default="./Results/MaterialReward_AdjustedMoreSections/")
+	parser.add_argument("--ckpt_dir", type=Path, default="./Results/AdjustedMoreSections/")
 	#parser.add_argument("--ckpt_dir", type=Path, default="./Results/AccelerationReward/")
 
 	# suffix
-	parser.add_argument("--suffix", type=str, default="FixedShape_ResponseFeatures_RMSprop_EpsilonDecay099_BufferSize3000_BatchSize256_Epoch300")  # material
+	parser.add_argument("--suffix", type=str, default="FixShape_JaModel_MatReward_ResFeatures_EpsilonDecay099_Buffer3000_Batch192_Epoch200")  # material
 	#parser.add_argument("--suffix", type=str, default="doNDA_NormalizedReward_RestrictAction_NoColStrength_Epoch300")  # acceleration
 
 	# nonlinear dynamic analysis simulator
@@ -52,13 +52,14 @@ def parse_args() -> Namespace:
 	parser.add_argument("--scwb_driven_design", action="store_true", default=False)
 
 	# model
+	parser.add_argument("--model_type", type=str, default="Japan", help="Taiwan, Japan")
 	parser.add_argument("--hidden_dim", type=int, default=100)
 	parser.add_argument("--num_layers", type=int, default=3)
 
 	# buffer
 	parser.add_argument("--buffer_size", type=int, default=3000)
 	parser.add_argument("--update_frequency", type=int, default=1)
-	parser.add_argument("--add_experience_frequency", type=int, default=1)
+	parser.add_argument("--add_experience_frequency", type=int, default=5)
 
 	# training
 	parser.add_argument("--gamma", type=float, default=0.99, help="discount factor, 1.0, 0.99, 0.9")
@@ -66,9 +67,9 @@ def parse_args() -> Namespace:
 	parser.add_argument("--synchronize_steps", type=int, default=50)
 	parser.add_argument("--soft_update_alpha", type=float, default=None)
 	parser.add_argument("--test_frequency", type=int, default=5)
-	parser.add_argument("--batch_size", type=int, default=256)  # original: 256
+	parser.add_argument("--batch_size", type=int, default=192)  # original: 256
 	parser.add_argument("--lr", type=float, default=1e-5)
-	parser.add_argument("--num_epoch", type=int, default=300, help="epoch == episode")
+	parser.add_argument("--num_epoch", type=int, default=200, help="epoch == episode")
 	parser.add_argument("--random_seed", type=int, default=731, help="fixed random seed")
 
 	args = parser.parse_args()
@@ -186,7 +187,10 @@ def main(args):
 		"pretrained_ckpt_dir": args.pretrained_ckpt_dir,
 		"device": device,
 	}
-	double_dqn_agent = agent.DeepQAgent(**_agent_kwargs)
+	if args.model_type == "Taiwan":
+		double_dqn_agent = agent.DeepQAgent(**_agent_kwargs)
+	elif args.model_type == "Japan":
+		double_dqn_agent = agent.JapanDeepQAgent(**_agent_kwargs)
 
 	# Environment
 	_env_kwargs = {
@@ -226,7 +230,7 @@ def main(args):
 	logger.critical(f"Minimum Material Usage: {np.min(rec.testing_record['final_volume']):.3f} m3, Story Level Sections: {rec.testing_record['final_design'][np.argmin(rec.testing_record['final_volume'])]}")
 	logger.critical(f"Highest Score: {np.max(rec.testing_record['score']):.3f}, Story Level Sections: {rec.testing_record['final_design'][np.argmax(rec.testing_record['score'])]}")
 
-	plot.plot_reward(rec, args.ckpt_dir)
+	plot.plot_reward(rec.training_record["score"], rec.testing_record["score"], args.ckpt_dir)
 	plot.plot_loss(rec.learn_losses, args.ckpt_dir)
 	plot.plot_Qvalues(rec.Q_values, args.ckpt_dir)
 	plot.plot_fail_names(rec.training_record["fail_name"], rec.testing_record["fail_name"], args.ckpt_dir)

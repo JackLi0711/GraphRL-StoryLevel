@@ -7,16 +7,13 @@ from RL.record import Record
 from RL.environment import Environment
 
 
-def plot_reward(rec: Record, checkpoint_dir: Path) -> None:
+def plot_reward(train_scores: List[float], test_scores: List[float], checkpoint_dir: Path) -> None:
     """Plot train scores during every episode and test score every few episode."""
-    train_scores = rec.training_record["score"]
-    test_scores = rec.testing_record["score"]
-
     train_episodes = np.arange(1, len(train_scores)+1)
     episode_per_test = len(train_scores) / len(test_scores)
     test_episodes = np.arange(episode_per_test, len(train_scores)+1, episode_per_test)
     plt.figure(figsize=(12, 6))
-    plt.plot(train_episodes, train_scores, label="training", color='black', linestyle='-', linewidth=1)
+    plt.plot(train_episodes, train_scores, label="training", color='black', linestyle='--', linewidth=1)
     plt.plot(test_episodes, test_scores, label="testing", color='red', linestyle='-', linewidth=1)
     plt.legend(fontsize=14)
     plt.grid()
@@ -28,13 +25,14 @@ def plot_reward(rec: Record, checkpoint_dir: Path) -> None:
     plt.close()
 
 
-def plot_loss(learn_losses: List[float], checkpoint_dir: Path) -> None:
+def plot_loss(learn_losses: List[List[float]], checkpoint_dir: Path) -> None:
+    ave_losses = [np.nanmean(losses) for losses in learn_losses if len(losses) > 0]
     plt.figure(figsize=(12, 6))
-    plt.plot(learn_losses, color='black', linewidth=1)
+    plt.plot(ave_losses, color='black', linewidth=1)
     plt.grid()
     plt.yscale("log")
     plt.xlabel("trained iterations")
-    plt.ylabel("batch loss")
+    plt.ylabel("average batch loss")
     plt.savefig(checkpoint_dir / "loss.png")
     plt.close()
 
@@ -142,7 +140,7 @@ def plot_test_behaviors(rec: Record, env: Environment, checkpoint_dir: Path) -> 
     ax1.tick_params(labelsize=14)
 
     ax2 = ax1.twinx()
-    ax2.plot(test_episodes, test_scores, color='black', linestyle='-', linewidth=1, label='test score (total)', zorder=2)
+    ax2.plot(test_episodes, test_scores, color='black', linestyle='-', linewidth=1, label='test score', zorder=2)
     ax2.set_ylabel('Test score', fontsize=16)
     ax2.tick_params(labelsize=14)
     ax2.grid(zorder=0)

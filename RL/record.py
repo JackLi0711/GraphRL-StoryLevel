@@ -40,7 +40,7 @@ class Record:
             "fail_reason": [] 
         }
 
-        self.learn_losses = []
+        self.learn_losses = [[]]
         self.Q_values = []
 
 

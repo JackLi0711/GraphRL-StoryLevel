@@ -85,8 +85,8 @@ class Response:
 
 
 
-# return period from modal analysis
-def dynamic_analysis_period(structure, analysis_dir) -> Tuple[float, np.array]:
+def dynamic_analysis_period(structure, analysis_dir) -> Tuple[float, np.ndarray]:
+    """Return periods and mode shapes from modal analysis."""
     modal_ipt_path = os.path.join(analysis_dir, "modal.ipt")
     # 1. generate modal analysis ipt file
     _generate_analysis_ipt(structure, modal_ipt_path, analysis="modal")
@@ -95,8 +95,8 @@ def dynamic_analysis_period(structure, analysis_dir) -> Tuple[float, np.array]:
     return periods_and_shapes
 
 
-# return structure's response under the given load case
 def run_load_case(structure, load_case, analysis_dir) -> Response:
+    """Return structure's response under the given load case."""
     # 1. generate load case's ipt file
     load_name = load_case.load_name
     analysis_ipt_path = os.path.join(analysis_dir, f"{load_name}.ipt")

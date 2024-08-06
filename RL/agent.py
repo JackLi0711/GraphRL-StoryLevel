@@ -42,6 +42,8 @@ class Agent:
         raise NotImplementedError
         
 
+
+
 class DeepQAgent(Agent):
     def __init__(self,
                  node_feature_dim: int,
@@ -124,7 +126,7 @@ class DeepQAgent(Agent):
 
         # initialize optimizer
         params = list(self.gnn.parameters()) + list(self.online_q_network.parameters())
-        self._optimizer = optim.RMSprop(params, lr=lr)  # Japan: RMSprop / Tony: Adam
+        self._optimizer = optim.Adam(params, lr=lr)  # Japan: RMSprop / Tony: Adam
         
         # initialize some counters
         self._number_episodes = 0
@@ -134,7 +136,7 @@ class DeepQAgent(Agent):
 
         # initialize pretrained model
         if pretrained_ckpt_dir:
-            _load_model(self, pretrained_ckpt_dir, self.logger)
+            self._load_model(self, pretrained_ckpt_dir, self.logger)
 
         
     # policies
@@ -200,14 +202,9 @@ class DeepQAgent(Agent):
         return action, q_val
     
     
-    def _learn(self, experiences: np.ndarray) -> None:
+    def _learn(self, experiences: List[buffer.Experience]) -> None:
         """Update the agent's Q network based on a collection of prioritized experiences."""
-        graphs, actions, rewards, next_graphs, dones, auxs = [vs for vs in zip(*experiences)]
-
-        # print("type:", type(auxs))
-        # print("len:", len(auxs))
-        # print("sub type:", type(auxs[0]))
-        # print("auxs:", auxs)
+        graphs, actions, rewards, next_graphs, dones, infeasible_actions, auxs = [vs for vs in zip(*experiences)]
         
         # ptr
         member_numbers = [int(graph.edge_attr.shape[0]/2) for graph in graphs]  
@@ -219,7 +216,7 @@ class DeepQAgent(Agent):
         member_batch = torch.tensor(member_batch).to(self.device)
 
         # story level pooling preparation
-        structure_story_ptr = []    # if the first and second graph have 15, 12 story section, it will be [0, 15]
+        structure_story_ptr = []    # if the first and second graph have 16, 12 story members, it will be [0, 16, 28]
         story_batch = torch.zeros(member_batch.shape[0])
         story_count = 0
         for i, graph in enumerate(graphs):
@@ -232,21 +229,20 @@ class DeepQAgent(Agent):
         story_batch = story_batch.to(self.device).to(torch.int64)
 
         # get states, next_states from graphs and next_graphs
-        #print("graphs in loader:", len(graphs))
         loader = DataLoader(list(graphs), batch_size=len(graphs))
         loader_next = DataLoader(list(next_graphs), batch_size=len(next_graphs))
-        
         graphs_batch = next(iter(loader)).to(self.device)
         next_graphs_batch = next(iter(loader_next)).to(self.device)
 
-        states = self.gnn(graphs_batch.x, graphs_batch.edge_index, graphs_batch.edge_attr, member_batch, story_batch, structure_story_ptr)
-        next_states = self.gnn(next_graphs_batch.x, next_graphs_batch.edge_index, next_graphs_batch.edge_attr, member_batch, story_batch, structure_story_ptr)
+        states = self.gnn.forward(graphs_batch.x, graphs_batch.edge_index, graphs_batch.edge_attr, member_batch, story_batch, structure_story_ptr)
+        next_states = self.gnn.forward(next_graphs_batch.x, next_graphs_batch.edge_index, next_graphs_batch.edge_attr, member_batch, story_batch, structure_story_ptr)
 
-        # convert batch-values to tensors
+        # convert batch-values to tensors: [batch_size]
         actions = torch.tensor(actions)
         actions = (actions + structure_story_ptr[:len(actions)]).to(self.device)
-        rewards = torch.tensor(rewards).to(self.device)             # [batch_size]
-        dones = torch.tensor(dones).to(torch.long).to(self.device)  # [batch_size]
+        rewards = torch.tensor(rewards).to(self.device)
+        dones = torch.tensor(dones).to(torch.long).to(self.device)  # True --> 1, False --> 0
+        infeasible_actions = np.concatenate(infeasible_actions, axis=0)
                 
         # compute temporal difference
         deltas = q_algorithm.double_q_learning_error(states,
@@ -254,6 +250,7 @@ class DeepQAgent(Agent):
                                                      rewards,
                                                      next_states,
                                                      dones,
+                                                     infeasible_actions,
                                                      structure_story_ptr,
                                                      self._gamma,
                                                      self.online_q_network,
@@ -278,7 +275,7 @@ class DeepQAgent(Agent):
         else:
             soft_update_q_network_parameters(self.target_q_network, self.online_q_network, self._soft_update_alpha)
         
-        return loss
+        return loss.detach().cpu().numpy().item()
         
 
     def step(self,
@@ -287,8 +284,8 @@ class DeepQAgent(Agent):
              reward: float,
              next_graph: Data,
              done: bool,
-             aux: Dict,
-             learn_losses: List[float]) -> None:
+             infeasible_actions: np.ndarray[bool],
+             aux: Dict) -> None:
         """
         Updates the agent's state based on feedback received from the environment.
         
@@ -299,7 +296,7 @@ class DeepQAgent(Agent):
         reward (float): the reward received from the environment.
         next_state (np.array): the resulting state of the environment following the action.
         done (bool): True is the training episode is finised; false otherwise.
-
+        infeasible_actions (np.array): True for the indices of infeasible member.
         """
         if self._number_timesteps % self._add_experience_frequency == 0:
             experience = buffer.Experience(graph.to("cpu"),
@@ -307,22 +304,279 @@ class DeepQAgent(Agent):
                                            reward, 
                                            next_graph.to("cpu"), 
                                            done,
+                                           infeasible_actions,
                                            aux)
             self._buffer.append(experience)
-        
+
+        loss = float("nan")
         if done:
             self._number_episodes += 1
             self._number_timesteps = 0
-            
         else:
             self._number_timesteps += 1
-            # every so often the agent should learn from experiences
+            # update frequently so that the agent can learn from experiences
             if self._number_timesteps % self._update_frequency == 0 and self._has_sufficient_experience():
                 experiences = self._buffer.sample()
                 loss = self._learn(experiences)    
-                learn_losses.append(loss.detach().cpu().numpy().item())
-    
         
+        return loss
+
+
+
+
+    def save_model(self, env: Environment, name: str, logger: logging.Logger) -> None:
+        save_model_path = env.checkpoint_dir / "models" / f"model_{name}.pt"
+        torch.save({
+            'gnn': self.gnn.state_dict(),
+            'online_q_network': self.online_q_network.state_dict(),
+            'target_q_network': self.target_q_network.state_dict(),
+            }, save_model_path)
+        logger.info(f" ---> model saved to {save_model_path}\n\n\n")
+
+
+    def _load_model(self, load_ckpt_dir, logger: logging.Logger) -> None:
+        # theta_1, theta_2, theta_3, online_q_network, target_q_network
+        save_model_path = load_ckpt_dir #/ "model.pt"
+        checkpoint = torch.load(save_model_path, map_location=torch.device(self.device))
+        self.gnn.load_state_dict(checkpoint['gnn'])    
+        self.online_q_network.load_state_dict(checkpoint['online_q_network'])    
+        self.target_q_network.load_state_dict(checkpoint['target_q_network'])    
+        logger.info(f"model are loaded from {save_model_path}")
+
+
+
+
+class JapanDeepQAgent():
+    def __init__(self, 
+                 node_feature_dim: int,
+                 edge_feature_dim: int,
+                 hidden_dim: int,
+                 num_layers: int,
+                 batch_size: int,
+                 lr: float,
+                 buffer_size: int,
+                 epsilon_decay_schedule: Callable[[int], float],
+                 synchronize_steps: int,
+                 soft_update_alpha: float,
+                 gamma: float,
+                 update_frequency: int,
+                 add_experience_frequency: int,
+                 test_frequency: int = 5,
+                 restrict_action: bool = False,
+                 seed: int = 731, 
+                 logger: logging.Logger = None,
+                 pretrained_ckpt_dir: str = None,
+                 device: torch.device = "cpu") -> None:
+        self.restrict_action = restrict_action
+        self.logger = logger
+        self.device = device
+
+        # set seeds for reproducbility
+        self._random_state = np.random.RandomState() if seed is None else np.random.RandomState(seed)
+        if seed is not None:
+            torch.manual_seed(seed)
+
+        # initialize buffer
+        _replay_buffer_kwargs = {
+            "batch_size": batch_size,
+            "buffer_size": buffer_size,
+            "random_state": self._random_state,
+            "logger": self.logger,
+        }
+        self._buffer = buffer.ExperienceReplayBuffer(**_replay_buffer_kwargs)
+
+        # initialize model (GNN + Q-Network)
+        model_kwargs = {
+            "n_node_inputs": node_feature_dim,
+            "n_edge_inputs": edge_feature_dim,
+            "n_feature_outputs": hidden_dim,
+            "n_action_types": 2,  # q_value_dim = 2, 0: dec, 1: inc
+            "device": self.device,
+        }
+        self.online_model = model.GraphEmbedding(**model_kwargs)
+        self.target_model = model.GraphEmbedding(**model_kwargs)
+        self.gnn = self.online_model
+
+        # initialize optimizer
+        self._optimizer = optim.RMSprop(self.online_model.parameters(), lr=lr)
+
+        # initialize agent hyperparameters
+        self._gamma = gamma
+        self._epsilon_decay_schedule = epsilon_decay_schedule
+        self._synchronize_steps = synchronize_steps
+        self._soft_update_alpha = soft_update_alpha
+        self._update_frequency = update_frequency
+        self._add_experience_frequency = add_experience_frequency
+        self._test_frequency = test_frequency
+
+        # initialize counters
+        self._number_episodes = 0
+        self._number_timesteps = 0
+        self._backprop_count = 0
+
+        # initialize pretrained model
+        if pretrained_ckpt_dir:
+            self._load_model(self, pretrained_ckpt_dir, self.logger)
+        
+
+    def choose_action(self, 
+                      state: torch.Tensor, 
+                      already_minimum_section_story_indexes: List[int], 
+                      dont_select_story_member_indexes: List[int]=[], 
+                      greedy: bool=False) -> Tuple[int, float]:
+        """Rule for choosing an actio (story members) given the current state of the environment."""
+        epsilon = 0.0 if greedy else self._epsilon_decay_schedule(self._number_episodes)
+        q_values = self.online_model.get_Q(state).detach().to("cpu").numpy()
+        
+        dont_select_story_indexes = list(set(already_minimum_section_story_indexes + dont_select_story_member_indexes))
+        infeasible_actions = np.array([True if i in dont_select_story_indexes else False for i in range(q_values.shape[0])], dtype=bool)
+
+        if np.random.rand() > epsilon:  
+            # high probability --> greedy
+            # a_flatten = np.ma.masked_where(infeasible_actions, q_values).argmax()  # mask elements where condition is True
+            # a = np.divmod(a_flatten, q_values.shape[1])
+            # action = a[0]
+            # q_val = q_values[a]
+            q_values_feasible = np.ma.masked_where(infeasible_actions, q_values)  # mask elements where condition is True
+            action = q_values_feasible.argmax()
+            q_val = q_values_feasible[action]
+            self.logger.info(f"greed_policy's selection: {action}, Q value: {q_val}")
+        else: 
+            # low probability --> random
+            feasible_a_indices = np.argwhere(~infeasible_actions)  # returns the indices of all non-zero elements (True)
+            action = np.asarray(feasible_a_indices[np.random.randint(np.shape(feasible_a_indices)[0])])[0]
+            q_val = q_values[action]
+
+        return int(action), float(q_val)  # to avoid TypeError: Object of type np.int64, np.float64 is not JSON serializable
+
+
+    def _learn(self, experiences: List[buffer.Experience]) -> None:
+        """Update the agent's Q Network based on a collection of recent experiences."""
+        graphs, actions, rewards, next_graphs, dones, infeasible_actions, auxs = [vs for vs in zip(*experiences)]
+
+        # ptr
+        member_numbers = [int(graph.edge_attr.shape[0]/2) for graph in graphs]
+        member_ptr = torch.tensor([sum(member_numbers[:i]) for i in range(len(member_numbers)+1)])  # size: [batch_size + 1]
+
+        member_batch = []
+        for i, member_number in enumerate(member_numbers):
+            member_batch += [i] * member_number
+        member_batch = torch.tensor(member_batch).to(self.device)  # size: [total edge_num]
+
+        # story level pooling preparation
+        structure_story_ptr = []
+        story_batch = torch.zeros(member_batch.shape[0])
+        story_count = 0
+        for i, graph in enumerate(graphs):
+            structure_story_ptr.append(story_count)
+            for story_members in (auxs[i]["story_xdir_beam_member"] + auxs[i]["story_zdir_beam_member"] + auxs[i]["story_outer_column_member"] + auxs[i]["story_inner_column_member"]):
+                story_batch[story_members + member_ptr[i]] = story_count
+                story_count += 1
+        structure_story_ptr.append(story_count)
+        structure_story_ptr = torch.tensor(structure_story_ptr)  # size: [batch_size + 1], if the first and second graph have 16, 12 story members, it will be [0, 16, 28]
+        story_batch = story_batch.to(self.device).to(torch.int64)  # size: [total edge_num]
+        
+        # get states, next_states from graphs and next_graphs
+        loader = DataLoader(graphs, batch_size=len(graphs))
+        loader_next = DataLoader(next_graphs, batch_size=len(next_graphs))
+        graphs_batch = next(iter(loader)).to(self.device)
+        next_graphs_batch = next(iter(loader_next)).to(self.device)
+
+        states = self.online_model.forward(graphs_batch.x, graphs_batch.edge_index, graphs_batch.edge_attr, member_batch, story_batch, structure_story_ptr)  # shape: [total story_member_num, hidden_dim*2]
+        next_states = self.target_model.forward(next_graphs_batch.x, next_graphs_batch.edge_index, next_graphs_batch.edge_attr, member_batch, story_batch, structure_story_ptr)  # shape: [total story_member_num, hidden_dim*2]
+
+        # convert batch-values to tensors: [batch_size]
+        actions = torch.tensor(actions)
+        actions = (actions + structure_story_ptr[:len(actions)]).to(self.device)
+        rewards = torch.tensor(rewards).to(self.device)
+        dones = torch.tensor(dones).to(torch.long).to(self.device)  # True --> 1, False --> 0
+        infeasible_actions = np.concatenate(infeasible_actions, axis=0)
+
+        # compute loss from batch experiences and Q-networks
+        loss = q_algorithm.calc_loss(states, 
+                                     actions, 
+                                     rewards, 
+                                     next_states, 
+                                     dones, 
+                                     infeasible_actions, 
+                                     structure_story_ptr, 
+                                     self._gamma, 
+                                     self.online_model,
+                                     self.target_model, 
+                                     self.logger)
+        self.logger.critical(f"loss: {loss.item()}")
+
+        # updates the parameters of the online model
+        self._optimizer.zero_grad()
+        loss.backward()  # retain_graph=True
+        self._optimizer.step()
+
+        # synchronize online and target network
+        if self._synchronize_steps is not None:
+            if self._backprop_count % self._synchronize_steps == 0:
+                self.logger.info("Synchronizing online q network to target network")
+                self.target_model = deepcopy(self.online_model)
+            self._backprop_count += 1
+        else:
+            soft_update_q_network_parameters(self.target_model, self.online_model, self._soft_update_alpha)
+
+        return loss.detach().cpu().numpy().item()
+
+
+    def step(self, 
+             graph: Data, 
+             action: int, 
+             reward: float, 
+             next_graph: Data, 
+             done: bool, 
+             infeasible_actions: np.ndarray[bool],
+             aux: Dict) -> None:
+        """Update agent's state after observing the effect of its action on the environment."""
+        if self._number_timesteps % self._add_experience_frequency == 0:
+            experience = buffer.Experience(graph.to("cpu"),
+                                           action, 
+                                           reward, 
+                                           next_graph.to("cpu"), 
+                                           done, 
+                                           infeasible_actions,
+                                           aux)
+            self._buffer.append(experience)
+
+        # update frequently so that the agent can learn from experiences
+        if (self._number_timesteps % self._update_frequency == 0) and (len(self._buffer) >= self._buffer._batch_size):
+            experiences = self._buffer.sample()
+            loss = self._learn(experiences)
+        else:
+            loss = float("nan")
+
+        if done:
+            self._number_episodes += 1
+            self._number_timesteps = 0
+        else:
+            self._number_timesteps += 1
+
+        return loss
+
+
+
+
+    def save_model(self, env: Environment, name: str, logger: logging.Logger) -> None:
+        save_model_path = env.checkpoint_dir / "models" / f"model_{name}.pt"
+        torch.save({
+                "online_model": deepcopy(self.online_model).to("cpu").state_dict(),
+                "target_model": deepcopy(self.target_model).to("cpu").state_dict(),
+                }, save_model_path)
+        logger.info(f" ---> model saved to {save_model_path}\n\n\n")
+
+
+    def _load_model(self, load_ckpt_dir, logger: logging.Logger) -> None:
+        save_model_path = load_ckpt_dir
+        checkpoint = torch.load(save_model_path, map_location=torch.device(self.device))
+        self.online_model.load_state_dict(checkpoint["online_model"])    
+        self.target_model.load_state_dict(checkpoint["target_model"])    
+        logger.info(f"model are loaded from {save_model_path}")
+
+
 
 
 def _train_an_episode(agent: DeepQAgent, 
@@ -341,7 +595,7 @@ def _train_an_episode(agent: DeepQAgent,
         # select and perform an action
         with torch.no_grad():
             graph = graph.to(agent.device)
-            state = agent.gnn(graph.x, graph.edge_index, graph.edge_attr, None, structure.aux["story_batch"].to(agent.device), None)
+            state = agent.gnn.forward(graph.x, graph.edge_index, graph.edge_attr, None, structure.aux["story_batch"].to(agent.device), None)
         dont_select_story_member_indexes = structure.restrict_action_space() if agent.restrict_action else []
         action, q_val = agent.choose_action(state, 
                                             structure.already_minimum_section_story_indexes,
@@ -363,10 +617,16 @@ def _train_an_episode(agent: DeepQAgent,
 
         # get next state and save experience
         next_graph = structure.graph.clone()
-        agent.step(graph, action, reward, next_graph, done, structure.aux, rec.learn_losses)
+        dont_select_story_member_indexes = structure.restrict_action_space() if agent.restrict_action else []
+        dont_select_story_indexes = list(set(structure.already_minimum_section_story_indexes + dont_select_story_member_indexes))
+        infeasible_actions = np.array([True if i in dont_select_story_indexes else False for i in range(state.shape[0])], dtype=bool)
+        loss = agent.step(graph, action, reward, next_graph, done, infeasible_actions, structure.aux)
+        rec.learn_losses[-1].append(loss)
+
         graph = next_graph.clone()
     
     rec.Q_values.append(q)
+    rec.learn_losses.append([])
 
     final_structure = structure if fail_reason == "minimum_section" else original_structure
     final_story_level_sections = final_structure.story_level_sections
@@ -396,7 +656,7 @@ def _testing(agent: DeepQAgent,
         # select and perform an action
         with torch.no_grad():
             graph = graph.to(agent.device)
-            state = agent.gnn(graph.x, graph.edge_index, graph.edge_attr, None, structure.aux["story_batch"].to(agent.device), None)
+            state = agent.gnn.forward(graph.x, graph.edge_index, graph.edge_attr, None, structure.aux["story_batch"].to(agent.device), None)
 
         dont_select_story_member_indexes = structure.restrict_action_space() if agent.restrict_action else []
         action, _ = agent.choose_action(state, 
@@ -501,26 +761,6 @@ def _inference(agent: DeepQAgent,
 
 
 
-def _save_model(agent: DeepQAgent, env: Environment, name: str, logger: logging.Logger) -> None:
-    save_model_path = env.checkpoint_dir / "models" / f"model_{name}.pt"
-    torch.save({
-        'gnn': agent.gnn.state_dict(),
-        'online_q_network': agent.online_q_network.state_dict(),
-        'target_q_network': agent.target_q_network.state_dict(),
-        }, save_model_path)
-    logger.info(f" ---> model saved to {save_model_path}\n\n\n")
-
-
-def _load_model(agent: DeepQAgent, load_ckpt_dir, logger: logging.Logger) -> None:
-    # theta_1, theta_2, theta_3, online_q_network, target_q_network
-    save_model_path = load_ckpt_dir #/ "model.pt"
-    checkpoint = torch.load(save_model_path, map_location=torch.device(agent.device))
-    agent.gnn.load_state_dict(checkpoint['gnn'])    
-    agent.online_q_network.load_state_dict(checkpoint['online_q_network'])    
-    agent.target_q_network.load_state_dict(checkpoint['target_q_network'])    
-    logger.info(f"model are loaded from {save_model_path}")
-
-
 def train(agent: DeepQAgent,
           env: Environment,
           rec: Record,
@@ -543,36 +783,8 @@ def train(agent: DeepQAgent,
             rec.output(env.checkpoint_dir)
 
             if np.argmin(rec.testing_record["final_volume"]) == len(rec.testing_record["final_volume"])-1: 
-                _save_model(agent, env, name="MinimumUsage", logger=logger)
+                agent.save_model(env, name="MinimumUsage", logger=logger)
             if np.argmax(rec.testing_record["score"]) == len(rec.testing_record["score"])-1: 
-                _save_model(agent, env, name="HighestScore", logger=logger)
+                agent.save_model(env, name="HighestScore", logger=logger)
             if (i+1) % 50 == 0: 
-                _save_model(agent, env, name=f"Episode{str(i+1)}", logger=logger)
-
-
-    # score_info = {
-    #     "train_score": train_scores,
-    #     "train_score_SCWB": train_scores_SCWB,
-    #     "test_score": test_scores,
-    #     "test_score_SCWB": test_scores_SCWB
-    # }
-    # fail_info = {
-    #     "fail_name": fail_names,
-    #     "fail_reason": fail_reasons,
-    #     "test_fail_name": test_fail_names,
-    #     "test_fail_reason": test_fail_reasons
-    # }
-    # test_info = {
-    #     "test_action": test_actions,
-    #     "test_action_SCWB": test_actions_SCWB,
-    #     "test_final_material_usage": test_final_material_usages,
-    #     "test_final_design": test_final_designs
-    # }
-    # other_info = {
-    #     "learn_loss": learn_losses,
-    #     "Q_value": Q_values
-    # }
-
-    # return score_info, fail_info, test_info, other_info
-
-
+                agent.save_model(env, name=f"Episode{str(i+1)}", logger=logger)

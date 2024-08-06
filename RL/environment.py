@@ -124,7 +124,7 @@ class Environment:
         # static response: max stress ratio, min stress ratio, max drift ratio, min SCWB ratio (all normalized by limit)
         _, load_cases, responses = check.get_response(structure, self.code_analysis_dir)
         _, static_response_features, static_response_rewards = check.process_response(structure, load_cases, responses)
-        structure._init_graph(static_response_features)
+        structure.init_graph(static_response_features)
         self.static_response_record = [list(static_response_rewards.values())]
 
         # dynamic response: acc, disp
@@ -216,42 +216,42 @@ class Environment:
         return random_structure
     
     
-    def calculate_reward(self) -> float:
+    def calculate_reward(self, whether_pass: bool) -> float:
         """Combine various target into total reward"""
-        reward = 0
-        volume_saved = self.saved_material_record[-1]
-        volume_saved_SCWB = self.saved_material_record_SCWB[-1]
-        if "material" in self.reward_type:
-            # print(f"saved_material_record len: {len(self.saved_material_record)}")
-            # print(f"{volume_saved = :.3f} m3")
-            # print(f"{volume_saved_SCWB = :.3f} m3")
-            # print(f"material usage difference: {(self.material_usage_record[-2] - self.material_usage_record[-1]):.3f} m3")
-            
-            reward += volume_saved
-            if "total" in self.reward_type: reward += volume_saved_SCWB
-            if "normalized" in self.reward_type: reward /= self.material_usage_record[0]
+        if whether_pass == True:
+            volume_saved = self.saved_material_record[-1]
+            volume_saved_SCWB = self.saved_material_record_SCWB[-1]
+            if "material" in self.reward_type:
+                # print(f"saved_material_record len: {len(self.saved_material_record)}")
+                # print(f"{volume_saved = :.3f} m3")
+                # print(f"{volume_saved_SCWB = :.3f} m3")
+                # print(f"material usage difference: {(self.material_usage_record[-2] - self.material_usage_record[-1]):.3f} m3")
+                reward = volume_saved
+                if "total" in self.reward_type: reward += volume_saved_SCWB
+                if "normalized" in self.reward_type: reward /= self.material_usage_record[0]
 
-        if "combined" in self.reward_type:
-            delta_v = volume_saved + volume_saved_SCWB
-            stress_ratio_range = self.static_response_record[-1][0] - self.static_response_record[-1][1]  # max_stress_ratio - min_stress_ratio
-            max_stress_ratio_reward = np.clip(self.static_response_record[-2][0]/self.static_response_record[-1][0], 0.0, 0.99)  # max_stress_ratio_before / max_stress_ratio
-            max_drift_ratio_reward = np.clip(self.static_response_record[-2][2]/self.static_response_record[-1][2], 0.0, 0.99)  # max_drift_ratio_before / max_drift_ratio
-            min_scwb_ratio_reward = np.clip(self.static_response_record[-2][3]/self.static_response_record[-1][3], 0.0, 0.99)  # min_scwb_ratio_before / min_scwb_ratio
+            if "combined" in self.reward_type:
+                delta_v = volume_saved + volume_saved_SCWB
+                stress_ratio_range = self.static_response_record[-1][0] - self.static_response_record[-1][1]  # max_stress_ratio - min_stress_ratio
+                max_stress_ratio_reward = np.clip(self.static_response_record[-2][0]/self.static_response_record[-1][0], 0.0, 0.99)  # max_stress_ratio_before / max_stress_ratio
+                max_drift_ratio_reward = np.clip(self.static_response_record[-2][2]/self.static_response_record[-1][2], 0.0, 0.99)  # max_drift_ratio_before / max_drift_ratio
+                min_scwb_ratio_reward = np.clip(self.static_response_record[-2][3]/self.static_response_record[-1][3], 0.0, 0.99)  # min_scwb_ratio_before / min_scwb_ratio
+                reward = 0.1 * delta_v**0.5 / stress_ratio_range * -(np.log(1-max_stress_ratio_reward) + np.log(1-max_drift_ratio_reward))
+                
+            if "acceleration" in self.reward_type:
+                acc_record_x = np.array(self.acc_record['X-dir'])
+                acc_record_z = np.array(self.acc_record['Z-dir'])
+                print(f"acc_record shape: {acc_record_x.shape}")
 
-            reward += 0.1 * delta_v**0.5 / stress_ratio_range * -(np.log(1-max_stress_ratio_reward) + np.log(1-max_drift_ratio_reward))
-            
-        if "acceleration" in self.reward_type:
-            acc_record_x = np.array(self.acc_record['X-dir'])
-            acc_record_z = np.array(self.acc_record['Z-dir'])
-            print(f"acc_record shape: {acc_record_x.shape}")
-
-            # normalized reward: decrement / initial amount
-            acc_decrement_x = np.sum(acc_record_x[-2, :] - acc_record_x[-1, :])
-            acc_decrement_z = np.sum(acc_record_z[-2, :] - acc_record_z[-1, :])
-            if "normalized" in self.reward_type:
-                reward += (acc_decrement_x / np.sum(acc_record_x[0, :]) + acc_decrement_z / np.sum(acc_record_z[0, :]))
-            else:
-                reward += (acc_decrement_x + acc_decrement_z)
+                # normalized reward: decrement / initial amount
+                acc_decrement_x = np.sum(acc_record_x[-2, :] - acc_record_x[-1, :])
+                acc_decrement_z = np.sum(acc_record_z[-2, :] - acc_record_z[-1, :])
+                if "normalized" in self.reward_type:
+                    reward = (acc_decrement_x / np.sum(acc_record_x[0, :]) + acc_decrement_z / np.sum(acc_record_z[0, :]))
+                else:
+                    reward = (acc_decrement_x + acc_decrement_z)
+        else: 
+            reward = -1.0
 
         self.reward_record.append(reward)
 
@@ -319,7 +319,7 @@ class Environment:
                                                    self.logger)
         
         # 4. calculate reward based on recorded information
-        reward = self.calculate_reward()
+        reward = self.calculate_reward(whether_pass)
 
         # 5. make proper adjustments if structure meets terminal state
         if whether_pass == False:
@@ -331,7 +331,6 @@ class Environment:
             self.update_actions_record.pop(-1)
             self.update_actions_record_SCWB.pop(-1)
             self.static_response_record.pop(-1)
-            self.reward_record.pop(-1)
         elif whether_pass == True and sum(structure.story_level_sections) == 0:  
             # pass all constraints & already has minimum sections
             done = True
@@ -342,13 +341,9 @@ class Environment:
             done = False
         
         if done:
-            reward = -1
-            self.reward_record.append(reward)
             self.fail_name = fail_name
             self.fail_reason = fail_reason
 
         return structure, reward, done, fail_name, fail_reason
         
-
-
 
