@@ -83,7 +83,7 @@ class Record:
     def output(self, ckpt_dir: Path):
         with open(ckpt_dir / "training_record.txt", "w") as f: json.dump(self.training_record, f)
         with open(ckpt_dir / "testing_record.txt", "w") as f: json.dump(self.testing_record, f)
-        np.save(ckpt_dir / "learn_losses.npy", self.learn_losses)
-        np.save(ckpt_dir / "Q_values.npy", self.Q_values)
+        with open(ckpt_dir / "learn_losses.txt", "w") as f: json.dump(self.learn_losses, f)
+        with open(ckpt_dir / "Q_values.txt", "w") as f: json.dump(self.Q_values, f)
 
 

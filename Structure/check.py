@@ -33,8 +33,8 @@ def get_response(structure: Structure, analysis_dir: Path) -> tuple[dict[str, fl
 
 
 def process_response(structure: Structure, 
-                   load_cases: list[load.NodalLoad],
-                   responses: list[pisa.Response]) -> tuple[np.ndarray, dict[str, torch.Tensor], dict[str, np.float64]]:
+                     load_cases: list[load.NodalLoad],
+                     responses: list[pisa.Response]) -> tuple[np.ndarray, dict[str, torch.Tensor], dict[str, np.float64]]:
     '''Process structural responses and calculate constraint conditions.'''
     stress_ratios = np.zeros((structure.member_number, len(load_cases)))
     drift_ratios = np.zeros((structure.member_number, len(load_cases)))
@@ -120,13 +120,6 @@ def check_pass(load_cases: list[load.NodalLoad],
         if load_case.col_strength_case and (constraint_condition[i, 7] > PHI_C): 
             print(f"fail at {fail_name}, column_tension: {constraint_condition[i, 7]} > {PHI_C}")
             return False, fail_name, "column_tension"
-
-    # for load_case, response in list(zip(load_cases, responses)):
-    #     whether_pass, fail_reason = _check_code(structure, response, load_case, check_displacement)
-    #     if whether_pass is False:
-    #         return False, load_case.load_name, fail_reason, auxiliary_values
-    
-    # if _too_much_minimum_section(structure): return False, None, "minimum_section", auxiliary_values
         
     return True, None, None
 

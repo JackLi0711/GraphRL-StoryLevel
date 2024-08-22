@@ -321,7 +321,7 @@ class Environment:
         # 4. calculate reward based on recorded information
         reward = self.calculate_reward(whether_pass)
 
-        # 5. make proper adjustments if structure meets terminal state
+        # 5. make proper adjustments if the structure meets terminal state
         if whether_pass == False:
             # fail constraints
             done = True

@@ -85,7 +85,35 @@ def double_q_learning_error(states: torch.Tensor,
     delta = expected_q_values - q_values
     #print_Q(q_values, expected_q_values, rewards, delta, logger)
     return delta
-    
+
+
+def calc_delta(states: torch.Tensor,
+               actions: torch.Tensor,
+               rewards: torch.Tensor,
+               next_states: torch.Tensor,
+               dones: torch.Tensor,
+               infeasible_actions: np.ndarray[bool],
+               structure_story_ptr: typing.List[int],
+               gamma: float,
+               action_q_network: Q_Network,
+               value_q_network: Q_Network, 
+               logger) -> torch.Tensor:
+    """Compute the Japan's delta for Q-Learning."""
+    # action Q-network
+    Q_value = action_q_network.forward(states).squeeze()
+    q_values = Q_value[actions]
+
+    # value Q-network
+    tmp = value_q_network.forward(next_states).squeeze().detach()
+    tmp[infeasible_actions] = -1.0e20
+    next_q_values = torch.tensor([tmp[structure_story_ptr[i]:structure_story_ptr[i+1]].max() for i in range(len(structure_story_ptr)-1)], dtype=torch.float32, device=value_q_network.device, requires_grad=False)
+    expected_q_values = rewards + (gamma * next_q_values) * (1 - dones)
+
+    # delta
+    delta = expected_q_values - q_values
+
+    return delta
+
 
 
 
@@ -118,3 +146,4 @@ def calc_loss(states: torch.Tensor,
     loss = nn.MSELoss()(Q_current, Q_target)
 
     return loss
+

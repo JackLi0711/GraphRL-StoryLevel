@@ -50,7 +50,7 @@ class StateGNN(nn.Module):
         return state
 
 
-    def forward(self, x, edge_index, edge_attr, batch, story_batch, structure_story_ptr):
+    def forward(self, x, edge_index, edge_attr, batch, story_batch, structure_story_ptr) -> torch.Tensor:
         # node embedding
         x = self.encoder_mlp(x)
         for i in range(self.num_layers):
@@ -86,9 +86,9 @@ class Q_Network(nn.Module):
             nn.Linear(hidden_dim, q_value_dim),
         )
 
-    def forward(self, edge_state):
+    def forward(self, edge_state) -> torch.Tensor:
         edge_state = self.batch_norm(edge_state)  # shape: [total story_member_num, member_state_dim]
-        q_value = self.q_network(edge_state)    # shape: [total story_member_num, q_value_dim]
+        q_value = self.q_network(edge_state)  # shape: [total story_member_num, q_value_dim]
 
         return q_value
 
@@ -133,7 +133,7 @@ class GraphEmbedding(nn.Module):
 
         self.ActivationF = torch.nn.LeakyReLU(0.2)
 
-        self.Initialize_weight()
+        self._initialize_weight()
 
         self.n_feature_outputs = n_feature_outputs
         self.device = device
@@ -146,12 +146,14 @@ class GraphEmbedding(nn.Module):
         #     self.to('cpu')
         #     self.device = torch.device('cpu')
     
-    def Initialize_weight(self):
+
+    def _initialize_weight(self):
         for m in self._modules.values():
             if isinstance(m, torch.nn.Linear):
                 torch.nn.init.normal_(m.weight, mean=INIT_MEAN, std=INIT_STD)
 
-    def Connectivity(self, connectivity, n_nodes):
+
+    def _connectivity(self, connectivity, n_nodes):
         n_edges = connectivity.shape[0]  # shape: [n_edges, 2], 2: node1_index, node2_index
         adjacency = torch.zeros(n_nodes, n_nodes, dtype=torch.float32, device=self.device, requires_grad=False)
         adjacency[connectivity[:,0], connectivity[:,1]] = 1
@@ -168,7 +170,8 @@ class GraphEmbedding(nn.Module):
 
         return incidence_A, incidence_1, incidence_2, adjacency
 
-    def mu(self, v, mu, w, incidence_A, incidence_1, incidence_2, adjacency, mu_iter):
+
+    def _mu(self, v, mu, w, incidence_A, incidence_1, incidence_2, adjacency, mu_iter):
         '''
         - v [n_nodes, n_node_features]
         - mu [n_edges, n_edge_out_features]
@@ -188,7 +191,8 @@ class GraphEmbedding(nn.Module):
             mu = h1 + h2 + h3_1 + h3_2  # shape: [n_edges, n_edge_out_features]
 
         return mu
-        
+
+
     # def Q(self, mu, n_edges):
     #     if type(n_edges) is int: # normal operation
     #         mu_sum = torch.sum(mu, axis=0)
@@ -201,7 +205,8 @@ class GraphEmbedding(nn.Module):
     #     Q = self.l2_1(torch.cat((mu_sum,mu),1))
     #     return Q
 
-    def forward(self, x, edge_index, edge_attr, batch, story_batch, structure_story_ptr):
+
+    def forward(self, x, edge_index, edge_attr, batch, story_batch, structure_story_ptr) -> torch.Tensor:
         '''
         - graph.x [node_num, node_feature_num] --> v [n_nodes, n_node_in_features]
         - graph.edge_attr [edge_num * 2, edge_attr_num] --> w [n_edges, n_edge_in_features]
@@ -216,7 +221,7 @@ class GraphEmbedding(nn.Module):
         #connectivity = torch.cat([edge_index[0, edge_ptr[b]*2:edge_ptr[b+1]*2].reshape(-1, 2) for b in range(len(edge_ptr)-1)], dim=0)
         connectivity = edge_index[0].reshape(-1, 2)  # the result is the same as the above line
 
-        IA, I1, I2, D = self.Connectivity(connectivity, v.shape[0])
+        IA, I1, I2, D = self._connectivity(connectivity, v.shape[0])
 
         if type(v) is np.ndarray: 
             v = torch.tensor(v, dtype=torch.float32, device=self.device, requires_grad=False)
@@ -226,7 +231,7 @@ class GraphEmbedding(nn.Module):
         
         n_mu_iter = 3
         for i in range(n_mu_iter):
-            mu = self.mu(v, mu, w, IA, I1, I2, D, mu_iter=i)  # shape: [total n_edges, n_edge_out_features]
+            mu = self._mu(v, mu, w, IA, I1, I2, D, mu_iter=i)  # shape: [total n_edges, n_edge_out_features]
             # print("iter {0}: {1}".format(i,mu.norm(p=2)))
 
         story_mu = global_add_pool(mu, story_batch)  # shape: [total n_story_members, n_edge_out_features]
@@ -249,7 +254,11 @@ class GraphEmbedding(nn.Module):
         state = torch.cat((story_mu_sum,story_mu), 1)  # shape: [total n_story_members, n_edge_out_features*2]
 
         return state
-    
+
+
     def get_Q(self, edge_state) -> torch.Tensor:
+
         q_value = self.l2_1(edge_state)  # shape: [total n_story_members, n_action_types=2]
+        
         return q_value[:, 0]  # action_type = 0: dec, 1: inc
+

@@ -246,8 +246,8 @@ class Structure:
         story_xdir_beam_member = []
         story_zdir_beam_member = []
         story_column_member = []
-        story_inner_column_member = []
         story_outer_column_member = []
+        story_inner_column_member = []
 
         # prepare story level member group sections for member_section_dict
         if self.story_level_sections is not None:
@@ -258,8 +258,8 @@ class Structure:
             # for columns:
             if y != y_grid[-1]:
                 story_column = []
-                story_inner_column = []
                 story_outer_column = []
+                story_inner_column = []
                 y_upper = y_grid[i+1]
                 for x in x_grid:
                     for z in z_grid:

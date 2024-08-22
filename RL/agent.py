@@ -136,7 +136,7 @@ class DeepQAgent(Agent):
 
         # initialize pretrained model
         if pretrained_ckpt_dir:
-            self._load_model(self, pretrained_ckpt_dir, self.logger)
+            self._load_model(pretrained_ckpt_dir, self.logger)
 
         
     # policies
@@ -151,7 +151,7 @@ class DeepQAgent(Agent):
     def _greedy_policy(self, state: torch.Tensor, dont_select_story_indexes: List[int]) -> int:
         """Choose an action that maximizes the action_values given the current state."""
         with torch.no_grad():
-            q_values = self.online_q_network(state).index_fill(dim=0, index=torch.tensor(dont_select_story_indexes).to(torch.int64).to(self.device), value=-10000)
+            q_values = self.online_q_network.forward(state).index_fill(dim=0, index=torch.tensor(dont_select_story_indexes).to(torch.int64).to(self.device), value=-10000)
             q_val = q_values.max().cpu().item()
             action = q_values.argmax().cpu().item()
             self.logger.info(f"greed_policy's selection: {action}, Q value: {q_val}")
@@ -191,7 +191,6 @@ class DeepQAgent(Agent):
         if greedy:
             epsilon = 0
             action, q_val = self._epsilon_greedy_policy(state, epsilon, dont_select_story_indexes)
-        
         # choose uniform at random if agent has insufficient experience
         elif not self._has_sufficient_experience():
             action = self._uniform_random_policy(state, dont_select_story_indexes)
@@ -416,7 +415,7 @@ class JapanDeepQAgent():
 
         # initialize pretrained model
         if pretrained_ckpt_dir:
-            self._load_model(self, pretrained_ckpt_dir, self.logger)
+            self._load_model(pretrained_ckpt_dir, self.logger)
         
 
     def choose_action(self, 
@@ -600,7 +599,9 @@ def _train_an_episode(agent: DeepQAgent,
         action, q_val = agent.choose_action(state, 
                                             structure.already_minimum_section_story_indexes,
                                             dont_select_story_member_indexes)
-        print(f"\n-----episode: {agent._number_episodes+1:4d}, timestep: {agent._number_timesteps+1:3d}, story_level_sections: {structure.story_level_sections}, action: {action:3d}")
+        member_category = structure.story_level_categories[action]
+        update_story = (action % structure.story_num) + 1
+        print(f"\n-----episode: {agent._number_episodes+1:4d}, timestep: {agent._number_timesteps+1:3d}, story_level_sections: {structure.story_level_sections}, action: {action:3d} [{update_story}F {member_category}]")
         structure, reward, done, fail_name, fail_reason = env.step(structure, action)
 
         # record
@@ -663,7 +664,9 @@ def _testing(agent: DeepQAgent,
                                         structure.already_minimum_section_story_indexes,
                                         dont_select_story_member_indexes, 
                                         greedy=True)
-        print(f"\n*****Testing Episode, story_level_sections: {structure.story_level_sections}, action: {action:3d}")
+        member_category = structure.story_level_categories[action]
+        update_story = (action % structure.story_num) + 1
+        print(f"\n*****Testing Episode, story_level_sections: {structure.story_level_sections}, action: {action:3d} [{update_story}F {member_category}]")
         structure, reward, done, fail_name, fail_reason = env.step(structure, action)
 
         # get next state
@@ -788,3 +791,4 @@ def train(agent: DeepQAgent,
                 agent.save_model(env, name="HighestScore", logger=logger)
             if (i+1) % 50 == 0: 
                 agent.save_model(env, name=f"Episode{str(i+1)}", logger=logger)
+

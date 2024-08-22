@@ -36,18 +36,16 @@ class LoadCase:
 
 
 class NodalLoad:
-    def __init__(
-        self, 
-        load_name, 
-        structure: Structure, 
-        load_case: LoadCase, 
-        earthquake_loads: List[Dict[str, float]], 
-        drift_case=False, 
-        col_strength_case=False, 
-        Fus: List[float] = None
-    ):
-        self.load_name = load_name
+    def __init__(self, 
+                 load_name, 
+                 structure: Structure, 
+                 load_case: LoadCase, 
+                 earthquake_loads: List[Dict[str, float]], 
+                 drift_case=False, 
+                 col_strength_case=False, 
+                 Fus: List[float] = None):
         
+        self.load_name = load_name
         self.D = load_case.D
         self.L = load_case.L
         self.E = load_case.E
@@ -61,12 +59,17 @@ class NodalLoad:
         self.drift_case = drift_case
         self.col_strength_case = col_strength_case
 
+        if sum(self.structure.x_span_lens) <= sum(self.structure.z_span_lens):
+            earthquake_load_xdir = earthquake_loads[0]  # 1st period --> parallel to shorter side
+            earthquake_load_zdir = earthquake_loads[1]  # 2nd period --> parallel to longer side
+        else:
+            earthquake_load_zdir = earthquake_loads[0]  # 1st period --> parallel to shorter side
+            earthquake_load_xdir = earthquake_loads[1]  # 2nd period --> parallel to longer side
+
         if (self.E_x_n or self.E_x_p):
-            # PISA: X-dir. --> 2nd period
-            earthquake_load = earthquake_loads[1]
+            earthquake_load = earthquake_load_xdir
         else: 
-            # PISA: Z-dir. --> 1st period
-            earthquake_load = earthquake_loads[0]
+            earthquake_load = earthquake_load_zdir
         
         if drift_case:
             self.earthquake_load = earthquake_load["V_star"]

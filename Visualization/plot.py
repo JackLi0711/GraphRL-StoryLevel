@@ -31,7 +31,7 @@ def plot_loss(learn_losses: List[List[float]], checkpoint_dir: Path) -> None:
     plt.plot(ave_losses, color='black', linewidth=1)
     plt.grid()
     plt.yscale("log")
-    plt.xlabel("trained iterations")
+    plt.xlabel("trained episodes")
     plt.ylabel("average batch loss")
     plt.savefig(checkpoint_dir / "loss.png")
     plt.close()
@@ -155,7 +155,10 @@ def plot_test_behaviors(rec: Record, env: Environment, checkpoint_dir: Path) -> 
     plt.close()
 
 
+
+
 if __name__ == "__main__":
     train_fail_reasons = ["minimum_section", "minimum_section", "drift_ratio", "beam_moment", "minimum_section", "column_tension", "drift_ratio", "minimum_section"]
     test_fail_reasons = ["strong_column_weak_beam", "column_compression", "soft_story", "drift_ratio", "beam_moment", "minimum_section", "column_tension", "drift_ratio", "minimum_section"]
     plot_fail_reasons(train_fail_reasons, test_fail_reasons, None)
+
