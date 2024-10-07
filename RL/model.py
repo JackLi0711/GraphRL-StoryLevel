@@ -24,7 +24,7 @@ class StateGNN(nn.Module):
         self.decoder_mlp = nn.Sequential(
             nn.Linear(hidden_dim, hidden_dim),
             nn.ReLU(),
-            nn.BatchNorm1d(hidden_dim)
+            #nn.BatchNorm1d(hidden_dim)
         )
 
         # edge embedding
@@ -32,9 +32,8 @@ class StateGNN(nn.Module):
         self.edge_mlp = nn.Sequential(
             nn.Linear(edge_embedding_input_dim, member_state_dim),
             nn.ReLU(),
-            nn.BatchNorm1d(member_state_dim)
+            #nn.BatchNorm1d(member_state_dim)
         )
-
 
     def _state_global_aggregation(self, story_embedding, graph_embedding, structure_story_ptr):
         # shapes
@@ -49,7 +48,6 @@ class StateGNN(nn.Module):
         
         return state
 
-
     def forward(self, x, edge_index, edge_attr, batch, story_batch, structure_story_ptr) -> torch.Tensor:
         # node embedding
         x = self.encoder_mlp(x)
@@ -61,17 +59,17 @@ class StateGNN(nn.Module):
         # edge embedding --> concat node embedding in two ends and go through an MLP
         index_i, index_j = edge_index
         node_embedding_i, node_embedding_j = node_embedding[index_i], node_embedding[index_j]
-        edge_input = torch.cat([node_embedding_i[::2], node_embedding_j[::2], edge_attr[::2]], dim=1)
-        edge_embedding = self.edge_mlp(edge_input)  # shape: [total edge_num, hidden_dim]
+        edge_input = torch.cat([node_embedding_i[::2], node_embedding_j[::2], edge_attr[::2]], dim=1)  # shape: [total edge_num, hidden_dim] + [total edge_num, hidden_dim] + [total edge_num, edge_feature_dim] = [total edge_num, hidden_dim*2 + edge_feature_dim]
+        edge_embedding = self.edge_mlp(edge_input)  # shape: [total edge_num, member_state_dim]
 
         # graph embedding --> use edge embedding to create story-level and graph-level embedding
         batch = torch.zeros(edge_embedding.shape[0]).to(x.device).to(torch.int64) if batch is None else batch
-        graph_embedding = global_add_pool(edge_embedding, batch)        # shape: [graph_num, hidden_dim]
-        story_embedding = global_add_pool(edge_embedding, story_batch)  # shape: [total story_member_num, hidden_dim], story_member_num = story_num * 4 (x-beam, z-beam, out-col, in-col)
+        graph_embedding = global_add_pool(edge_embedding, batch)        # shape: [graph_num, member_state_dim]
+        story_embedding = global_add_pool(edge_embedding, story_batch)  # shape: [total story_member_num, member_state_dim], story_member_num = story_num * 4 (x-beam, z-beam, out-col, in-col)
 
         # state embedding --> state for story k = story_embedding(k) + graph_embedding
         structure_story_ptr = [0, story_embedding.shape[0]] if structure_story_ptr is None else structure_story_ptr
-        state = self._state_global_aggregation(story_embedding, graph_embedding, structure_story_ptr)  # shape: [total story_member_num, hidden_dim*2]
+        state = self._state_global_aggregation(story_embedding, graph_embedding, structure_story_ptr)  # shape: [total story_member_num, member_state_dim*2]
 
         return state
 
@@ -79,16 +77,19 @@ class StateGNN(nn.Module):
 class Q_Network(nn.Module):
     def __init__(self, member_state_dim, hidden_dim, q_value_dim):
         super().__init__()
-        self.batch_norm = nn.BatchNorm1d(member_state_dim)
-        self.q_network = nn.Sequential(
-            nn.Linear(member_state_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, q_value_dim),
-        )
+        # self.batch_norm = nn.BatchNorm1d(member_state_dim)
+        # self.q_network = nn.Sequential(
+        #     nn.Linear(member_state_dim, hidden_dim),
+        #     nn.ReLU(),
+        #     nn.Linear(hidden_dim, q_value_dim),
+        # )
+        self.l2_1 = nn.Linear(member_state_dim, q_value_dim, bias=False)
 
     def forward(self, edge_state) -> torch.Tensor:
-        edge_state = self.batch_norm(edge_state)  # shape: [total story_member_num, member_state_dim]
-        q_value = self.q_network(edge_state)  # shape: [total story_member_num, q_value_dim]
+        # edge_state = self.batch_norm(edge_state)  # shape: [total story_member_num, member_state_dim]
+        # q_value = self.q_network(edge_state)  # shape: [total story_member_num, q_value_dim]
+
+        q_value = self.l2_1(edge_state)  # shape: [total story_member_num, q_value_dim]
 
         return q_value
 
@@ -261,4 +262,3 @@ class GraphEmbedding(nn.Module):
         q_value = self.l2_1(edge_state)  # shape: [total n_story_members, n_action_types=2]
         
         return q_value[:, 0]  # action_type = 0: dec, 1: inc
-

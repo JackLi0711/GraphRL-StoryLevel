@@ -24,23 +24,18 @@ def parse_args() -> Namespace:
 	parser = ArgumentParser()
  
 	# pretrained model
-	#parser.add_argument("--pretrained_ckpt_dir", type=Path, default="./Results/2023_03_10__20_42_54__3d_small_random_shape_epoch_300_buffer_3000_batch_size_192_gamma_099/")
 	parser.add_argument("--pretrained_ckpt_dir", type=Path, default=None)
 
 	# checkpoint
 	parser.add_argument("--ckpt_dir", type=Path, default="./Results/AdjustedMoreSections/")
-	#parser.add_argument("--ckpt_dir", type=Path, default="./Results/AccelerationReward/")
-
-	# suffix
-	parser.add_argument("--suffix", type=str, default="RandShape_TaiModel_DecoupleGNN_MatReward_ResFeatures_EpsilonDecay099_Buffer3000_Batch256_Epoch300")  # material
-	#parser.add_argument("--suffix", type=str, default="doNDA_NormalizedReward_RestrictAction_NoColStrength_Epoch300")  # acceleration
+	parser.add_argument("--suffix", type=str, default="RandShape_TaiModifiedModel_MatReward_ResFeatures_TestStructure446_AddExpOften_LinearDecay010_Buffer10000_Batch256_Epoch1000")
 
 	# nonlinear dynamic analysis simulator
 	parser.add_argument("--do_nonlinear_dynamic_analysis", action="store_true", default=False)
 	parser.add_argument("--check_acceleration", action="store_true", default=False)
 	parser.add_argument("--check_displacement", action="store_true", default=True)
-	parser.add_argument("--graph_lstm_dir", type=Path, default="./NonlinearDynamicAnalysisSimulator/trained_GraphLSTM/2024_01_14__00_07_29/")
-	parser.add_argument("--ground_motion_dir", type=Path, default="./NonlinearDynamicAnalysisSimulator/ground_motions/selected_ground_motions_MCE/")
+	parser.add_argument("--graph_lstm_dir", type=Path, default="")  # "./NonlinearDynamicAnalysisSimulator/trained_GraphLSTM/2024_01_14__00_07_29/"
+	parser.add_argument("--ground_motion_dir", type=Path, default="")  # "./NonlinearDynamicAnalysisSimulator/ground_motions/selected_ground_motions_MCE/"
 	parser.add_argument("--ground_motion_number", type=int, default=11, help="ASCE says 11 is better")
 
 	# structure
@@ -57,7 +52,7 @@ def parse_args() -> Namespace:
 	parser.add_argument("--num_layers", type=int, default=3)
 
 	# buffer
-	parser.add_argument("--buffer_size", type=int, default=3000)
+	parser.add_argument("--buffer_size", type=int, default=10000)
 	parser.add_argument("--update_frequency", type=int, default=1)
 	parser.add_argument("--add_experience_frequency", type=int, default=1)
 
@@ -69,7 +64,7 @@ def parse_args() -> Namespace:
 	parser.add_argument("--test_frequency", type=int, default=5)
 	parser.add_argument("--batch_size", type=int, default=256)  # original: 256
 	parser.add_argument("--lr", type=float, default=1e-5)
-	parser.add_argument("--num_epoch", type=int, default=300, help="epoch == episode")
+	parser.add_argument("--num_epoch", type=int, default=1000, help="epoch == episode")
 	parser.add_argument("--random_seed", type=int, default=731, help="fixed random seed")
 
 	args = parser.parse_args()
@@ -141,24 +136,25 @@ def main(args):
 		return 1 - np.exp(-rate * n)
 	beta_annealing_schedule = lambda n: exponential_annealing_schedule(n, 0.02)
 
-	# Epsilon decay schedule
-	def power_decay_schedule(episode_number: int,
-							 decay_factor: float,
-							 minimum_epsilon: float) -> float:
-		"""Power decay schedule found in other practical applications."""
+	# Power decay schedule
+	def power_decay_schedule(episode_number: int, decay_factor: float, minimum_epsilon: float=1e-2) -> float:
 		return max(decay_factor ** episode_number, minimum_epsilon)
 	epsilon_decay_schedule = lambda n: power_decay_schedule(n, args.epsilon, 1e-2)
 
 	# Linear decay schedule
-	def linear_decay_schedule(episode_number: int,
-						      total_episode: int,
-							  minimum_epsilon: float):
+	def linear_decay_schedule(episode_number: int, total_episode: int, minimum_epsilon: float=1e-1) -> float:
 		return max(1.0 - episode_number/total_episode, minimum_epsilon)
 	straight_decay_schedule = lambda n: linear_decay_schedule(n, args.num_epoch, 1e-1)
 
+	# Cosine decay schedule
+	def cosine_decay_schedule(episode_number: int, total_episode: int, minimum_epsilon: float=1e-1) -> float:
+		linear_decay = 1.0 - episode_number / total_episode
+		cosine_decay =  0.75 * linear_decay + 0.25 * linear_decay * np.cos(np.pi / 100 * episode_number)
+		return max(cosine_decay, minimum_epsilon)
+	periodic_decay_schedule = lambda n: cosine_decay_schedule(n, args.num_epoch, 1e-1)
+
 	# Constant epsilon schedule (Japan: RL for 2D frame)
-	def constant_epsilon_schedule(episode_number: int,
-							   	  constant_epsilon: float=1e-1) -> float:
+	def constant_epsilon_schedule(episode_number: int, constant_epsilon: float=1e-1) -> float:
 		return constant_epsilon
 	fixed_epsilon_schedule = lambda n: constant_epsilon_schedule(n, 1e-1)
 
@@ -174,7 +170,7 @@ def main(args):
 		"batch_size": args.batch_size,
 		"lr": args.lr,
 		"buffer_size": args.buffer_size,
-		"epsilon_decay_schedule": epsilon_decay_schedule,
+		"epsilon_decay_schedule": straight_decay_schedule,
 		"synchronize_steps": args.synchronize_steps,
 		"soft_update_alpha": args.soft_update_alpha,
 		"gamma": args.gamma,
@@ -248,3 +244,4 @@ def main(args):
 if __name__ == "__main__":
 	args = parse_args()
 	main(args)
+

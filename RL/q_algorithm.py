@@ -97,6 +97,7 @@ def calc_delta(states: torch.Tensor,
                gamma: float,
                action_q_network: Q_Network,
                value_q_network: Q_Network, 
+               device: torch.device,
                logger) -> torch.Tensor:
     """Compute the Japan's delta for Q-Learning."""
     # action Q-network
@@ -106,7 +107,7 @@ def calc_delta(states: torch.Tensor,
     # value Q-network
     tmp = value_q_network.forward(next_states).squeeze().detach()
     tmp[infeasible_actions] = -1.0e20
-    next_q_values = torch.tensor([tmp[structure_story_ptr[i]:structure_story_ptr[i+1]].max() for i in range(len(structure_story_ptr)-1)], dtype=torch.float32, device=value_q_network.device, requires_grad=False)
+    next_q_values = torch.tensor([tmp[structure_story_ptr[i]:structure_story_ptr[i+1]].max() for i in range(len(structure_story_ptr)-1)], dtype=torch.float32, device=device, requires_grad=False)
     expected_q_values = rewards + (gamma * next_q_values) * (1 - dones)
 
     # delta
@@ -146,4 +147,3 @@ def calc_loss(states: torch.Tensor,
     loss = nn.MSELoss()(Q_current, Q_target)
 
     return loss
-

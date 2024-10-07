@@ -52,7 +52,7 @@ class Record:
         * initial volume
         """
         record = self.testing_record if testing else self.training_record
-        record["geometry"].append([structure.x_span_num, structure.z_span_num, structure.story_num, structure.x_span_lens[0], structure.z_span_lens[0], structure.story_height])
+        record["geometry"].append([structure.x_span_num, structure.z_span_num, structure.story_num, structure.x_span_lens, structure.z_span_lens, structure.story_height])
         record["initial_design"].append([i for i in structure.story_level_sections])
         record["initial_volume"].append(structure.calculate_material_usage())
 

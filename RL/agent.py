@@ -106,37 +106,40 @@ class DeepQAgent(Agent):
             "logger": self.logger
         }
         self._buffer = buffer.ExperienceReplayBuffer(**_replay_buffer_kwargs)
-        self._epsilon_decay_schedule = epsilon_decay_schedule
-        self._gamma = gamma
         
         # initialize GNN
-        model_kwargs = {"node_feature_dim": node_feature_dim, "edge_feature_dim": edge_feature_dim, "hidden_dim": hidden_dim,
-                        "member_state_dim": hidden_dim, "num_layers": num_layers}
+        model_kwargs = {"node_feature_dim": node_feature_dim, "edge_feature_dim": edge_feature_dim, "hidden_dim": hidden_dim, "member_state_dim": hidden_dim, "num_layers": num_layers}
         self.gnn = model.StateGNN(**model_kwargs).to(self.device)
-        
+        self.logger.critical(f"gnn: \n{self.gnn}")
+
         # initialize Q-Networks
-        self._update_frequency = update_frequency
-        self._synchronize_steps = synchronize_steps
-        self._soft_update_alpha = soft_update_alpha
-        self._add_experience_frequency = add_experience_frequency
         q_net_kwargs = {"member_state_dim": hidden_dim * 2, "hidden_dim": hidden_dim, "q_value_dim": 1}
         self.online_q_network = model.Q_Network(**q_net_kwargs).to(self.device)
         self.target_q_network = model.Q_Network(**q_net_kwargs).to(self.device)
         synchronize_q_networks(self.target_q_network, self.online_q_network)
+        self.logger.critical(f"online_q_network: \n{self.online_q_network}")
 
         # initialize optimizer
         params = list(self.gnn.parameters()) + list(self.online_q_network.parameters())
         self._optimizer = optim.Adam(params, lr=lr)  # Japan: RMSprop / Tony: Adam
-        
+
+        # initialize agent hyperparameters
+        self._gamma = gamma
+        self._epsilon_decay_schedule = epsilon_decay_schedule
+        self._synchronize_steps = synchronize_steps
+        self._soft_update_alpha = soft_update_alpha
+        self._update_frequency = update_frequency
+        self._add_experience_frequency = add_experience_frequency
+        self._test_frequency = test_frequency
+
         # initialize some counters
         self._number_episodes = 0
         self._number_timesteps = 0
         self._backprop_count = 0
-        self._test_frequency = test_frequency
 
         # initialize pretrained model
         if pretrained_ckpt_dir:
-            self._load_model(pretrained_ckpt_dir, self.logger)
+            self._load_model(pretrained_ckpt_dir)
 
         
     # policies
@@ -196,6 +199,7 @@ class DeepQAgent(Agent):
             action = self._uniform_random_policy(state, dont_select_story_indexes)
         else:
             epsilon = self._epsilon_decay_schedule(self._number_episodes)
+            print(epsilon)
             action, q_val = self._epsilon_greedy_policy(state, epsilon, dont_select_story_indexes)
             
         return action, q_val
@@ -207,15 +211,15 @@ class DeepQAgent(Agent):
         
         # ptr
         member_numbers = [int(graph.edge_attr.shape[0]/2) for graph in graphs]  
-        member_ptr = torch.tensor([sum(member_numbers[:i]) for i in range(len(member_numbers)+1)])
+        member_ptr = torch.tensor([sum(member_numbers[:i]) for i in range(len(member_numbers)+1)])  # size: [batch_size + 1]
         
         member_batch = []
         for i, member_number in enumerate(member_numbers):
             member_batch += [i] * member_number
-        member_batch = torch.tensor(member_batch).to(self.device)
+        member_batch = torch.tensor(member_batch).to(self.device)  # size: [total edge_num]
 
         # story level pooling preparation
-        structure_story_ptr = []    # if the first and second graph have 16, 12 story members, it will be [0, 16, 28]
+        structure_story_ptr = []  # if the first and second graph have 16, 12 story members, it will be [0, 16, 28]
         story_batch = torch.zeros(member_batch.shape[0])
         story_count = 0
         for i, graph in enumerate(graphs):
@@ -233,8 +237,8 @@ class DeepQAgent(Agent):
         graphs_batch = next(iter(loader)).to(self.device)
         next_graphs_batch = next(iter(loader_next)).to(self.device)
 
-        states = self.gnn.forward(graphs_batch.x, graphs_batch.edge_index, graphs_batch.edge_attr, member_batch, story_batch, structure_story_ptr)
-        next_states = self.gnn.forward(next_graphs_batch.x, next_graphs_batch.edge_index, next_graphs_batch.edge_attr, member_batch, story_batch, structure_story_ptr)
+        states = self.gnn.forward(graphs_batch.x, graphs_batch.edge_index, graphs_batch.edge_attr, member_batch, story_batch, structure_story_ptr)  # shape: [total story_member_num, hidden_dim*2]
+        next_states = self.gnn.forward(next_graphs_batch.x, next_graphs_batch.edge_index, next_graphs_batch.edge_attr, member_batch, story_batch, structure_story_ptr)  # shape: [total story_member_num, hidden_dim*2]
 
         # convert batch-values to tensors: [batch_size]
         actions = torch.tensor(actions)
@@ -266,7 +270,7 @@ class DeepQAgent(Agent):
         self._optimizer.step()
         
         # synchronize online and target network
-        if self._synchronize_steps:
+        if self._synchronize_steps is not None:
             if self._backprop_count % self._synchronize_steps == 0:
                 self.logger.info("Synchronizing online q network to target network")
                 synchronize_q_networks(self.target_q_network, self.online_q_network)
@@ -323,24 +327,24 @@ class DeepQAgent(Agent):
 
 
 
-    def save_model(self, env: Environment, name: str, logger: logging.Logger) -> None:
+    def save_model(self, env: Environment, name: str) -> None:
         save_model_path = env.checkpoint_dir / "models" / f"model_{name}.pt"
         torch.save({
             'gnn': self.gnn.state_dict(),
             'online_q_network': self.online_q_network.state_dict(),
             'target_q_network': self.target_q_network.state_dict(),
             }, save_model_path)
-        logger.info(f" ---> model saved to {save_model_path}\n\n\n")
+        self.logger.info(f" ---> model saved to {save_model_path}\n\n\n")
 
 
-    def _load_model(self, load_ckpt_dir, logger: logging.Logger) -> None:
+    def _load_model(self, load_ckpt_dir) -> None:
         # theta_1, theta_2, theta_3, online_q_network, target_q_network
         save_model_path = load_ckpt_dir #/ "model.pt"
         checkpoint = torch.load(save_model_path, map_location=torch.device(self.device))
         self.gnn.load_state_dict(checkpoint['gnn'])    
         self.online_q_network.load_state_dict(checkpoint['online_q_network'])    
         self.target_q_network.load_state_dict(checkpoint['target_q_network'])    
-        logger.info(f"model are loaded from {save_model_path}")
+        self.logger.info(f"model are loaded from {save_model_path}")
 
 
 
@@ -559,21 +563,21 @@ class JapanDeepQAgent():
 
 
 
-    def save_model(self, env: Environment, name: str, logger: logging.Logger) -> None:
+    def save_model(self, env: Environment, name: str) -> None:
         save_model_path = env.checkpoint_dir / "models" / f"model_{name}.pt"
         torch.save({
                 "online_model": deepcopy(self.online_model).to("cpu").state_dict(),
                 "target_model": deepcopy(self.target_model).to("cpu").state_dict(),
                 }, save_model_path)
-        logger.info(f" ---> model saved to {save_model_path}\n\n\n")
+        self.logger.info(f" ---> model saved to {save_model_path}\n\n\n")
 
 
-    def _load_model(self, load_ckpt_dir, logger: logging.Logger) -> None:
+    def _load_model(self, load_ckpt_dir) -> None:
         save_model_path = load_ckpt_dir
         checkpoint = torch.load(save_model_path, map_location=torch.device(self.device))
         self.online_model.load_state_dict(checkpoint["online_model"])    
         self.target_model.load_state_dict(checkpoint["target_model"])    
-        logger.info(f"model are loaded from {save_model_path}")
+        self.logger.info(f"model are loaded from {save_model_path}")
 
 
 
@@ -786,9 +790,9 @@ def train(agent: DeepQAgent,
             rec.output(env.checkpoint_dir)
 
             if np.argmin(rec.testing_record["final_volume"]) == len(rec.testing_record["final_volume"])-1: 
-                agent.save_model(env, name="MinimumUsage", logger=logger)
+                agent.save_model(env, name="MinimumUsage")
             if np.argmax(rec.testing_record["score"]) == len(rec.testing_record["score"])-1: 
-                agent.save_model(env, name="HighestScore", logger=logger)
+                agent.save_model(env, name="HighestScore")
             if (i+1) % 50 == 0: 
-                agent.save_model(env, name=f"Episode{str(i+1)}", logger=logger)
+                agent.save_model(env, name=f"Episode{str(i+1)}")
 
