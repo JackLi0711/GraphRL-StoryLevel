@@ -1,3 +1,4 @@
+import time
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -49,6 +50,7 @@ class StateGNN(nn.Module):
         return state
 
     def forward(self, x, edge_index, edge_attr, batch, story_batch, structure_story_ptr) -> torch.Tensor:
+        t_start = time.time()
         # node embedding
         x = self.encoder_mlp(x)
         for i in range(self.num_layers):
@@ -70,7 +72,8 @@ class StateGNN(nn.Module):
         # state embedding --> state for story k = story_embedding(k) + graph_embedding
         structure_story_ptr = [0, story_embedding.shape[0]] if structure_story_ptr is None else structure_story_ptr
         state = self._state_global_aggregation(story_embedding, graph_embedding, structure_story_ptr)  # shape: [total story_member_num, member_state_dim*2]
-
+        t_end = time.time()
+        print(f"\tused time StateGNN.forward(): {t_end - t_start:.3f} sec")
         return state
 
 

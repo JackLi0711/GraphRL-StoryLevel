@@ -1,3 +1,4 @@
+import time
 import torch
 import typing
 import numpy as np
@@ -80,10 +81,13 @@ def double_q_learning_error(states: torch.Tensor,
                             value_q_network: Q_Network,
                             logger) -> torch.Tensor:
     """Compute the TD-Error for prioritized experience replay."""
+    t_start = time.time()
     expected_q_values = double_q_learning_update(next_states, rewards, dones, infeasible_actions, structure_story_ptr, gamma, action_q_network, value_q_network)
     q_values = action_q_network.forward(states).squeeze()[actions] 
     delta = expected_q_values - q_values
     #print_Q(q_values, expected_q_values, rewards, delta, logger)
+    t_end = time.time()
+    print(f"\tused time for q_algorithm.double_q_learning_error: {t_end - t_start:.3f} sec")
     return delta
 
 

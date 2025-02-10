@@ -22,13 +22,13 @@ def _read_norm_dict(folder):
 
 
 def _init_model(folder, args, device):
-    model_path = folder / "model.pt"
+    model_path = folder / "Models" / "model_Best.pt"
     model_kwargs = {"node_dim": 35, "edge_dim": 4, 
                     "gnn_num_layers": args.gnn_num_layers, "head_num": args.head_num,
                     "gnn_hidden_dim": args.gnn_hidden_dim, "latent_dim": args.latent_dim,
                     "graph_lstm_hidden_dim": args.graph_lstm_hidden_dim, "graph_lstm_num_layers": args.graph_lstm_num_layers,
                     "node_lstm_hidden_dim": args.node_lstm_hidden_dim, "node_lstm_num_layers": args.node_lstm_num_layers,
-                    "ground_motion_dim": 20, "output_dim": 18, "device": device}
+                    "ground_motion_dim": 20, "output_dim": 30, "device": device}
     model = GraphLSTM(**model_kwargs).to(device)
     print("--- Loading GraphLSTM from:", str(model_path))
     model.load_state_dict(torch.load(model_path, map_location=torch.device(device)))
@@ -131,7 +131,7 @@ def load_ground_motions(ground_motion_dir, ground_motion_number, nda_norm_dict):
         print("---Loading ground motion:", gm_folder)
         gm_folder = ground_motion_dir / gm_folder
         ground_motions = _read_ground_motion_text_from_folder(gm_folder)  # shape: (1, 500, 10+10)
-        ground_motions /= nda_norm_dict["ground_motion"]
+        ground_motions = (ground_motions - nda_norm_dict["ground_motion"][0]) / (nda_norm_dict["ground_motion"][1] - nda_norm_dict["ground_motion"][0])
         MCE_ground_motion_set.append(ground_motions)
         DBE_ground_motion_set.append(ground_motions * 3 / 4)
 

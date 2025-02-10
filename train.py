@@ -27,15 +27,15 @@ def parse_args() -> Namespace:
 	parser.add_argument("--pretrained_ckpt_dir", type=Path, default=None)
 
 	# checkpoint
-	parser.add_argument("--ckpt_dir", type=Path, default="./Results/AdjustedMoreSections/")
-	parser.add_argument("--suffix", type=str, default="RandShape_TaiModifiedModel_MatReward_ResFeatures_TestStructure446_AddExpOften_LinearDecay010_Buffer10000_Batch256_Epoch1000")
+	parser.add_argument("--ckpt_dir", type=Path, default="./Results/AdjustedMoreSections/RandomShape")
+	parser.add_argument("--suffix", type=str, default="TaiModifiedModel_MatReward_doNDA_StaResFeatures_LinearDecay010_Buffer10000_Batch256_Epoch1000")
 
 	# nonlinear dynamic analysis simulator
-	parser.add_argument("--do_nonlinear_dynamic_analysis", action="store_true", default=False)
+	parser.add_argument("--do_nonlinear_dynamic_analysis", action="store_true", default=True)
 	parser.add_argument("--check_acceleration", action="store_true", default=False)
 	parser.add_argument("--check_displacement", action="store_true", default=True)
-	parser.add_argument("--graph_lstm_dir", type=Path, default="")  # "./NonlinearDynamicAnalysisSimulator/trained_GraphLSTM/2024_01_14__00_07_29/"
-	parser.add_argument("--ground_motion_dir", type=Path, default="")  # "./NonlinearDynamicAnalysisSimulator/ground_motions/selected_ground_motions_MCE/"
+	parser.add_argument("--graph_lstm_dir", type=Path, default="./NonlinearDynamicAnalysisSimulator/trained_GraphLSTM/2024_11_07__07_17_12/")  # "./NonlinearDynamicAnalysisSimulator/trained_GraphLSTM/2024_11_07__07_17_12/"
+	parser.add_argument("--ground_motion_dir", type=Path, default="./NonlinearDynamicAnalysisSimulator/ground_motions/selected_ground_motions_World_processed_one_scaling_MCE/")  # "./NonlinearDynamicAnalysisSimulator/ground_motions/selected_ground_motions_World_processed_one_scaling_MCE/"
 	parser.add_argument("--ground_motion_number", type=int, default=11, help="ASCE says 11 is better")
 
 	# structure

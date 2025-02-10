@@ -1,3 +1,4 @@
+import time
 import torch
 import logging
 import numpy as np
@@ -18,17 +19,21 @@ STORY_DRIFT_RATIO_LIMIT = 0.005
 
 def get_response(structure: Structure, analysis_dir: Path) -> tuple[dict[str, float], list[load.NodalLoad], list[pisa.Response]]:
     '''Get load cases and responses of static analysis run by PISA3D.'''
-    first_mode_period, second_mode_period = pisa.dynamic_analysis_period(structure, analysis_dir)[0:2]
-    earthquake_forces, Fus = earthquake.design_earthquake_force(structure, first_mode_period, second_mode_period)
-    auxiliary_values = {"first_mode_period": first_mode_period, 
-                        "second_mode_period": second_mode_period, 
+    t_start = time.time()
+    structure.first_mode_period, structure.second_mode_period, structure.third_mode_period, structure.node_first_mode_shape, structure.node_second_mode_shape, structure.node_third_mode_shape = pisa.run_modal_analysis(structure)
+    earthquake_forces, Fus = earthquake.design_earthquake_force(structure)
+    auxiliary_values = {"first_mode_period": structure.first_mode_period, 
+                        "second_mode_period": structure.second_mode_period, 
                         "Fu1": Fus[0],
                         "Fu2": Fus[1]}
     load_cases = load.get_load_cases(structure, earthquake_forces, Fus)
-    responses = []
-    for load_case in load_cases:
-        response = pisa.run_load_case(structure, load_case, analysis_dir)
-        responses.append(response)
+    # responses = []
+    # for load_case in load_cases:
+    #     response = pisa.run_load_case(structure, load_case, analysis_dir)
+    #     responses.append(response)
+    responses = pisa.run_static_analysis(structure, load_cases, analysis_dir)
+    t_end = time.time()
+    print(f"\tused time for check.get_response(): {t_end - t_start:.3f} sec")
     return auxiliary_values, load_cases, responses
 
 
@@ -36,6 +41,7 @@ def process_response(structure: Structure,
                      load_cases: list[load.NodalLoad],
                      responses: list[pisa.Response]) -> tuple[np.ndarray, dict[str, torch.Tensor], dict[str, np.float64]]:
     '''Process structural responses and calculate constraint conditions.'''
+    t_start = time.time()
     stress_ratios = np.zeros((structure.member_number, len(load_cases)))
     drift_ratios = np.zeros((structure.member_number, len(load_cases)))
     scwb_ratios_x = np.zeros((structure.node_number, len(load_cases)))
@@ -84,8 +90,9 @@ def process_response(structure: Structure,
         "max_drift_ratio": np.max(drift_ratios[structure.member_column_index_list]) / STORY_DRIFT_RATIO_LIMIT,
         "min_SCWB_ratio": np.min(np.minimum(scwb_ratios_x, scwb_ratios_z)[structure.node_need_strong_column_weak_beam_list]) / SCWB_RATIO_LIMIT
     }
-    print(f"response_rewards: {response_rewards}")
-
+    print(f"static response rewards: {response_rewards}")
+    t_end = time.time()
+    print(f"\tused time for check.process_response(): {t_end - t_start:.3f} sec")
     return constraint_condition, response_features, response_rewards
 
 

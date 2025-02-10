@@ -121,9 +121,9 @@ def minimum_design_force_avoid_collapse_at_big_earthquake(T: float, W: float) ->
 
 
 # select the highest among those 3 design earthquake force
-def design_earthquake_force(structure: Structure, first_mode_period: float, second_mode_period: float) -> Tuple[List[Dict[str, float]], List[float]]:
-    T1 = _T(structure.height, first_mode_period)
-    T2 = _T(structure.height, second_mode_period)
+def design_earthquake_force(structure: Structure) -> Tuple[List[Dict[str, float]], List[float]]:
+    T1 = _T(structure.height, structure.first_mode_period)
+    T2 = _T(structure.height, structure.second_mode_period)
     W = sum(structure.node_dead_load_self_weight_dict.values())  # kN
 
     V1, Fu1 = minimum_design_horizontal_force(T1, W)

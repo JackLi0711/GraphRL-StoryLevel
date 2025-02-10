@@ -1,3 +1,4 @@
+import time
 import torch
 from torch import nn, optim
 from torch.nn import functional as F
@@ -153,8 +154,30 @@ class DeepQAgent(Agent):
     
     def _greedy_policy(self, state: torch.Tensor, dont_select_story_indexes: List[int]) -> int:
         """Choose an action that maximizes the action_values given the current state."""
+        # infeasible_actions = np.array([True if i in dont_select_story_indexes else False for i in range(state.shape[0])], dtype=bool)
+        # with torch.no_grad():
+        #     q_values = self.online_q_network.forward(state).detach().to("cpu").numpy().squeeze()
+        #     q_values_feasible = np.ma.masked_where(infeasible_actions, q_values)  # mask elements where condition is True
+        #     print(f"{q_values_feasible = }")
+        #     if np.all(q_values_feasible == 0):
+        #         feasible_action_indices = np.argwhere(~infeasible_actions)  # returns the indices of all non-zero elements (True)
+        #         if len(feasible_action_indices) == 1:
+        #             action = feasible_action_indices[0]
+        #             q_val = q_values[action]
+        #         else:
+        #             action = self._random_state.choice(feasible_action_indices.squeeze())
+        #             q_val = q_values_feasible[action]
+        #     else:
+        #         action = q_values_feasible.argmax()
+        #         q_val = q_values_feasible[action]
+
+        #     self.logger.info(f"greed_policy's selection: {action}, Q value: {q_val}")
+
+        # return int(action), float(q_val)  # to avoid TypeError: Object of type np.int64, np.float64 is not JSON serializable
+
         with torch.no_grad():
             q_values = self.online_q_network.forward(state).index_fill(dim=0, index=torch.tensor(dont_select_story_indexes).to(torch.int64).to(self.device), value=-10000)
+            print(f"{q_values = }")
             q_val = q_values.max().cpu().item()
             action = q_values.argmax().cpu().item()
             self.logger.info(f"greed_policy's selection: {action}, Q value: {q_val}")
@@ -199,7 +222,7 @@ class DeepQAgent(Agent):
             action = self._uniform_random_policy(state, dont_select_story_indexes)
         else:
             epsilon = self._epsilon_decay_schedule(self._number_episodes)
-            print(epsilon)
+            print(f"{epsilon = }")
             action, q_val = self._epsilon_greedy_policy(state, epsilon, dont_select_story_indexes)
             
         return action, q_val
@@ -265,9 +288,12 @@ class DeepQAgent(Agent):
         self.logger.critical(f"loss: {loss.item()}")
 
         # updates the parameters of the online network
+        t_start = time.time()
         self._optimizer.zero_grad()
         loss.backward()  # retain_graph=True
         self._optimizer.step()
+        t_end = time.time()
+        print(f"\tused time for loss backpropagation: {t_end - t_start:.3f} sec")
         
         # synchronize online and target network
         if self._synchronize_steps is not None:

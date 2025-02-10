@@ -122,22 +122,31 @@ class Environment:
         self.update_actions_record_SCWB = []
 
         # static response: max stress ratio, min stress ratio, max drift ratio, min SCWB ratio (all normalized by limit)
-        _, load_cases, responses = check.get_response(structure, self.code_analysis_dir)
-        _, static_response_features, static_response_rewards = check.process_response(structure, load_cases, responses)
-        structure.init_graph(static_response_features)
+        _, load_cases, static_responses = check.get_response(structure, self.code_analysis_dir)
+        _, static_response_features, static_response_rewards = check.process_response(structure, load_cases, static_responses)
         self.static_response_record = [list(static_response_rewards.values())]
 
-        # dynamic response: acc, disp
-        if self.do_nonlinear_dynamic_analysis and "acceleration" in self.reward_type:
-            self.acc_record = {'X-dir': [], 'Z-dir': []}
-            self.acc_record = check_nda.record_acc(structure, 
-                                                   self.nda_simulator, 
-                                                   self.MCE_ground_motion_set, 
-                                                   self.nda_norm_dict, 
-                                                   self.device,
-                                                   self.acc_record,
-                                                   self.logger)
-        self.disp_record = {'X-dir': [], 'Z-dir': []}
+        # dynamic response: max drift ratio, max plastic hinge occurrence (all normalized by limit)
+        dynamic_response_features = None
+        if self.do_nonlinear_dynamic_analysis:
+            structure.init_graph_GraphLSTM()
+            dynamic_responses = check_nda.get_response(structure, self.nda_simulator, self.MCE_ground_motion_set, self.device)
+            _, dynamic_response_features, dynamic_response_rewards = check_nda.process_response(structure, dynamic_responses, self.nda_norm_dict)
+            self.dynamic_response_record = [list(dynamic_response_rewards.values())]
+            
+            if "acceleration" in self.reward_type:
+                self.acc_record = {'X-dir': [], 'Z-dir': []}
+                self.acc_record = check_nda.record_acc(structure, 
+                                                       self.nda_simulator, 
+                                                       self.MCE_ground_motion_set, 
+                                                       self.nda_norm_dict, 
+                                                       self.device,
+                                                       self.acc_record,
+                                                       self.logger)
+            if "displacement" in self.reward_type:
+                self.disp_record = {'X-dir': [], 'Z-dir': []}
+
+        structure.init_graph_GraphRL(static_response_features, dynamic_response_features)
 
         # reward 
         self.reward_record = []
@@ -268,36 +277,31 @@ class Environment:
         # 1-1. update structure, graph and get saved material amount(m^3) (ORIGINAL)
         material_saved = structure.update_action(action)
         before_SCWB_structure = deepcopy(structure)
-
         # 1-2. update structure, graph and get saved material amount(m^3) (STRONG-COLUMN-WEAK-BEAM)
         if self.scwb_driven_design:
-            material_saved_SCWB, update_actions_SCWB, auxiliary_values, load_cases, responses = new_strategy.strong_column_weak_beam_driven_update(structure, self.code_analysis_dir, self.logger)
+            material_saved_SCWB, update_actions_SCWB, auxiliary_values, load_cases, static_responses = new_strategy.strong_column_weak_beam_driven_update(structure, self.code_analysis_dir, self.logger)
             if material_saved_SCWB != 0:
                 print(f"before_SCWB_update, story_level_sections: {before_SCWB_structure.story_level_sections}")
                 print(f"after_SCWB_update,  story_level_sections: {structure.story_level_sections}")
         else:
             material_saved_SCWB = 0
             update_actions_SCWB = []
-            auxiliary_values, load_cases, responses = check.get_response(structure, self.code_analysis_dir)
+            auxiliary_values, load_cases, static_responses = check.get_response(structure, self.code_analysis_dir)
         
         # 2-1. linear static analysis: check if response pass constraints
-        constraint_condition, static_response_features, static_response_rewards = check.process_response(structure, load_cases, responses)
-        whether_pass, fail_name, fail_reason = check.check_pass(load_cases, constraint_condition, self.check_displacement)
-        structure.update_garph(static_response_features)
-
+        static_constraint_condition, static_response_features, static_response_rewards = check.process_response(structure, load_cases, static_responses)
+        whether_pass, fail_name, fail_reason = check.check_pass(load_cases, static_constraint_condition, self.check_displacement)
         # 2-2. nonlinear dynamic analysis: check if response pass constraints
+        dynamic_response_features = None
+        dynamic_response_rewards = None
         if self.do_nonlinear_dynamic_analysis and whether_pass == True:
-            whether_pass, fail_reason = check_nda.check(structure, 
-                                                        self.nda_simulator, 
-                                                        self.DBE_ground_motion_set,
-                                                        self.MCE_ground_motion_set, 
-                                                        self.check_acceleration, 
-                                                        self.check_displacement,
-                                                        self.nda_norm_dict, 
-                                                        auxiliary_values,
-                                                        self.device,
-                                                        self.logger)
-            
+            structure.update_graph_GraphLSTM()
+            dynamic_responses = check_nda.get_response(structure, self.nda_simulator, self.MCE_ground_motion_set, self.device)
+            dynamic_constraint_condition, dynamic_response_features, dynamic_response_rewards = check_nda.process_response(structure, dynamic_responses, self.nda_norm_dict)
+            whether_pass, fail_name, fail_reason = check_nda.check_pass(dynamic_constraint_condition, self.check_displacement)
+
+        structure.update_graph_GraphRL(static_response_features, dynamic_response_features)
+
         # 3. record all information after updating and checking
         # material usage
         self.saved_material_record.append(material_saved)
@@ -309,14 +313,16 @@ class Environment:
         # static response
         self.static_response_record.append(list(static_response_rewards.values()))
         # dynamic response
-        if self.do_nonlinear_dynamic_analysis and "acceleration" in self.reward_type:
-            self.acc_record = check_nda.record_acc(structure, 
-                                                   self.nda_simulator, 
-                                                   self.MCE_ground_motion_set, 
-                                                   self.nda_norm_dict, 
-                                                   self.device,
-                                                   self.acc_record,
-                                                   self.logger)
+        if self.do_nonlinear_dynamic_analysis:
+            self.dynamic_response_record.append(list(dynamic_response_rewards.values())) if dynamic_response_rewards is not None else None
+            if "acceleration" in self.reward_type:
+                self.acc_record = check_nda.record_acc(structure, 
+                                                       self.nda_simulator, 
+                                                       self.MCE_ground_motion_set, 
+                                                       self.nda_norm_dict, 
+                                                       self.device,
+                                                       self.acc_record,
+                                                       self.logger)
         
         # 4. calculate reward based on recorded information
         reward = self.calculate_reward(whether_pass)
@@ -331,6 +337,7 @@ class Environment:
             self.update_actions_record.pop(-1)
             self.update_actions_record_SCWB.pop(-1)
             self.static_response_record.pop(-1)
+            self.dynamic_response_record.pop(-1) if self.do_nonlinear_dynamic_analysis else None
         elif whether_pass == True and sum(structure.story_level_sections) == 0:  
             # pass all constraints & already has minimum sections
             done = True
