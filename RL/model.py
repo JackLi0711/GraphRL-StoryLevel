@@ -36,6 +36,19 @@ class StateGNN(nn.Module):
             #nn.BatchNorm1d(member_state_dim)
         )
 
+        # self._initialize_weight()
+    
+    def _initialize_weight(self):
+        for name, m in self.encoder_mlp.named_children():
+            if isinstance(m, torch.nn.Linear):
+                torch.nn.init.normal_(m.weight, mean=INIT_MEAN, std=INIT_STD)
+        for name, m in self.decoder_mlp.named_children():
+            if isinstance(m, torch.nn.Linear):
+                torch.nn.init.normal_(m.weight, mean=INIT_MEAN, std=INIT_STD)
+        for name, m in self.edge_mlp.named_children():
+            if isinstance(m, torch.nn.Linear):
+                torch.nn.init.normal_(m.weight, mean=INIT_MEAN, std=INIT_STD)
+
     def _state_global_aggregation(self, story_embedding, graph_embedding, structure_story_ptr):
         # shapes
         story_num = story_embedding.shape[0]
@@ -87,6 +100,12 @@ class Q_Network(nn.Module):
         #     nn.Linear(hidden_dim, q_value_dim),
         # )
         self.l2_1 = nn.Linear(member_state_dim, q_value_dim, bias=False)
+        # self._initialize_weight()
+
+    def _initialize_weight(self):
+        for name, m in self._modules.items():
+            if isinstance(m, torch.nn.Linear):
+                torch.nn.init.normal_(m.weight, mean=INIT_MEAN, std=INIT_STD)
 
     def forward(self, edge_state) -> torch.Tensor:
         # edge_state = self.batch_norm(edge_state)  # shape: [total story_member_num, member_state_dim]
