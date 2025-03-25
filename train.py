@@ -28,14 +28,14 @@ def parse_args() -> Namespace:
 
 	# checkpoint
 	parser.add_argument("--ckpt_dir", type=Path, default="./Results/AdjustedMoreSections/RandomShape")
-	parser.add_argument("--suffix", type=str, default="TaiModifiedModel_MatReward_doNDA_StaResFeatures_LinearDecay010_Buffer10000_Batch256_Epoch1000")
+	parser.add_argument("--suffix", type=str, default="TaiModifiedModel_MatReward_StaResFeatures_EpsilonDecay099_Buffer10000_Batch256_Epoch10_TestOpenSees")
 
 	# nonlinear dynamic analysis simulator
-	parser.add_argument("--do_nonlinear_dynamic_analysis", action="store_true", default=True)
+	parser.add_argument("--do_nonlinear_dynamic_analysis", action="store_true", default=False)
 	parser.add_argument("--check_acceleration", action="store_true", default=False)
 	parser.add_argument("--check_displacement", action="store_true", default=True)
-	parser.add_argument("--graph_lstm_dir", type=Path, default="./NonlinearDynamicAnalysisSimulator/trained_GraphLSTM/2024_11_07__07_17_12/")  # "./NonlinearDynamicAnalysisSimulator/trained_GraphLSTM/2024_11_07__07_17_12/"
-	parser.add_argument("--ground_motion_dir", type=Path, default="./NonlinearDynamicAnalysisSimulator/ground_motions/selected_ground_motions_World_processed_one_scaling_MCE/")  # "./NonlinearDynamicAnalysisSimulator/ground_motions/selected_ground_motions_World_processed_one_scaling_MCE/"
+	parser.add_argument("--graph_lstm_dir", type=Path, default=None)  # "./NonlinearDynamicAnalysisSimulator/trained_GraphLSTM/2024_11_07__07_17_12/"
+	parser.add_argument("--ground_motion_dir", type=Path, default=None)  # "./NonlinearDynamicAnalysisSimulator/ground_motions/selected_ground_motions_World_processed_one_scaling_MCE/"
 	parser.add_argument("--ground_motion_number", type=int, default=11, help="ASCE says 11 is better")
 
 	# structure
@@ -64,7 +64,7 @@ def parse_args() -> Namespace:
 	parser.add_argument("--test_frequency", type=int, default=5)
 	parser.add_argument("--batch_size", type=int, default=256)  # original: 256
 	parser.add_argument("--lr", type=float, default=1e-5)
-	parser.add_argument("--num_epoch", type=int, default=1000, help="epoch == episode")
+	parser.add_argument("--num_epoch", type=int, default=10, help="epoch == episode")
 	parser.add_argument("--random_seed", type=int, default=731, help="fixed random seed")
 
 	args = parser.parse_args()
@@ -170,7 +170,7 @@ def main(args):
 		"batch_size": args.batch_size,
 		"lr": args.lr,
 		"buffer_size": args.buffer_size,
-		"epsilon_decay_schedule": straight_decay_schedule,
+		"epsilon_decay_schedule": epsilon_decay_schedule,
 		"synchronize_steps": args.synchronize_steps,
 		"soft_update_alpha": args.soft_update_alpha,
 		"gamma": args.gamma,
