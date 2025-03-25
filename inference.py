@@ -1,35 +1,31 @@
 import torch
-import logging
 import random
+import logging
 import numpy as np
 from pathlib import Path
 from argparse import ArgumentParser, Namespace
 
 import os
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
-
 import sys
-sys.path.append("Structure/")
 sys.path.append("RL/")
 sys.path.append("Visualization/")
+sys.path.append("NonlinearDynamicAnalysisSimulator/")
 
-from RL import agent
-from RL import environment
-from RL.agent import train
-from Visualization import plot
-from Visualization import visualize
+from RL import agent, environment
+from Visualization import plot, visualize
 from NonlinearDynamicAnalysisSimulator import load_simulator
 
 
 def parse_args() -> Namespace:
 	parser = ArgumentParser()
  
-	# trained model
-	#parser.add_argument("--trained_ckpt_dir", type=Path, default="./Results/3d_random/2023_05_06__21_36_03__test/")  # without doNDA
-	#parser.add_argument("--trained_ckpt_dir", type=Path, default="./Results/3d_random/2023_05_07__11_39_51__test/")  # with doNDA
-
-	parser.add_argument("--trained_ckpt_dir", type=Path, default="./Results/MaterialReward_AdjustedMoreSections/2024_03_18__00_55_05__NewStrategy_RestrictAction_StraightDecay0.1_BufferSize20000_BatchSize256_Epoch300")
-	#parser.add_argument("--trained_ckpt_dir", type=Path, default="./Results/AccelerationReward/")
+	# trained model path
+	# without doNDA: "./Results/AdjustedSections/2023_05_06__21_36_03__test/model.pt"
+	# with doNDA: "./Results/AdjustedSections/2023_05_07__11_39_51__test/model.pt"
+	parser.add_argument("--trained_model_path", type=Path, default="./Results/AdjustedMoreSections/RandomShape/2025_03_08__01_07_39__TaiModifiedModel_MatReward_StaResFeatures_OpenSees_LinearDecay010_Buffer10000_Batch256_Epoch1000/models/model_HighestScore.pt")
+	# checkpoint directory
+	parser.add_argument("--ckpt_dir", type=Path, default="./Results/AdjustedMoreSections/RandomShape/2025_03_08__01_07_39__TaiModifiedModel_MatReward_StaResFeatures_OpenSees_LinearDecay010_Buffer10000_Batch256_Epoch1000/")
 
 	# chances
 	parser.add_argument("--chances", type=int, default=0)
@@ -38,30 +34,29 @@ def parse_args() -> Namespace:
 	parser.add_argument("--do_nonlinear_dynamic_analysis", action="store_true", default=False)
 	parser.add_argument("--check_acceleration", action="store_true", default=False)
 	parser.add_argument("--check_displacement", action="store_true", default=True)
-	
-	#parser.add_argument("--graph_lstm_dir", type=Path, default="./NonlinearDynamicAnalysisSimulator/trained_GraphLSTM/2023_07_20__15_43_32/")  # RelAcc
-	parser.add_argument("--graph_lstm_dir", type=Path, default="./NonlinearDynamicAnalysisSimulator/trained_GraphLSTM/2024_01_14__00_07_29/")  # AbsAcc
-	parser.add_argument("--ground_motion_dir", type=Path, default="./NonlinearDynamicAnalysisSimulator/ground_motions/selected_ground_motions_MCE/")
+	# RelAcc: "./NonlinearDynamicAnalysisSimulator/trained_GraphLSTM/2023_07_20__15_43_32/"
+	# AbsAcc: "./NonlinearDynamicAnalysisSimulator/trained_GraphLSTM/2024_01_14__00_07_29/"
+	parser.add_argument("--graph_lstm_dir", type=Path, default=None)
+	parser.add_argument("--ground_motion_dir", type=Path, default=None)  # "./NonlinearDynamicAnalysisSimulator/ground_motions/selected_ground_motions_MCE/"
 	parser.add_argument("--ground_motion_number", type=int, default=11, help="ASCE says 11 is better")
-
-	# checkpoint
-	parser.add_argument("--ckpt_dir", type=Path, default="./Results/MaterialReward_AdjustedMoreSections/2024_03_18__00_55_05__NewStrategy_RestrictAction_StraightDecay0.1_BufferSize20000_BatchSize256_Epoch300")
-	#parser.add_argument("--ckpt_dir", type=Path, default="./Results/AccelerationReward/")
 
 	# structure
 	parser.add_argument("--structure_shape", type=str, default="random", help="fixed, small_random, random")
 	parser.add_argument("--add_structure_geometry", action="store_true", default=True)
-	parser.add_argument("--reward_type", type=str, default="material", help="material, acceleration, displacement, normalized, total")
-	parser.add_argument("--restrict_action", action="store_true", default=True)
+	parser.add_argument("--add_response_features", action="store_true", default=True)
+	parser.add_argument("--reward_type", type=str, default="material", help="material, acceleration, displacement, normalized, total, combined")
+	parser.add_argument("--restrict_action", action="store_true", default=False)
+	parser.add_argument("--scwb_driven_design", action="store_true", default=False)
 
 	# model
+	parser.add_argument("--model_type", type=str, default="Taiwan", help="Taiwan, Japan")
 	parser.add_argument("--hidden_dim", type=int, default=100)
 	parser.add_argument("--num_layers", type=int, default=3)
 
 	# buffer
-	parser.add_argument("--buffer_size", type=int, default=20000)  # original: 3000
+	parser.add_argument("--buffer_size", type=int, default=10000)  # original: 3000
 	parser.add_argument("--update_frequency", type=int, default=1)
-	parser.add_argument("--add_experience_frequency", type=int, default=5)
+	parser.add_argument("--add_experience_frequency", type=int, default=1)
 
 	# training
 	parser.add_argument("--gamma", type=float, default=0.99, help="discount factor, 1.0, 0.99, 0.9")
@@ -69,9 +64,9 @@ def parse_args() -> Namespace:
 	parser.add_argument("--synchronize_steps", type=int, default=50)
 	parser.add_argument("--soft_update_alpha", type=float, default=None)
 	parser.add_argument("--test_frequency", type=int, default=5)
-	parser.add_argument("--batch_size", type=int, default=512)  # original: 256
+	parser.add_argument("--batch_size", type=int, default=256)  # original: 256
 	parser.add_argument("--lr", type=float, default=1e-5)
-	parser.add_argument("--num_epoch", type=int, default=300)
+	parser.add_argument("--num_epoch", type=int, default=1000)
 	parser.add_argument("--random_seed", type=int, default=731, help="fixed random seed")
 
 	args = parser.parse_args()
@@ -99,9 +94,9 @@ def get_loggings(ckpt_dir):
 	stream_handler.setFormatter(formatter)
 	logger.addHandler(stream_handler)
 	# file handler
-	#file_handler = logging.FileHandler(ckpt_dir / "record.log")
-	#file_handler.setFormatter(formatter)
-	#logger.addHandler(file_handler)
+	# file_handler = logging.FileHandler(ckpt_dir / "record.log")
+	# file_handler.setFormatter(formatter)
+	# logger.addHandler(file_handler)
 	return logger
 
 
@@ -117,7 +112,7 @@ def main(args):
 	# set device
 	device = "cuda" if torch.cuda.is_available() else "cpu"
 
-	# setupt nonliear dynamic analysis simulator
+	# setup nonliear dynamic analysis simulator
 	nda_simulator = None
 	nda_norm_dict = None
 	DBE_ground_motion_set = None
@@ -127,39 +122,37 @@ def main(args):
 		DBE_ground_motion_set, MCE_ground_motion_set = load_simulator.load_ground_motions(args.ground_motion_dir, args.ground_motion_number, nda_norm_dict)
 
 
-	# beta-annealing schedule
+	# Beta-annealing schedule
 	def exponential_annealing_schedule(n, rate=0.02):
 		return 1 - np.exp(-rate * n)
 	beta_annealing_schedule = lambda n: exponential_annealing_schedule(n, 0.02)
 
-	# Epsilon decay schedule
-	def power_decay_schedule(episode_number: int,
-							 decay_factor: float,
-							 minimum_epsilon: float) -> float:
+	# Power-decay schedule
+	def power_decay_schedule(episode_number: int, decay_factor: float, minimum_epsilon: float=1e-2) -> float:
 		"""Power decay schedule found in other practical applications."""
 		return max(decay_factor ** episode_number, minimum_epsilon)
+	epsilon_decay_schedule = lambda n: power_decay_schedule(n, args.epsilon, 1e-2)
 
-	_epsilon_decay_schedule_kwargs = {
-		"decay_factor": args.epsilon,
-		"minimum_epsilon": 1e-2,
-	}
-	epsilon_decay_schedule = lambda n: power_decay_schedule(n, **_epsilon_decay_schedule_kwargs)
-
-	# Linear decay schedule
-	def linear_decay_schedule(episode_number: int,
-						      total_episode: int,
-							  minimum_epsilon: float):
+	# Linear-decay schedule
+	def linear_decay_schedule(episode_number: int, total_episode: int, minimum_epsilon: float=1e-1) -> float:
 		return max(1.0 - episode_number/total_episode, minimum_epsilon)
-	
-	_straight_decay_schedule_kwargs = {
-		"total_episode": args.num_epoch,
-		"minimum_epsilon": 1e-1,
-	}
-	straight_decay_schedule = lambda n: linear_decay_schedule(n, **_straight_decay_schedule_kwargs)
+	straight_decay_schedule = lambda n: linear_decay_schedule(n, args.num_epoch, 1e-1)
+
+	# Cosine-decay schedule
+	def cosine_decay_schedule(episode_number: int, total_episode: int, minimum_epsilon: float=1e-1) -> float:
+		linear_decay = 1.0 - episode_number / total_episode
+		cosine_decay =  0.75 * linear_decay + 0.25 * linear_decay * np.cos(np.pi / 100 * episode_number)
+		return max(cosine_decay, minimum_epsilon)
+	periodic_decay_schedule = lambda n: cosine_decay_schedule(n, args.num_epoch, 1e-1)
+
+	# Constant-epsilon schedule (Japan: RL for 2D frame)
+	def constant_epsilon_schedule(episode_number: int, constant_epsilon: float=1e-1) -> float:
+		return constant_epsilon
+	fixed_epsilon_schedule = lambda n: constant_epsilon_schedule(n, 1e-1)
 
 	# Agent
 	node_feature_dim = 8 if args.add_structure_geometry else 5
-	edge_feature_dim = 11
+	edge_feature_dim = 13 if args.add_response_features else 11
 	_agent_kwargs = {
 		"node_feature_dim": node_feature_dim,
 		"edge_feature_dim": edge_feature_dim,
@@ -176,18 +169,23 @@ def main(args):
 		"add_experience_frequency": args.add_experience_frequency,
 		"test_frequency": args.test_frequency,
 		"restrict_action": args.restrict_action,
-		"seed": 731,
+		"seed": args.random_seed,
 		"logger": logger,
-		"pretrained_ckpt_dir": args.trained_ckpt_dir,
+		"pretrained_ckpt_dir": args.trained_model_path,
 		"device":device,
 	}
-	double_dqn_agent = agent.DeepQAgent(**_agent_kwargs)
+	if args.model_type == "Taiwan":
+		double_dqn_agent = agent.DeepQAgent(**_agent_kwargs)
+	elif args.model_type == "Japan":
+		double_dqn_agent = agent.JapanDeepQAgent(**_agent_kwargs)
 
 	# Environment
 	_env_kwargs = {
 		"structure_shape": args.structure_shape,
 		"add_structure_geometry": args.add_structure_geometry,
+		"add_response_features": args.add_response_features,
 		"reward_type": args.reward_type,
+		"scwb_driven_design": args.scwb_driven_design,
 		"do_nonlinear_dynamic_analysis": args.do_nonlinear_dynamic_analysis,
 		"check_acceleration": args.check_acceleration,
 		"check_displacement": args.check_displacement,
@@ -203,9 +201,9 @@ def main(args):
 
 	initial_design = [14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 13, 9, 5, 4, 4, 1, 13, 12, 10, 9, 8, 4]
 
-	visualize.visualize_design_process(double_dqn_agent, env, logger, args.trained_ckpt_dir, testing_structure=True, initial_design=initial_design, chances=args.chances)
-	# visualize.visualize_edge_embedding(double_dqn_agent, env, logger, args.trained_ckpt_dir)
-	# visualize.visualize_design_process(double_dqn_agent, env, logger, args.trained_ckpt_dir, taller_structure=True)
+	visualize.visualize_design_process(double_dqn_agent, env, logger, args.trained_model_path, testing_structure=True, initial_design=None, chances=args.chances)
+	# visualize.visualize_edge_embedding(double_dqn_agent, env, logger, args.trained_model_path)
+	# visualize.visualize_design_process(double_dqn_agent, env, logger, args.trained_model_path, taller_structure=True)
 
 
 

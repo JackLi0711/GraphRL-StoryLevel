@@ -17,7 +17,7 @@ from torch_geometric.loader import DataLoader
 
 from RL import agent, environment
 from Structure import structure, pisa
-from Structure.sections import *
+from Structure.sections import beam_sections, column_sections
 
 
 @torch.no_grad()
@@ -244,7 +244,9 @@ def _visualize_one_iteration(structure: structure.Structure,
     else: 
         total_acc_decrement = 0
 
-    infos = f"reduced material: {saved_material:5.2f} m3\n" + f"reduced material(SCWB): {saved_material_SCWB:5.2f} m3"
+    infos = f"material usage: {env.material_usage_record[-1]:5.2f} m3\n" + f"reduced material: {saved_material:5.2f} m3\n"
+    if env.scwb_driven_design:
+        infos += f"reduced material(SCWB): {saved_material_SCWB:5.2f} m3"
     title = f"Reward: {env.reward_type}\n" + f"Iteration: {iteration:4d}\n" + infos
 
     ax.set_title(title, fontsize=30)
@@ -274,13 +276,13 @@ def _frames_to_video(ckpt_dir: Path,
     frame_duration_ms = 200
     frame_one = frames[0]
     if testing:
-        animation_name = f"design_animation_testing_{chances}extraChance.gif"
+        animation_name = f"design_animation_testing_{chances}chance.gif"
     elif taller:
-        animation_name = f"design_animation_taller_{chances}extraChance.gif"
+        animation_name = f"design_animation_taller_{chances}chance.gif"
     elif short:
-        animation_name = f"design_animation_short_{chances}extraChance.gif"
+        animation_name = f"design_animation_short_{chances}chance.gif"
     else:
-        animation_name = f"design_animation_random_{chances}extraChance.gif"
+        animation_name = f"design_animation_random_{chances}chance.gif"
         
     frame_one.save(ckpt_dir / animation_name, format="GIF", append_images=frames, save_all=True, duration=frame_duration_ms, loop=0)
 
@@ -288,7 +290,7 @@ def _frames_to_video(ckpt_dir: Path,
 def visualize_design_process(agent: agent.DeepQAgent, 
                              env: environment.Environment, 
                              logger: Logger, 
-                             trained_ckpt_dir: Path, 
+                             save_model_path: Path, 
                              testing_structure: bool=False, 
                              taller_structure: bool=False, 
                              initial_design: list[int]=None,
@@ -298,20 +300,18 @@ def visualize_design_process(agent: agent.DeepQAgent,
     # Make directory
     original_chances = chances
     if testing_structure:
-        save_dir = env.checkpoint_dir / f"design_process_testing_{original_chances}extraChance"
+        save_dir = env.checkpoint_dir / f"design_process_testing_{original_chances}chance"
     elif taller_structure:
-        save_dir = env.checkpoint_dir / f"design_process_taller_{original_chances}extraChance"
+        save_dir = env.checkpoint_dir / f"design_process_taller_{original_chances}chance"
     else:
-        save_dir = env.checkpoint_dir / f"design_peocess_random_{original_chances}extraChance"
+        save_dir = env.checkpoint_dir / f"design_peocess_random_{original_chances}chance"
     save_dir.mkdir(parents=True, exist_ok=True)
     
-    # '''
     # load best-validation model
-    save_model_path = trained_ckpt_dir / "model.pt"
     checkpoint = torch.load(save_model_path, map_location=torch.device(agent.device))
-    agent.gnn.load_state_dict(checkpoint['gnn'])    
-    agent.online_q_network.load_state_dict(checkpoint['online_q_network'])    
-    agent.target_q_network.load_state_dict(checkpoint['target_q_network']) 
+    agent.gnn.load_state_dict(checkpoint["gnn"])    
+    agent.online_q_network.load_state_dict(checkpoint["online_q_network"])    
+    agent.target_q_network.load_state_dict(checkpoint["target_q_network"]) 
     
     # get testing structure & graph
     device = agent.device
@@ -327,11 +327,8 @@ def visualize_design_process(agent: agent.DeepQAgent,
     accumulated_reward = 0
     timestep = 0
     action_list = []
-    
     while not done:
-
         original_structure = deepcopy(structure)
-
         # go through gnn and get embedding before q-network
         with torch.no_grad():
             graph = graph.to(device)
@@ -342,7 +339,7 @@ def visualize_design_process(agent: agent.DeepQAgent,
         print(f"original minimum: {structure.already_minimum_section_story_indexes}")
         print(f"restrict actions: {structure.restrict_action_space()}")
         
-        dont_select_story_member_indexes = structure.restrict_action_space() if agent.restrict_action else None
+        dont_select_story_member_indexes = structure.restrict_action_space() if agent.restrict_action else []
         action, _ = agent.choose_action(state, 
                                         structure.already_minimum_section_story_indexes,
                                         dont_select_story_member_indexes, 
@@ -397,7 +394,6 @@ def visualize_design_process(agent: agent.DeepQAgent,
         timestep += 1
         accumulated_reward += reward
         logger.info(f"timestep: {timestep}, accumulated_reward: {accumulated_reward}\n")
-
         action_list.append(action)
     
         # if can't select anymore, then stop
@@ -408,18 +404,20 @@ def visualize_design_process(agent: agent.DeepQAgent,
 
         if len(dont_select) >= len(structure.story_level_actions):
             done = True
-    # '''
 
     # generate final pisa ipt file
     if testing_structure:
-        save_ipt_path = env.checkpoint_dir / f"final_design_testing_{original_chances}extraChance.ipt"
+        save_ipt_path = env.checkpoint_dir / f"final_design_testing_{original_chances}chance.ipt"
     elif taller_structure:
-        save_ipt_path = env.checkpoint_dir / f"final_design_taller_{original_chances}extraChance.ipt"
+        save_ipt_path = env.checkpoint_dir / f"final_design_taller_{original_chances}chance.ipt"
     else:
-        save_ipt_path = env.checkpoint_dir / f"final_design_random_{original_chances}extraChance.ipt"
+        save_ipt_path = env.checkpoint_dir / f"final_design_random_{original_chances}chance.ipt"
     pisa._generate_analysis_ipt(original_structure, save_ipt_path, analysis="modal")
 
     # generate animation
     _frames_to_video(env.checkpoint_dir, save_dir, testing_structure, taller_structure, chances=original_chances)
 
-    print(action_list)    
+    print(f"action list: {action_list[:-1]}")
+    print(f"final design: {original_structure.story_level_sections}")
+    print(f"material usage: {env.material_usage_record[-1]:5.2f} m3")
+    print(f"reduced material: {np.sum(env.saved_material_record):5.2f} m3")  
