@@ -1,11 +1,12 @@
 import os
-import sys
 import time
 import threading
 import numpy as np
-from typing import Tuple
+from pathlib import Path
 
-from Structure.sections import *
+from Structure.load import NodalLoad
+from Structure.structure import Structure
+from Structure.sections import beam_sections, column_sections
 
 
 DISP_UX_INDEX = 1
@@ -25,7 +26,7 @@ PISA_EXE = "PISA3D_Batch_500nodes.exe"
 
 
 class Response:        
-    def __init__(self, analysis_name: str, structure):
+    def __init__(self, analysis_name: str, structure: Structure):
         disp_file = open(analysis_name + ".NodeAbsDisp", 'r').readlines()
         elem_file = open(analysis_name + ".Element", 'r').readlines()
         self.structure = structure
@@ -46,8 +47,8 @@ class Response:
 
     def __str__(self):
         info = ""
-        for node_name in self.node_response["disp"].keys():
-            info += f"{node_name:^4s}, {self.node_response['disp'][node_name]:^8.2f}\n"
+        for node_name in self.node_response["dispX"].keys():
+            info += f"{node_name:^4s}, {self.node_response['dispX'][node_name]:^8.2f}\n"
         return info
 
     def _load_disp(self, disp_file):
@@ -89,7 +90,7 @@ class Response:
 
 
 
-def dynamic_analysis_period(structure) -> Tuple[float, float, float, np.ndarray, np.ndarray, np.ndarray]:
+def dynamic_analysis_period(structure: Structure) -> tuple[float, float, float, np.ndarray, np.ndarray, np.ndarray]:
     """Return periods and mode shapes from modal analysis."""
     t_start = time.time()
     modal_ipt_path = os.path.join(structure.analysis_dir, "modal.ipt")
@@ -102,7 +103,7 @@ def dynamic_analysis_period(structure) -> Tuple[float, float, float, np.ndarray,
     return periods_and_shapes
 
 
-def run_load_case(structure, load_case, analysis_dir) -> Response:
+def run_load_case(structure: Structure, load_case: NodalLoad, analysis_dir: Path) -> Response:
     """Return structure's response under the given load case."""
     t_start = time.time()
     # 1. generate load case's ipt file
@@ -113,13 +114,23 @@ def run_load_case(structure, load_case, analysis_dir) -> Response:
     # 2. run analysis, derive the response
     response = _run_static_analysis(analysis_dir, ipt_path, load_name, structure)
     t_end = time.time()
-    print(f"\t\tused time for pisa.run_load_case({load_name}): {t_end - t_start:.3f} sec")
+    # print(f"\t\tused time for pisa.run_load_case({load_name}): {t_end - t_start:.3f} sec")
     return response
 
 
+mm = 1  # length
+kN = 1  # force
+m = 1e+3 * mm
+N = 1e-3 * kN
+
+Pa = N / m**2
+GPa = 1e+9 * Pa
+E = 200 * GPa  # Young's modulud, GPa
+Nu = 0.3  # Poisson's ratio
+G = E / (2 * (1 + Nu))  # Shear modulus, GPa
 
 
-def _generate_analysis_ipt(structure, ipt_path, analysis="static", nodal_loads=None) -> None:
+def _generate_analysis_ipt(structure: Structure, ipt_path: Path, analysis="static", nodal_loads=None) -> None:
     """Generate modal.ipt""" 
     x_grid, y_grid, z_grid = structure.x_grid, structure.y_grid, structure.z_grid
     x_grid_string = '  ' + '  '.join([str(x) for x in x_grid])
@@ -156,7 +167,7 @@ def _generate_analysis_ipt(structure, ipt_path, analysis="static", nodal_loads=N
     for node_name in structure.node_translational_mass_dict.keys():
         trans_mass = structure.node_translational_mass_dict[node_name]  # kN / mm/s^2
         Rx, Ry, Rz = structure.node_inertia_dict[node_name]             # kN / (mm/s2) * mm2
-        mass_string += '#NodeMass  Mass  ' + node_name + ' ' + f"{trans_mass:.5f}" + ' ' + f"{trans_mass:.5f}" + ' ' + f"{trans_mass:.5f}" + ' ' + str(int(Rx)) + ' ' + str(int(Ry)) + ' ' + str(int(Rz)) + '\n'
+        mass_string += '#  Mass  ' + node_name + ' ' + f"{trans_mass:.5f}" + ' ' + f"{trans_mass:.5f}" + ' ' + f"{trans_mass:.5f}" + ' ' + str(int(Rx)) + ' ' + str(int(Ry)) + ' ' + str(int(Rz)) + '\n'
     
     # master node's translational mass (Ux, Uy, Uz, Rx, Ry, Rz)
     for master_name in master_node_list:
@@ -237,11 +248,10 @@ def _generate_analysis_ipt(structure, ipt_path, analysis="static", nodal_loads=N
     f.write('\n'*2)
 
     f.write('% MATERIAL DATA %\n')
-    f.write('Material  Elastic steel 200 0.3\n')
+    f.write(f'Material  Elastic steel {E} {Nu}\n')
     f.write('\n'*2)
 
     f.write('% SECTION DATA %\n')
-
     for section in beam_sections:
         R, G, B = np.array(section['color'])/255
         f.write(f"GUI_Section I_SHAPE_SECTION {section['name']} steel steel steel steel steel steel steel steel steel 0 {section['H(mm)']} {section['B(mm)']} {section['t_f(mm)']} {section['t_w(mm)']} {section['B(mm)']} {section['t_f(mm)']} \n")
@@ -259,7 +269,6 @@ def _generate_analysis_ipt(structure, ipt_path, analysis="static", nodal_loads=N
         f.write('\n')
 
     f.write('\n'*2)
-
     f.write('GUI_LoadCase  GUI_AREA_LOAD_DL  DL\n')
     f.write('GUI_AREA_LOAD_ASSIGNED_TYPE  BY_BEAN_SPAN_LOAD\n')
     f.write('GUI_Output  OutFlag  1  1  0  1  1  1  1\n')
@@ -270,13 +279,13 @@ def _generate_analysis_ipt(structure, ipt_path, analysis="static", nodal_loads=N
     f.close()        
 
 
-def _check_modal_analysis(eigen_file_path) -> bool:
+def _check_modal_analysis(eigen_file_path: Path) -> bool:
     if os.path.exists(eigen_file_path):
         return True
     return False
 
 
-def _run_modal_analysis(node_number, analysis_dir) -> float:
+def _run_modal_analysis(node_number: int, analysis_dir: Path) -> tuple[np.ndarray, np.ndarray]:
     """Run modal analysis with PISA3D"""
     t_start = time.time()
     modal_path = os.path.join(analysis_dir, 'modal.ipt')
@@ -298,8 +307,7 @@ def _run_modal_analysis(node_number, analysis_dir) -> float:
         os.system(PISA_EXE + " " + modal_name + " " + f">{os.path.join(analysis_dir, 'null')} 2>&1")
         finished = _check_modal_analysis(eigen_file_path)
         print(f"\t\t\tfinished: {finished}")
-        if finished == False:
-            continue
+        if finished == False: continue
 
         is_mode_1, is_mode_2, is_mode_3 = False, False, False
         
@@ -314,7 +322,6 @@ def _run_modal_analysis(node_number, analysis_dir) -> float:
                 # in case the line is not finished, it will occur error, like the number beocome -9.616E
                 # and cannot be converted to float.
                 try:    
-                    
                     if "Period of Mode 1" in line:
                         contents = line.strip().split()
                         first_mode_period = float(contents[5])
@@ -327,10 +334,10 @@ def _run_modal_analysis(node_number, analysis_dir) -> float:
 
                     elif "Mode 1, Period =" in line:
                         is_mode_1 = True
-                    elif "----------" in line:
+                    elif "----------" in line and is_mode_1:
                         is_mode_1 = False
                     elif is_mode_1 == True:
-                        if "Node" in line or "N" not in line:   continue
+                        if "Node" in line or "N" not in line: continue
                         contents = line.strip().split()
                         node_index = int(contents[0][1:]) - 1
                         node_first_mode_shape[node_index, 0] = float(contents[1])
@@ -360,18 +367,21 @@ def _run_modal_analysis(node_number, analysis_dir) -> float:
                         node_third_mode_shape[node_index, 0] = float(contents[1])
                         node_third_mode_shape[node_index, 1] = float(contents[3])
                         node_third_mode_shape[node_index, 2] = float(contents[5])
-                
                 except:
                     continue
 
-        if first_mode_period is None or second_mode_period is None or third_mode_period is None:
-            continue
+        if first_mode_period is None or second_mode_period is None or third_mode_period is None: continue
+    
+    mode_periods = np.array([first_mode_period, second_mode_period, third_mode_period])
+    mode_shapes = np.hstack((node_first_mode_shape, node_second_mode_shape, node_third_mode_shape))
+    
     t_end = time.time()
     # print(f"\t\t\tused time for pisa._run_modal_analysis(): {t_end - t_start:.3f} sec")
-    return first_mode_period, second_mode_period, third_mode_period, node_first_mode_shape, node_second_mode_shape, node_third_mode_shape
+    
+    return mode_periods, mode_shapes
 
 
-def _check_static_analysis(disp_file_path, elem_file_path) -> bool:
+def _check_static_analysis(disp_file_path: Path, elem_file_path: Path) -> bool:
     if os.path.exists(disp_file_path) is True and \
        os.stat(disp_file_path).st_size > 1024 and \
        os.stat(elem_file_path).st_size > 8192:
@@ -379,7 +389,7 @@ def _check_static_analysis(disp_file_path, elem_file_path) -> bool:
     return False
 
 
-def _run_static_analysis(analysis_dir, ipt_path, load_name, structure) -> Response:    
+def _run_static_analysis(analysis_dir: Path, ipt_path: Path, load_name: str, structure: Structure) -> Response:    
     """Run static analysis with PISA3D"""
     t_start = time.time()
     analysis_name = ipt_path.replace(".ipt", "")
@@ -395,8 +405,7 @@ def _run_static_analysis(analysis_dir, ipt_path, load_name, structure) -> Respon
     while not finished:
         os.system(PISA_EXE + " " + analysis_name + " " + f">{os.path.join(analysis_dir, f'null_{load_name}')} 2>&1")
         finished = _check_static_analysis(disp_file_path, elem_file_path)
-        if finished == False:
-            continue
+        if finished == False: continue
 
     # get response from the analysis result
     response = Response(analysis_name, structure)
@@ -410,21 +419,21 @@ global semaphore
 semaphore = threading.Semaphore(value=THREAD_QUOTA)
 
 
-def _run_single_modal_analysis(analysis_dir) -> None:
+def _run_single_modal_analysis(analysis_dir: Path) -> None:
     global semaphore
     semaphore.acquire()
     t_start = time.time()
     modal_name = os.path.join(analysis_dir, "modal")
     os.system(PISA_EXE + " " + modal_name + " " + f">{os.path.join(analysis_dir, 'null')} 2>&1")
     t_end = time.time()
-    print(f"\t\t\tused time for pisa._run_single_modal_analysis(): {t_end - t_start:.3f} sec")
+    # print(f"\t\t\tused time for pisa._run_single_modal_analysis(): {t_end - t_start:.3f} sec")
     semaphore.release()
 
 
-def run_modal_analysis(structure) -> Tuple[float, float, float, np.ndarray, np.ndarray, np.ndarray]:
+def run_modal_analysis(structure: Structure) -> tuple[np.ndarray, np.ndarray]:
     """
     * Run PISA3D modal analysis with multi-threading
-    * Return periods and mode shapes
+    * Return mode periods and mode shapes
     """ 
     t_start = time.time()
     modal_ipt_path = os.path.join(structure.analysis_dir, "modal.ipt")
@@ -474,7 +483,7 @@ def run_modal_analysis(structure) -> Tuple[float, float, float, np.ndarray, np.n
 
                     elif "Mode 1, Period =" in line:
                         is_mode_1 = True
-                    elif "----------" in line:
+                    elif "----------" in line and is_mode_1:
                         is_mode_1 = False
                     elif is_mode_1 == True:
                         if "Node" in line or "N" not in line: continue
@@ -507,30 +516,35 @@ def run_modal_analysis(structure) -> Tuple[float, float, float, np.ndarray, np.n
                         node_third_mode_shape[node_index, 0] = float(contents[1])
                         node_third_mode_shape[node_index, 1] = float(contents[3])
                         node_third_mode_shape[node_index, 2] = float(contents[5])
-                
-                except: continue
+                except: 
+                    continue
 
         if first_mode_period is None or second_mode_period is None or third_mode_period is None: continue
+    
+    mode_periods = np.array([first_mode_period, second_mode_period, third_mode_period])
+    mode_shapes = np.hstack((node_first_mode_shape, node_second_mode_shape, node_third_mode_shape))
+    
     t_end = time.time()
-    print(f"\t\tused time for pisa.run_modal_analysis(): {t_end - t_start:.3f} sec")
-    return first_mode_period, second_mode_period, third_mode_period, node_first_mode_shape, node_second_mode_shape, node_third_mode_shape
+    # print(f"\t\tused time for pisa.run_modal_analysis(): {t_end - t_start:.3f} sec")
+
+    return mode_periods, mode_shapes
 
 
-def _run_single_static_analysis(load_name, analysis_dir) -> None:
+def _run_single_static_analysis(load_name: str, analysis_dir: Path) -> None:
     global semaphore
     semaphore.acquire()
     t_start = time.time()
     static_name = os.path.join(analysis_dir, load_name)
     os.system(PISA_EXE + " " + static_name + " " + f">{os.path.join(analysis_dir, f'null_{load_name}')} 2>&1")
     t_end = time.time()
-    print(f"\t\t\tused time for pisa._run_single_static_analysis({load_name}): {t_end - t_start:.3f} sec")
+    # print(f"\t\t\tused time for pisa._run_single_static_analysis({load_name}): {t_end - t_start:.3f} sec")
     semaphore.release()
 
 
-def run_static_analysis(structure, load_cases, analysis_dir) -> list[Response]:
+def run_static_analysis(structure: Structure, load_cases: list[NodalLoad], analysis_dir: Path) -> list[Response]:
     """
     * Run PISA3D static analysis with multi-threading
-    * Return a list of responses
+    * Return a list of responses for each load case
     """ 
     t_start = time.time()
     for load_case in load_cases:

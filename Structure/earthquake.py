@@ -70,6 +70,21 @@ def _FuM(T: float) -> float:
         FuM = (2 * R - 1) ** 0.5 + ((2 * R - 1) ** 0.5 - 1) * ((T - 0.2 * T0D) / 0.2 * T0D)
     return FuM
 
+# 2.18 垂直地震力
+def _Fuv(T: float) -> float:
+    R = 3.0
+    Ra = 1 + (R - 1) / 2.0
+    # if T >= T0D:
+    #     Fu = Ra
+    # elif T >= 0.6 * T0D and T <= T0D:
+    #     Fu = (2 * Ra - 1) ** 0.5 + (Ra - (2 * Ra - 1) ** 0.5) * ((T - 0.6 * T0D) / (0.4 * T0D))
+    # elif T >= 0.2 * T0D and T <= 0.6 * T0D:
+    #     Fu = (2 * Ra - 1) ** 0.5
+    # elif T <= 0.2 * T0D:
+    #     Fu = (2 * Ra - 1) ** 0.5 + ((2 * Ra - 1) ** 0.5 - 1) * ((T - 0.2 * T0D) / 0.2 * T0D)
+    Fu = (2 * Ra - 1) ** 0.5  # 直接用短周期的平台值
+    return Fu
+
 
 # 2.2 最小設計水平總橫力
 def _SaD_div_Fu_modified(SaD_div_Fu: float) -> float:
@@ -91,9 +106,19 @@ def _SaM_div_FuM_modified(SaM_div_FuM: float) -> float:
         SaM_div_FuM_modified = 0.70 * SaM_div_FuM
     return SaM_div_FuM_modified
 
+# 2.18 垂直地震力
+def _SaDV_div_Fuv_modified(SaDV_div_Fuv: float) -> float:
+    if SaDV_div_Fuv <= 0.15:
+        SaDV_div_Fuv_modified = SaDV_div_Fuv
+    elif SaDV_div_Fuv > 0.15 and SaDV_div_Fuv < 0.4:
+        SaDV_div_Fuv_modified = 0.52 * SaDV_div_Fuv + 0.072
+    elif SaDV_div_Fuv >= 0.4:
+        SaDV_div_Fuv_modified = 0.70 * SaDV_div_Fuv
+    return SaDV_div_Fuv_modified
+
 
 # 2.2 最小設計水平總橫力
-def minimum_design_horizontal_force(T: float, W: float) -> float:
+def minimum_design_horizontal_force(T: float, W: float) -> Tuple[float, float]:
     SaD = _SaD(T)
     Fu = _Fu(T)
     SaD_div_Fu = SaD / Fu
@@ -119,9 +144,18 @@ def minimum_design_force_avoid_collapse_at_big_earthquake(T: float, W: float) ->
     V_M = I / (1.4 * ay) * SaM_div_FuM_modified * W
     return V_M
 
+# 2.18 垂直地震力
+def vertical_earthquake_force(T: float, W: float) -> Tuple[float, float]:
+    SaDV = 0.5 * SDS  # 直接用反應譜平台值
+    Fuv = _Fuv(T)
+    SaDV_div_Fuv = SaDV / Fuv
+    SaDV_div_Fuv_modified = _SaDV_div_Fuv_modified(SaDV_div_Fuv)
+    V_Z = I / (1.4 * ay) * SaDV_div_Fuv_modified * W
+    return V_Z, Fuv
+
 
 # select the highest among those 3 design earthquake force
-def design_earthquake_force(structure: Structure) -> Tuple[List[Dict[str, float]], List[float]]:
+def design_earthquake_force(structure: Structure) -> Tuple[List[Dict[str, float]], List[Dict[str, float]], List[float], float, float]:
     T1 = _T(structure.height, structure.first_mode_period)
     T2 = _T(structure.height, structure.second_mode_period)
     W = sum(structure.node_dead_load_self_weight_dict.values())  # kN
@@ -136,5 +170,27 @@ def design_earthquake_force(structure: Structure) -> Tuple[List[Dict[str, float]
     V_M2 = minimum_design_force_avoid_collapse_at_big_earthquake(T2, W)
     earthquake_force2 = {"V": V2, "V_star": V_star2, "V_M": V_M2}
 
-    return [earthquake_force1, earthquake_force2], [Fu1, Fu2]
+    scale_factor_V = V1 / W / _SaD(T1)
+    scale_factor_V_star = V_star1 / W / (Fu1 * _SaD(T1))
+    scale_factor_V_M = V_M1 / W / _SaM(T1)
+    scale_factor1 = {"V": scale_factor_V, "V_star": scale_factor_V_star, "V_M": scale_factor_V_M}
 
+    scale_factor_V = V2 / W / _SaD(T2)
+    scale_factor_V_star = V_star2 / W / (Fu2 * _SaD(T2))
+    scale_factor_V_M = V_M2 / W / _SaM(T2)
+    scale_factor2 = {"V": scale_factor_V, "V_star": scale_factor_V_star, "V_M": scale_factor_V_M}
+
+    if sum(structure.x_span_lens) <= sum(structure.z_span_lens):
+        # 1st period --> parallel to shorter side / 2nd period --> parallel to longer side
+        earthquake_force_xdir, earthquake_force_zdir = earthquake_force1, earthquake_force2
+        Fu_xdir, Fu_zdir = Fu1, Fu2
+        scale_factor_xdir, scale_factor_zdir = scale_factor1, scale_factor2
+    else:
+        # 1st period --> parallel to shorter side / 2nd period --> parallel to longer side
+        earthquake_force_zdir, earthquake_force_xdir = earthquake_force1, earthquake_force2
+        Fu_zdir, Fu_xdir = Fu1, Fu2
+        scale_factor_zdir, scale_factor_xdir = scale_factor1, scale_factor2
+
+    earthquake_force_vertical, Fuv = vertical_earthquake_force(T1, W)  # T 是多少沒差，因為直接用平台值
+
+    return [earthquake_force_xdir, earthquake_force_zdir], [scale_factor_xdir, scale_factor_zdir], [Fu_xdir, Fu_zdir], earthquake_force_vertical, Fuv

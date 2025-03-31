@@ -28,7 +28,7 @@ def parse_args() -> Namespace:
 
 	# checkpoint
 	parser.add_argument("--ckpt_dir", type=Path, default="./Results/AdjustedMoreSections/RandomShape")
-	parser.add_argument("--suffix", type=str, default="TaiModifiedModel_MatReward_StaResFeatures_EpsilonDecay099_Buffer10000_Batch256_Epoch10_TestOpenSees")
+	parser.add_argument("--suffix", type=str, default="TaiModifiedModel_MatReward_StaResFeatures_OpenSeesRSA_LinearDecay010_Buffer10000_Batch256_Epoch1000")
 
 	# nonlinear dynamic analysis simulator
 	parser.add_argument("--do_nonlinear_dynamic_analysis", action="store_true", default=False)
@@ -64,7 +64,7 @@ def parse_args() -> Namespace:
 	parser.add_argument("--test_frequency", type=int, default=5)
 	parser.add_argument("--batch_size", type=int, default=256)  # original: 256
 	parser.add_argument("--lr", type=float, default=1e-5)
-	parser.add_argument("--num_epoch", type=int, default=10, help="epoch == episode")
+	parser.add_argument("--num_epoch", type=int, default=1000, help="epoch == episode")
 	parser.add_argument("--random_seed", type=int, default=731, help="fixed random seed")
 
 	args = parser.parse_args()
@@ -170,7 +170,7 @@ def main(args):
 		"batch_size": args.batch_size,
 		"lr": args.lr,
 		"buffer_size": args.buffer_size,
-		"epsilon_decay_schedule": epsilon_decay_schedule,
+		"epsilon_decay_schedule": straight_decay_schedule,
 		"synchronize_steps": args.synchronize_steps,
 		"soft_update_alpha": args.soft_update_alpha,
 		"gamma": args.gamma,

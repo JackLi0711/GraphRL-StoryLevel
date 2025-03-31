@@ -1,13 +1,11 @@
 import time
 import torch
-import logging
 import numpy as np
 from pathlib import Path
-from Structure import load
-from Structure import pisa
-from Structure import earthquake
-from Structure.sections import *
+
+from Structure import earthquake, load, pisa, opensees
 from Structure.structure import Structure
+from Structure.sections import YIELDING_STRESS
 
 
 PHI_C = 0.85
@@ -17,29 +15,25 @@ STORY_SHEAR_RATIO_LIMIT = 0.80
 STORY_DRIFT_RATIO_LIMIT = 0.005
 
 
-def get_response(structure: Structure, analysis_dir: Path) -> tuple[dict[str, float], list[load.NodalLoad], list[pisa.Response]]:
+def get_response(structure: Structure, analysis_dir: Path) -> tuple[list[load.NodalLoad], list[opensees.Response]]:
     '''Get load cases and responses of static analysis run by PISA3D.'''
     t_start = time.time()
-    structure.first_mode_period, structure.second_mode_period, structure.third_mode_period, structure.node_first_mode_shape, structure.node_second_mode_shape, structure.node_third_mode_shape = pisa.run_modal_analysis(structure)
-    earthquake_forces, Fus = earthquake.design_earthquake_force(structure)
-    auxiliary_values = {"first_mode_period": structure.first_mode_period, 
-                        "second_mode_period": structure.second_mode_period, 
-                        "Fu1": Fus[0],
-                        "Fu2": Fus[1]}
-    load_cases = load.get_load_cases(structure, earthquake_forces, Fus)
+    mode_periods, mode_shapes = opensees.run_modal_analysis(structure)
+    structure.first_mode_period, structure.second_mode_period, structure.third_mode_period = mode_periods[:3]
+    structure.node_first_mode_shape, structure.node_second_mode_shape, structure.node_third_mode_shape = np.hsplit(mode_shapes, 3)
+    
+    load_cases = load.get_load_cases(structure)
     # responses = []
     # for load_case in load_cases:
     #     response = pisa.run_load_case(structure, load_case, analysis_dir)
     #     responses.append(response)
-    responses = pisa.run_static_analysis(structure, load_cases, analysis_dir)
+    responses = opensees.run_response_spectrum_analysis(structure, load_cases, analysis_dir)
     t_end = time.time()
     print(f"\tused time for check.get_response(): {t_end - t_start:.3f} sec")
-    return auxiliary_values, load_cases, responses
+    return load_cases, responses
 
 
-def process_response(structure: Structure, 
-                     load_cases: list[load.NodalLoad],
-                     responses: list[pisa.Response]) -> tuple[np.ndarray, dict[str, torch.Tensor], dict[str, np.float64]]:
+def process_response(structure: Structure, load_cases: list[load.NodalLoad], responses: list[opensees.Response]) -> tuple[np.ndarray, dict[str, torch.Tensor], dict[str, np.float64]]:
     '''Process structural responses and calculate constraint conditions.'''
     t_start = time.time()
     stress_ratios = np.zeros((structure.member_number, len(load_cases)))
@@ -92,13 +86,11 @@ def process_response(structure: Structure,
     }
     print(f"static response rewards: {response_rewards}")
     t_end = time.time()
-    print(f"\tused time for check.process_response(): {t_end - t_start:.3f} sec")
+    # print(f"\tused time for check.process_response(): {t_end - t_start:.3f} sec")
     return constraint_condition, response_features, response_rewards
 
 
-def check_pass(load_cases: list[load.NodalLoad], 
-               constraint_condition: np.ndarray, 
-               check_displacement: bool=True) -> tuple[bool, str, str]:
+def check_pass(load_cases: list[load.NodalLoad], constraint_condition: np.ndarray, check_displacement: bool=True) -> tuple[bool, str, str]:
     '''Check structural responses whether pass constraints or not under various load cases.'''
     for i, load_case in enumerate(load_cases):
         fail_name = load_case.load_name
@@ -131,7 +123,7 @@ def check_pass(load_cases: list[load.NodalLoad],
     return True, None, None
 
 
-def get_ratio_beam_compression_strength(structure: Structure, response: pisa.Response) -> np.ndarray:
+def get_ratio_beam_compression_strength(structure: Structure, response: opensees.Response) -> np.ndarray:
     """Get beam-compression-strength ratio given a specific structure and response."""
     beam_axial_force = np.array(list(response.member_response["axial"].values()))[structure.member_beam_index_list]
     beam_axial_force[beam_axial_force > 0] = 0  # only consider compression case
@@ -143,7 +135,7 @@ def get_ratio_beam_compression_strength(structure: Structure, response: pisa.Res
     return np.abs(beam_axial_force) / Puc
 
 
-def get_ratio_beam_tension_strength(structure: Structure, response: pisa.Response) -> np.ndarray:
+def get_ratio_beam_tension_strength(structure: Structure, response: opensees.Response) -> np.ndarray:
     """Get beam-tension-strength ratio given a specific structure and response."""
     beam_axial_force = np.array(list(response.member_response["axial"].values()))[structure.member_beam_index_list]
     beam_axial_force[beam_axial_force < 0] = 0  # only consider tension case
@@ -154,7 +146,7 @@ def get_ratio_beam_tension_strength(structure: Structure, response: pisa.Respons
     return np.abs(beam_axial_force) / Put
 
 
-def get_ratio_beam_axial_moment(structure: Structure, response: pisa.Response) -> np.ndarray:
+def get_ratio_beam_axial_moment(structure: Structure, response: opensees.Response) -> np.ndarray:
     """
     Get beam-axial-moment ratio given a specific structure and response.
     - [鋼構規範(LRFD) 8.2 對稱構材承受彎矩及軸力之作用](https://www.nlma.gov.tw/filesys/file/chinese/publication/law/law/3495-8.pdf)
@@ -194,7 +186,7 @@ def get_ratio_beam_axial_moment(structure: Structure, response: pisa.Response) -
     return ratio
 
 
-def get_strong_column_weak_beam_ratio(structure: Structure, response: pisa.Response) -> tuple[np.ndarray, np.ndarray]:
+def get_strong_column_weak_beam_ratio(structure: Structure, response: opensees.Response) -> tuple[np.ndarray, np.ndarray]:
     """
     Get strong-column-weak-beam ratio given a specific structure and response.
     - [鋼構規範(LRFD) 13.6.5 梁柱彎矩強度比](https://www.nlma.gov.tw/filesys/file/chinese/publication/law/law/0990807042-2.pdf)
@@ -233,7 +225,7 @@ def get_strong_column_weak_beam_ratio(structure: Structure, response: pisa.Respo
     return scwb_ratio_x, scwb_ratio_z
 
 
-def get_story_shear_ratio(structure: Structure, response: pisa.Response) -> np.ndarray:
+def get_story_shear_ratio(structure: Structure, response: opensees.Response) -> np.ndarray:
     """
     Get story-shear ratio given a specific structure and response.
     - [耐震規範 2.17 極限層剪力強度之檢核](https://www.nlma.gov.tw/filesys/file/EMMA/c1130301-2.pdf)
@@ -252,7 +244,7 @@ def get_story_shear_ratio(structure: Structure, response: pisa.Response) -> np.n
     return shear_ratios
 
 
-def get_member_drift_ratio(structure: Structure, response: pisa.Response) -> np.ndarray:
+def get_member_drift_ratio(structure: Structure, response: opensees.Response) -> np.ndarray:
     """
     Get member-drift ratio given a specific structure and response.
     - [耐震規範 2.16.1 容許層間相對側向位移角](https://www.nlma.gov.tw/filesys/file/EMMA/c1130301-2.pdf)
@@ -277,7 +269,7 @@ def get_member_drift_ratio(structure: Structure, response: pisa.Response) -> np.
     return np.maximum(drift_ratio_x, drift_ratio_z)
 
 
-def get_ratio_column_compression_strength(structure: Structure, response: pisa.Response) -> np.ndarray:
+def get_ratio_column_compression_strength(structure: Structure, response: opensees.Response) -> np.ndarray:
     """
     Get column-compression-strength ratio given a specific structure and response.
      - [鋼構規範(LRFD) 13.4.1 柱強度要求](https://www.nlma.gov.tw/filesys/file/chinese/publication/law/law/0990807042-2.pdf)
@@ -292,7 +284,7 @@ def get_ratio_column_compression_strength(structure: Structure, response: pisa.R
     return np.abs(column_axial_force) / Puc
 
 
-def get_ratio_column_tension_strength(structure: Structure, response: pisa.Response) -> np.ndarray:
+def get_ratio_column_tension_strength(structure: Structure, response: opensees.Response) -> np.ndarray:
     """
     Get column-tension-strength ratio given a specific structure and response.
     - [鋼構規範(LRFD) 13.4.1 柱強度要求](https://www.nlma.gov.tw/filesys/file/chinese/publication/law/law/0990807042-2.pdf)

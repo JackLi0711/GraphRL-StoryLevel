@@ -122,7 +122,7 @@ class Environment:
         self.update_actions_record_SCWB = []
 
         # static response: max stress ratio, min stress ratio, max drift ratio, min SCWB ratio (all normalized by limit)
-        _, load_cases, static_responses = check.get_response(structure, self.code_analysis_dir)
+        load_cases, static_responses = check.get_response(structure, self.code_analysis_dir)
         _, static_response_features, static_response_rewards = check.process_response(structure, load_cases, static_responses)
         self.static_response_record = [list(static_response_rewards.values())]
 
@@ -286,7 +286,7 @@ class Environment:
         else:
             material_saved_SCWB = 0
             update_actions_SCWB = []
-            auxiliary_values, load_cases, static_responses = check.get_response(structure, self.code_analysis_dir)
+            load_cases, static_responses = check.get_response(structure, self.code_analysis_dir)
         
         # 2-1. linear static analysis: check if response pass constraints
         static_constraint_condition, static_response_features, static_response_rewards = check.process_response(structure, load_cases, static_responses)

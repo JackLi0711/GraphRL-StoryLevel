@@ -2,13 +2,10 @@ import time
 import torch
 import numpy as np
 
-from copy import deepcopy
 from typing import Tuple, List, Dict
 from torch_geometric.data import Data
 
-from Structure import pisa
-from Structure.sections import *
-from Structure.sections import _Fcr, _Mn
+from Structure.sections import beam_sections, column_sections, _Fcr, _Mn
 
 
 # A table which correspond face to node feature's My face index
@@ -506,7 +503,7 @@ class Structure:
                     # node name
                     node_name = f"N{node_index+1}"
                     # node area: m^2
-                    distributed_area = self._calculate_node_distributed_area(x, y, z)
+                    distributed_area = self._calculate_node_distributed_area(node_name)
                     node_area_dict[node_name] = distributed_area
                     # node mass: kN
                     node_self_weight = self._calculate_node_distributed_mass(node_name, distributed_area)
@@ -517,7 +514,7 @@ class Structure:
                     # translational mass: kN / (mm/s^2)
                     node_translational_mass_dict[node_name] = self._calculate_translational_mass(node_self_weight)
                     # node inertia: kN / (mm/s^2) * mm^2
-                    node_inertia_dict[node_name] = self._calculate_moment_inertia(x, y, z)
+                    node_inertia_dict[node_name] = self._calculate_moment_inertia(node_name)
                     node_index += 1
 
                 story_weight_distribution_ratio_dict[f"{story}F"] = story_weight * y
@@ -580,9 +577,10 @@ class Structure:
         self.node_first_mode_shape, self.node_second_mode_shape, self.node_third_mode_shape = None, None, None
 
 
-    def _calculate_node_distributed_area(self, x, y, z) -> float:
+    def _calculate_node_distributed_area(self, node_name) -> float:
         # given node x, y, z, return the area distrubte to node
         # node distributed area depends on only neighboring slab, so doesn't need to update when reducing sections
+        x, y, z = self.node_coord_dict[node_name]
         if y == 0: return 0
 
         x_grid_coord = self.x_grid.index(x)
@@ -635,10 +633,11 @@ class Structure:
         return translational_mass
 
 
-    def _calculate_moment_inertia(self, x, y, z) -> Tuple[float]:
+    def _calculate_moment_inertia(self, node_name) -> Tuple[float]:
         # Inertia is mostly contributed by slab, so here only calculate slab's inertia. 
         # Since inertia is only contributed by slab, inertia values don't need updation during reducing sections
         # first find the surrounding slabs, define quarter_slab as 1/4 slab, 1/2 x_span_len * 1/2 z_span_len
+        x, y, z = self.node_coord_dict[node_name]
         quarter_slab_number = 0
         if y == 0:
             quarter_slab_number += 0
@@ -853,15 +852,6 @@ class Structure:
         beta_x, beta_z = self._strongColumn_weakBeam_beta()
         node_feature[:, 9] = beta_x
         node_feature[:, 10] = beta_z
-
-        # period, mode shape
-        # first_mode_period, second_mode_period, third_mode_period, node_first_mode_shape, node_second_mode_shape, node_third_mode_shape = pisa.dynamic_analysis_period(self)
-        # print("first_mode_period", first_mode_period, self.first_mode_period)
-        # print("second_mode_period", second_mode_period, self.second_mode_period)
-        # print("third_mode_period", third_mode_period, self.third_mode_period)
-        # print("node_first_mode_shape", np.equal(node_first_mode_shape, self.node_first_mode_shape).all())
-        # print("node_second_mode_shape", np.equal(node_second_mode_shape, self.node_second_mode_shape).all())
-        # print("node_third_mode_shape", np.equal(node_third_mode_shape, self.node_third_mode_shape).all())
 
         # the modal analysis is conducted in the check.get_response()
         node_feature[:, 11] = self.first_mode_period
@@ -1147,7 +1137,7 @@ class Structure:
         #     self.nda_graph.x[:, 17:20] = torch.tensor(node_second_mode_shape) / self.nda_norm_dict["modal_shape"]
         #     self.nda_graph.x[:, 20:23] = torch.tensor(node_third_mode_shape) / self.nda_norm_dict["modal_shape"]
         t_end = time.time()
-        print(f"\tused time for structue.update_action(): {t_end - t_start:.3f} sec")
+        # print(f"\tused time for structue.update_action(): {t_end - t_start:.3f} sec")
         return volume_saved
         
 
@@ -1183,7 +1173,7 @@ class Structure:
 
             self.graph.edge_attr[member_index*2+1, :] = self.graph.edge_attr[member_index*2, :]
         t_end = time.time()
-        print(f"\tused time for structue.update_graph_GraphRL(): {t_end - t_start:.3f} sec")
+        # print(f"\tused time for structue.update_graph_GraphRL(): {t_end - t_start:.3f} sec")
 
 
     def update_graph_GraphLSTM(self) -> None:
@@ -1192,13 +1182,6 @@ class Structure:
         beta_x, beta_z = self._strongColumn_weakBeam_beta()
         self.nda_graph.x[:, 9] = beta_x
         self.nda_graph.x[:, 10] = beta_z
-        # first_mode_period, second_mode_period, third_mode_period, node_first_mode_shape, node_second_mode_shape, node_third_mode_shape = pisa.dynamic_analysis_period(self)
-        # print("\tfirst_mode_period", first_mode_period, self.first_mode_period)
-        # print("\tsecond_mode_period", second_mode_period, self.second_mode_period)
-        # print("\tthird_mode_period", third_mode_period, self.third_mode_period)
-        # print("\tnode_first_mode_shape", np.equal(node_first_mode_shape, self.node_first_mode_shape).all())
-        # print("\tnode_second_mode_shape", np.equal(node_second_mode_shape, self.node_second_mode_shape).all())
-        # print("\tnode_third_mode_shape", np.equal(node_third_mode_shape, self.node_third_mode_shape).all())
 
         # the modal analysis is conducted in the check.get_response()
         self.nda_graph.x[:, 11] = (self.first_mode_period - self.nda_norm_dict["period"][0]) / (self.nda_norm_dict["period"][1] - self.nda_norm_dict["period"][0])
@@ -1224,5 +1207,5 @@ class Structure:
             self.nda_graph.edge_attr[member_index*2, 3] = (My - self.nda_norm_dict["momentZ"][0]) / (self.nda_norm_dict["momentZ"][1] - self.nda_norm_dict["momentZ"][0])
             self.nda_graph.edge_attr[member_index*2+1, :] = self.nda_graph.edge_attr[member_index*2, :]
         t_end = time.time()
-        print(f"\tused time for structue.update_graph_GraphLSTM(): {t_end - t_start:.3f} sec")
+        # print(f"\tused time for structue.update_graph_GraphLSTM(): {t_end - t_start:.3f} sec")
 
