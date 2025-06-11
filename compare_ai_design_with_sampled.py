@@ -15,9 +15,9 @@ def parse_args() -> Namespace:
 	# trained model path
 	# without doNDA: "./Results/AdjustedSections/2023_05_06__21_36_03__3d_storyLevel_random_shape_addYfeature_epoch_1000_buffer_10000_batch_size_256_gamma_099/model.pt"
 	# with doNDA: "./Results/AdjustedSections/2023_05_07__11_39_51__3d_storyLevel_random_shape_doNDA_addYfeature_epoch_1000_buffer_10000_batch_size_256_gamma_099/model.pt"
-	parser.add_argument("--trained_model_path", type=Path, default="./Results/AdjustedMoreSections/RandomShape/2024_12_28__14_08_03__TaiModifiedModel_MatReward_ResFeatures_LinearDecay010_Buffer10000_Batch256_Epoch1000/models/model_HighestScore.pt")
+	parser.add_argument("--trained_model_path", type=Path, default="./Results/AdjustedMoreSections/RandomShape/OpenSees_RSA/2025_06_05__21_45_28__TaiModifiedModel_MatReward_StaResFeatures_SoftUpdate_LinearDecay010_Buffer10000_Batch256_Epoch1000/models/model_HighestScore.pt")
 	# checkpoint directory
-	parser.add_argument("--ckpt_dir", type=Path, default="./Results/AdjustedMoreSections/RandomShape/2024_12_28__14_08_03__TaiModifiedModel_MatReward_ResFeatures_LinearDecay010_Buffer10000_Batch256_Epoch1000/")
+	parser.add_argument("--ckpt_dir", type=Path, default="./Results/AdjustedMoreSections/RandomShape/OpenSees_RSA/")
 
 	# chances
 	parser.add_argument("--chances", type=int, default=0)
@@ -28,8 +28,8 @@ def parse_args() -> Namespace:
 	parser.add_argument("--check_displacement", action="store_true", default=True)
 	# RelAcc: "./NonlinearDynamicAnalysisSimulator/trained_GraphLSTM/2023_07_20__15_43_32/"
 	# AbsAcc: "./NonlinearDynamicAnalysisSimulator/trained_GraphLSTM/2023_07_20__22_46_09/"
-	parser.add_argument("--graph_lstm_dir", type=Path, default=None)
-	parser.add_argument("--ground_motion_dir", type=Path, default=None)  # "./NonlinearDynamicAnalysisSimulator/ground_motions/selected_ground_motions_MCE/"
+	parser.add_argument("--graph_lstm_dir", type=Path, default=None)  # "./NonlinearDynamicAnalysisSimulator/trained_GraphLSTM/2025_04_23__13_18_19/"
+	parser.add_argument("--ground_motion_dir", type=Path, default=None)  # "./NonlinearDynamicAnalysisSimulator/ground_motions/selected_ground_motions_World_processed_one_scaling_MCE/"
 	parser.add_argument("--ground_motion_number", type=int, default=11, help="ASCE says 11 is better")
 
 	# structure
@@ -152,8 +152,8 @@ def main(args):
 	print(f"\nfinal ranks (with fail case): \n{ranks_with_fail_case}")
 	print(f"\nfinal ranks (without fail case): \n{ranks_without_fail_case}")
 	save_result_root = args.ckpt_dir / "sampling_results"
-	analyze.analyze_ai_ranks(save_result_root, ranks_with_fail_case, suffix=f"{args.chances}chance_with_fail_case_AllPass")
-	analyze.analyze_ai_ranks(save_result_root, ranks_without_fail_case, suffix=f"{args.chances}chance_without_fail_case_AllPass")
+	analyze.analyze_ai_ranks(save_result_root, ranks_with_fail_case, suffix=f"{args.chances}chance_WithFailCase")
+	analyze.analyze_ai_ranks(save_result_root, ranks_without_fail_case, suffix=f"{args.chances}chance_NoFailCase")
 
 
 

@@ -169,12 +169,13 @@ def sample_pass_structures_from_design_space(sample_num=1000,
         print(structure.story_level_sections)
 
         # 1. check if linear static analysis response pass regulations
-        auxiliary_values, load_cases, static_responses = check.get_response(structure, check_kwargs["code_analysis_dir"])
+        load_cases, static_responses = check.get_response(structure, check_kwargs["code_analysis_dir"])
         static_constraint_condition, static_response_features, static_response_rewards = check.process_response(structure, load_cases, static_responses)
         whether_pass, fail_name, fail_reason = check.check_pass(load_cases, static_constraint_condition, check_kwargs["check_displacement"])
 
         # 2. check if nonlinear dynamic analysis response pass regulations if needed
         if do_nonlinear_dynamic_analysis and whether_pass == True:
+            structure.init_graph_GraphLSTM()
             dynamic_responses = check_nda.get_response(structure, check_kwargs["nda_simulator"], check_kwargs["MCE_ground_motion_set"], check_kwargs["device"])
             dynamic_constraint_condition, dynamic_response_features, dynamic_response_rewards = check_nda.process_response(structure, dynamic_responses, nda_norm_dict)
             whether_pass, fail_name, fail_reason = check_nda.check_pass(dynamic_constraint_condition, check_kwargs["check_displacement"])

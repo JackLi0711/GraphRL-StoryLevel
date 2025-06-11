@@ -23,25 +23,28 @@ from NonlinearDynamicAnalysisSimulator import load_simulator
 def parse_args() -> Namespace:
 	parser = ArgumentParser()
  
+	# comment
+	parser.add_argument("--comment", type=str, default="reward 0 for the fail action, proportional prioritized buffer (alpha=1.0, beta-annealing for rate = 5e-3), target Q-network is detached")
+ 
 	# pretrained model
 	parser.add_argument("--pretrained_ckpt_dir", type=Path, default=None)
 
 	# checkpoint
-	parser.add_argument("--ckpt_dir", type=Path, default="./Results/AdjustedMoreSections/RandomShape")
-	parser.add_argument("--suffix", type=str, default="TaiModifiedModel_MatReward_StaResFeatures_OpenSeesRSA_LinearDecay010_Buffer10000_Batch256_Epoch1000")
+	parser.add_argument("--ckpt_dir", type=Path, default="./Results/AdjustedMoreSections/RandomShape/OpenSees_RSA")
+	parser.add_argument("--suffix", type=str, default="TaiModifiedModel_MatReward_SoftUpdate_LinearDecay010_Buffer10000_Batch256_Epoch1000")
 
 	# nonlinear dynamic analysis simulator
 	parser.add_argument("--do_nonlinear_dynamic_analysis", action="store_true", default=False)
 	parser.add_argument("--check_acceleration", action="store_true", default=False)
 	parser.add_argument("--check_displacement", action="store_true", default=True)
-	parser.add_argument("--graph_lstm_dir", type=Path, default=None)  # "./NonlinearDynamicAnalysisSimulator/trained_GraphLSTM/2024_11_07__07_17_12/"
+	parser.add_argument("--graph_lstm_dir", type=Path, default=None)  # "./NonlinearDynamicAnalysisSimulator/trained_GraphLSTM/2025_05_19__22_59_28/"
 	parser.add_argument("--ground_motion_dir", type=Path, default=None)  # "./NonlinearDynamicAnalysisSimulator/ground_motions/selected_ground_motions_World_processed_one_scaling_MCE/"
 	parser.add_argument("--ground_motion_number", type=int, default=11, help="ASCE says 11 is better")
 
 	# structure
 	parser.add_argument("--structure_shape", type=str, default="random", help="fixed, small_random, random")
 	parser.add_argument("--add_structure_geometry", action="store_true", default=True)
-	parser.add_argument("--add_response_features", action="store_true", default=True)
+	parser.add_argument("--add_response_features", action="store_true", default=False)
 	parser.add_argument("--reward_type", type=str, default="material", help="material, acceleration, displacement, normalized, total, combined")
 	parser.add_argument("--restrict_action", action="store_true", default=False)
 	parser.add_argument("--scwb_driven_design", action="store_true", default=False)
@@ -59,8 +62,8 @@ def parse_args() -> Namespace:
 	# training
 	parser.add_argument("--gamma", type=float, default=0.99, help="discount factor, 1.0, 0.99, 0.9")
 	parser.add_argument("--epsilon", type=float, default=0.99, help="epsilon decay factor")
-	parser.add_argument("--synchronize_steps", type=int, default=50)
-	parser.add_argument("--soft_update_alpha", type=float, default=None)
+	parser.add_argument("--synchronize_steps", type=int, default=None)
+	parser.add_argument("--soft_update_alpha", type=float, default=1e-3)
 	parser.add_argument("--test_frequency", type=int, default=5)
 	parser.add_argument("--batch_size", type=int, default=256)  # original: 256
 	parser.add_argument("--lr", type=float, default=1e-5)
