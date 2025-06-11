@@ -20,19 +20,19 @@ from Validation import pisa3d_finished_check
 from Validation import generate_structural_graph
 
 
-thread_quota           = 7
-gm_level               = "MCE"      # DBE, MCE, MCEx2
-strucutre_type         = "testing"  # testing, taller, random, x2_z2_y4, x6_z6_y7
-chance                 = 2          # 0, 1, 2
+thread_quota           = 4
+gm_level               = "World_processed_one_scaling_MCE"  # DBE, MCE, MCEx2, World_processed_one_scaling_MCE, TAP3_two_scaling_MCE
+strucutre_type         = "x6z6y7"  # testing, taller, random, x2z2y4, x6z6y7
+chance                 = 0          # 0, 1, 2
 
-static_model_folder    = "2023_05_06__21_36_03__TonySettings"
-dynamic_model_folder   = "2023_05_07__11_39_51__TonySettings_doNDA"
-model_setting          = static_model_folder.split("__")[2]
+static_model_folder    = "2025_06_05__21_45_28__TaiModifiedModel_MatReward_StaResFeatures_SoftUpdate_LinearDecay010_Buffer10000_Batch256_Epoch1000"
+dynamic_model_folder   = ""
+model_date             = [static_model_folder.split("__")[0], static_model_folder.split("__")[1]]
+model_setting          = "__".join(model_date)
 
-#working_dir            = f"./Validation/{strucutre_type}/Final_Design_Comparison_{gm_level}"
-working_dir            = f"./Validation/{model_setting}/{strucutre_type}/Final_Design_Comparison_{gm_level}"
-static_checkpoint_dir  = f"./Results/MaterialReward/{static_model_folder}"
-dynamic_checkpoint_dir = f"./Results/MaterialReward/{dynamic_model_folder}"
+working_dir            = f"./Validation/Final_Design_Comparison/{model_setting}/{strucutre_type}/{gm_level}"
+static_checkpoint_dir  = f"./Results/AdjustedMoreSections/RandomShape/OpenSees_RSA/{static_model_folder}"
+dynamic_checkpoint_dir = f"./Results/AdjustedMoreSections/RandomShape/OpenSees_RSA/{dynamic_model_folder}"
 pisa                   = "PISA3D_Batch_500nodes.exe"
 
 ground_motion_num      = 11
@@ -53,57 +53,47 @@ def check_path(path):
     '''
 
 
-def generate_seismic_ipt(working_dir, static_checkpoint_dir, dynamic_checkpoint_dir):
+def generate_seismic_ipt(working_dir, checkpoint_dir, scenario="static"):
     working_dir = Path(working_dir)
-    static_checkpoint_dir = Path(static_checkpoint_dir)
-    dynamic_checkpoint_dir = Path(dynamic_checkpoint_dir)
+    checkpoint_dir = Path(checkpoint_dir)
     
     # first copy the ipt files from checkpoints to destination working directory
-    static_ipt_path = static_checkpoint_dir / f"final_design_{strucutre_type}_{chance}extraChance.ipt"
-    dynamic_ipt_path = dynamic_checkpoint_dir / f"final_design_{strucutre_type}_{chance}extraChance.ipt"
-    
-    target_static_ipt_path = working_dir / f"static_design_{strucutre_type}_{chance}extraChance.ipt"
-    target_dynamic_ipt_path = working_dir / f"dynamic_design_{strucutre_type}_{chance}extraChance.ipt"
-    
-    shutil.copy(static_ipt_path, target_static_ipt_path)
-    shutil.copy(dynamic_ipt_path, target_dynamic_ipt_path)
+    ipt_path = checkpoint_dir / f"final_design_{strucutre_type}_{chance}chance.ipt"
+    target_ipt_path = working_dir / f"{scenario}_design_{strucutre_type}_{chance}chance.ipt"
+    shutil.copy(ipt_path, target_ipt_path)
     
     # create directory for the upcoming analysis
-    static_dir = working_dir / "static"
-    dynamic_dir = working_dir / "dynamic"
-    static_dir.mkdir(parents=True, exist_ok=True)
-    dynamic_dir.mkdir(parents=True, exist_ok=True)
-    
-    for target_analysis_dir, target_ipt_path in zip([static_dir, dynamic_dir], [target_static_ipt_path, target_dynamic_ipt_path]):
-        for gm_name_scale in os.listdir(ground_motion_root)[:ground_motion_num]:
-            print("generating ipt file for:", target_analysis_dir, gm_name_scale)
-            gm_name = gm_name_scale.split("_")[0]
-            gm_analysis_dir = target_analysis_dir / gm_name
-            gm_analysis_dir.mkdir(parents=True, exist_ok=True)
-            gm_analysis_ipt = gm_analysis_dir / "structure.ipt"
-            shutil.copy(target_ipt_path, gm_analysis_ipt)
-            
-            # modify the content of the ipt file
-            structure_ipt_string = ""
-            with open(gm_analysis_ipt, 'r') as f:
-                structure_ipt_string = f.read()
+    target_analysis_dir = working_dir / scenario
+    target_analysis_dir.mkdir(parents=True, exist_ok=True)    
+    for gm_name_scale in os.listdir(ground_motion_root)[:ground_motion_num]:
+        print("generating ipt file for:", target_analysis_dir, gm_name_scale)
+        gm_name = gm_name_scale.split("_")[0]
+        gm_analysis_dir = target_analysis_dir / gm_name
+        gm_analysis_dir.mkdir(parents=True, exist_ok=True)
+        gm_analysis_ipt = gm_analysis_dir / "structure.ipt"
+        shutil.copy(target_ipt_path, gm_analysis_ipt)
+        
+        # modify the content of the ipt file
+        structure_ipt_string = ""
+        with open(gm_analysis_ipt, 'r') as f:
+            structure_ipt_string = f.read()
 
-            original_analysis = "Analysis  ModeShape  3  1  2  0.02  0.02"
-            dynamic_analysis = "# Analysis  Dynamic  Newmark  XGndMot  1  none  0  ZGndMot  1  0.005  14000  alpha  beta  0"
-            load_pattern1 = fr"# LoadPattern  GroundAccel  XGndMot  D:\GraphRL_story_level\{ground_motion_root}\{gm_name_scale}\{gm_name}_FN.txt  1  1 "
-            load_pattern2 = fr"# LoadPattern  GroundAccel  ZGndMot  D:\GraphRL_story_level\{ground_motion_root}\{gm_name_scale}\{gm_name}_FP.txt  1  1 "
-            new_analysis = f"{original_analysis}\n{dynamic_analysis}\n{load_pattern1}\n{load_pattern2}"
+        original_analysis = "Analysis  ModeShape  3  1  2  0.02  0.02"
+        dynamic_analysis = "# Analysis  Dynamic  Newmark  XGndMot  1  none  0  ZGndMot  1  0.005  14000  alpha  beta  0"
+        load_pattern1 = fr"# LoadPattern  GroundAccel  XGndMot  D:\GraphRL_StoryLevel_GitHub\{ground_motion_root}\{gm_name_scale}\{gm_name}_FN.txt  1  1 "
+        load_pattern2 = fr"# LoadPattern  GroundAccel  ZGndMot  D:\GraphRL_StoryLevel_GitHub\{ground_motion_root}\{gm_name_scale}\{gm_name}_FP.txt  1  1 "
+        new_analysis = f"{original_analysis}\n{dynamic_analysis}\n{load_pattern1}\n{load_pattern2}"
 
-            structure_ipt_string = structure_ipt_string.replace(original_analysis, new_analysis)
-            structure_ipt_string = structure_ipt_string.replace("Material  Elastic steel 200 0.3", "Material  Bilinear steel 200 0.00 0.35 -0.35 0.3")
-            structure_ipt_string = structure_ipt_string.replace("GUI_Output  OutFlag  1  1  0  1  1  1  1", "GUI_Output  OutFlag  10  10  0  2  2  10  10")
-            structure_ipt_string = structure_ipt_string.replace("Output  OutFlag  1  1  0  1  1  1  1", "Output  OutFlag  10  10  0  2  2  10  10")
+        structure_ipt_string = structure_ipt_string.replace(original_analysis, new_analysis)
+        structure_ipt_string = structure_ipt_string.replace("Material  Elastic steel 200 0.3", "Material  Bilinear steel 200 0.00 0.35 -0.35 0.3")
+        structure_ipt_string = structure_ipt_string.replace("GUI_Output  OutFlag  1  1  0  1  1  1  1", "GUI_Output  OutFlag  10  10  0  2  2  10  10")
+        structure_ipt_string = structure_ipt_string.replace("Output  OutFlag  1  1  0  1  1  1  1", "Output  OutFlag  10  10  0  2  2  10  10")
 
-            with open(gm_analysis_ipt, 'w') as f:
-                f.write(structure_ipt_string)
-            
-            with open(gm_analysis_dir / "modal.ipt", 'w') as f:
-                f.write(structure_ipt_string)
+        with open(gm_analysis_ipt, 'w') as f:
+            f.write(structure_ipt_string)
+        
+        with open(gm_analysis_dir / "modal.ipt", 'w') as f:
+            f.write(structure_ipt_string)
 
 
 def run_pisa_all(target_dir, analysis="structure"):
@@ -198,20 +188,21 @@ if __name__ == '__main__':
     check_path(working_dir)
     
     # 2. Generate ipt files for each pair of ground motion
-    generate_seismic_ipt(working_dir, static_checkpoint_dir, dynamic_checkpoint_dir)
+    generate_seismic_ipt(working_dir, static_checkpoint_dir, scenario="static")
+    # generate_seismic_ipt(working_dir, dynamic_checkpoint_dir, scenario="dynamic")
     
     # 3. Get alpha, beta
     run_pisa_all(target_dir="static", analysis="modal")
     make_file.set_Rayleigh_coeff(root=working_dir, target_dir="static")
-    run_pisa_all(target_dir="dynamic", analysis="modal")
-    make_file.set_Rayleigh_coeff(root=working_dir, target_dir="dynamic")
+    # run_pisa_all(target_dir="dynamic", analysis="modal")
+    # make_file.set_Rayleigh_coeff(root=working_dir, target_dir="dynamic")
 
     # 4. Run dynamic analysis
     run_pisa_all(target_dir="static", analysis="structure")
-    run_pisa_all(target_dir="dynamic", analysis="structure")
+    # run_pisa_all(target_dir="dynamic", analysis="structure")
 
     # 5. Generate graph
     generate_structural_graph.generate_graph_NodeAsNode(os.path.join(working_dir, "static"))
-    generate_structural_graph.generate_graph_NodeAsNode(os.path.join(working_dir, "dynamic"))
+    # generate_structural_graph.generate_graph_NodeAsNode(os.path.join(working_dir, "dynamic"))
     
     

@@ -369,11 +369,11 @@ def generate(args):
     grid_num = torch.tensor([len(x_grid_index), len(y_grid_index), len(z_grid_index)])
 
     # data.x: XYZ grid nums(3), node_grid(3), if_bottom(1), if_top(1), if_side(1), beta(2), period(3), Ux_Uz_Ry(3*3), section_info_per_face(2*6)
-    # data.y: acc(2), vel(2), disp(2), momentZ(6), shearY(6)
+    # data.y: acc(2), vel(2), disp(2), momentY(6), momentZ(6), shearY(6), shearZ(6)
     # data.x_y_z_gird: grid_num(3)
     section_info_dim = 2
     x = torch.zeros((node_count, 23 + section_info_dim * 6))  # 35
-    y = torch.zeros((node_count, timestep, 18))
+    y = torch.zeros((node_count, timestep, 30))
 
     for line in input_file:
         contents = line.split()
@@ -429,26 +429,41 @@ def generate(args):
             y[node_index, :, 0:2] = node_acc_dict[node_name]
             y[node_index, :, 2:4] = node_vel_dict[node_name]
             y[node_index, :, 4:6] = node_displacement_dict[node_name]
+            
+            # MomentY
+            y[node_index, :, 6] = RigidZones[node_name].face_dict['x_n']['momentY']
+            y[node_index, :, 7] = RigidZones[node_name].face_dict['x_p']['momentY']
+            y[node_index, :, 8] = RigidZones[node_name].face_dict['y_n']['momentY']
+            y[node_index, :, 9] = RigidZones[node_name].face_dict['y_p']['momentY']
+            y[node_index, :, 10] = RigidZones[node_name].face_dict['z_n']['momentY']
+            y[node_index, :, 11] = RigidZones[node_name].face_dict['z_p']['momentY']
 
             # Moment Z
-            y[node_index, :, 6] = RigidZones[node_name].face_dict['x_n']['momentZ']
-            y[node_index, :, 7] = RigidZones[node_name].face_dict['x_p']['momentZ']
-            y[node_index, :, 8] = RigidZones[node_name].face_dict['y_n']['momentZ']
-            y[node_index, :, 9] = RigidZones[node_name].face_dict['y_p']['momentZ']
-            y[node_index, :, 10] = RigidZones[node_name].face_dict['z_n']['momentZ']
-            y[node_index, :, 11] = RigidZones[node_name].face_dict['z_p']['momentZ']
+            y[node_index, :, 12] = RigidZones[node_name].face_dict['x_n']['momentZ']
+            y[node_index, :, 13] = RigidZones[node_name].face_dict['x_p']['momentZ']
+            y[node_index, :, 14] = RigidZones[node_name].face_dict['y_n']['momentZ']
+            y[node_index, :, 15] = RigidZones[node_name].face_dict['y_p']['momentZ']
+            y[node_index, :, 16] = RigidZones[node_name].face_dict['z_n']['momentZ']
+            y[node_index, :, 17] = RigidZones[node_name].face_dict['z_p']['momentZ']
             
             # ShearY
-            y[node_index, :, 12] = RigidZones[node_name].face_dict['x_n']['shearY']
-            y[node_index, :, 13] = RigidZones[node_name].face_dict['x_p']['shearY']
-            y[node_index, :, 14] = RigidZones[node_name].face_dict['y_n']['shearY']
-            y[node_index, :, 15] = RigidZones[node_name].face_dict['y_p']['shearY']
-            y[node_index, :, 16] = RigidZones[node_name].face_dict['z_n']['shearY']
-            y[node_index, :, 17] = RigidZones[node_name].face_dict['z_p']['shearY']
+            y[node_index, :, 18] = RigidZones[node_name].face_dict['x_n']['shearY']
+            y[node_index, :, 19] = RigidZones[node_name].face_dict['x_p']['shearY']
+            y[node_index, :, 20] = RigidZones[node_name].face_dict['y_n']['shearY']
+            y[node_index, :, 21] = RigidZones[node_name].face_dict['y_p']['shearY']
+            y[node_index, :, 22] = RigidZones[node_name].face_dict['z_n']['shearY']
+            y[node_index, :, 23] = RigidZones[node_name].face_dict['z_p']['shearY']
 
+            # ShearZ
+            y[node_index, :, 24] = RigidZones[node_name].face_dict['x_n']['shearZ']
+            y[node_index, :, 25] = RigidZones[node_name].face_dict['x_p']['shearZ']
+            y[node_index, :, 26] = RigidZones[node_name].face_dict['y_n']['shearZ']
+            y[node_index, :, 27] = RigidZones[node_name].face_dict['y_p']['shearZ']
+            y[node_index, :, 28] = RigidZones[node_name].face_dict['z_n']['shearZ']
+            y[node_index, :, 29] = RigidZones[node_name].face_dict['z_p']['shearZ']
                 
-    assert(x.shape[-1] == 35)
-    assert(y.shape[-1] == 18)
+    assert x.shape[-1] == 35
+    assert y.shape[-1] == 30
     
     # Make above data into a torch_geometric.data.Data object
     data = Data(x=x, y=y, edge_index=edge_index, edge_attr=edge_attr, grid_num=grid_num, path=folder_name, gm_X_name=gm_X_name, gm_Z_name=gm_Z_name)
