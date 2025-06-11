@@ -171,4 +171,4 @@ class PrioritizedExperienceReplayBuffer:
     def update_priorities(self, idxs: np.array, priorities: np.array) -> None:
         """Update the priorities associated with particular experiences."""
         self._buffer["priority"][idxs] = priorities
-
+        print(f"mean priority: {np.mean(self._buffer['priority'])}")

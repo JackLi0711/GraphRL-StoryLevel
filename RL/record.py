@@ -41,7 +41,7 @@ class Record:
         }
 
         self.learn_losses = [[]]
-        self.Q_values = []
+        self.Q_values = [[], []]  # Q_values[0] for training, Q_values[1] for testing
 
 
     def record_in_beginning(self, structure: Structure, testing: bool=False):

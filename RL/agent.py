@@ -103,10 +103,11 @@ class DeepQAgent(Agent):
         _replay_buffer_kwargs = {
             "batch_size": batch_size,
             "buffer_size": buffer_size,
+            "prioritized_alpha": 1.0,  # 0.0: uniform sampling, 1.0: fully prioritized
             "random_state": self._random_state,
             "logger": self.logger
         }
-        self._buffer = buffer.ExperienceReplayBuffer(**_replay_buffer_kwargs)
+        self._buffer = buffer.PrioritizedExperienceReplayBuffer(**_replay_buffer_kwargs)
         
         # initialize GNN
         model_kwargs = {"node_feature_dim": node_feature_dim, "edge_feature_dim": edge_feature_dim, "hidden_dim": hidden_dim, "member_state_dim": hidden_dim, "num_layers": num_layers}
@@ -228,7 +229,7 @@ class DeepQAgent(Agent):
         return action, q_val
     
     
-    def _learn(self, experiences: List[buffer.Experience]) -> None:
+    def _get_TD_error(self, experiences: List[buffer.Experience]) -> torch.Tensor:
         """Update the agent's Q network based on a collection of prioritized experiences."""
         graphs, actions, rewards, next_graphs, dones, infeasible_actions, auxs = [vs for vs in zip(*experiences)]
         
@@ -282,9 +283,13 @@ class DeepQAgent(Agent):
                                                      self.online_q_network,
                                                      self.target_q_network,
                                                      self.logger)
+        return deltas
+    
 
+    def _learn(self, deltas: torch.Tensor, weights: torch.Tensor) -> float:
         # compute the mean squared loss
-        loss = torch.mean(deltas ** 2)
+        loss = torch.mean(weights * deltas ** 2)
+        print(f"{loss.requires_grad = }")
         self.logger.critical(f"loss: {loss.item()}")
 
         # updates the parameters of the online network
@@ -345,8 +350,26 @@ class DeepQAgent(Agent):
             self._number_timesteps += 1
             # update frequently so that the agent can learn from experiences
             if self._number_timesteps % self._update_frequency == 0 and self._has_sufficient_experience():
-                experiences = self._buffer.sample()
-                loss = self._learn(experiences)    
+                # sample a batch of experiences and perform loss backpropagation
+                beta = 1 - np.exp(-0.005 * self._number_episodes)  # 0.0: no correction in the beginning, 1.0: full correction in the end
+                sampled_idxs, experiences, normalized_weights = self._buffer.sample(bias_correcting_beta=beta)
+                print(f"normalized_weights min: {np.min(normalized_weights)}, mean: {np.mean(normalized_weights)}, std: {np.std(normalized_weights)}, max: {np.max(normalized_weights)}")
+                
+                deltas = self._get_TD_error(experiences)
+                weights = torch.tensor(normalized_weights, device=self.device)
+                print(f"{beta = }, {deltas.requires_grad = }, {weights.requires_grad = }")
+                loss = self._learn(deltas, weights)
+
+                # update the priorities of the sampled experiences
+                proportional_priorities = np.abs(deltas.detach().cpu().numpy())
+                
+                ranking_indices = np.argsort(-proportional_priorities)
+                rank_values = np.empty_like(ranking_indices)
+                rank_values[ranking_indices] = np.arange(1, len(proportional_priorities) + 1)
+                ranking_priorities = 1 / rank_values  # rank-based priorities
+
+                priorities = proportional_priorities + 1e-6  # avoid zero priorities
+                self._buffer.update_priorities(sampled_idxs, priorities)
         
         return loss
 
@@ -644,7 +667,7 @@ def _train_an_episode(agent: DeepQAgent,
             cumulative_saved_material_SCWB = sum(env.saved_material_record_SCWB)
             logger.info(f"episode: {agent._number_episodes+1:4d}, timestep: {agent._number_timesteps+1:3d}, action: {actions_SCWB}, reward_volume: {saved_material_SCWB:4f},  acculmulate_score_volume: {cumulative_saved_material_SCWB:.4f} [SCWB]")
         
-        if q == 0 and q_val > 0: q = q_val
+        if q == 0 and q_val > 0: q = q_val  # Q-value of the first timestep
 
         # get next state and save experience
         next_graph = structure.graph.clone()
@@ -656,7 +679,7 @@ def _train_an_episode(agent: DeepQAgent,
 
         graph = next_graph.clone()
     
-    rec.Q_values.append(q)
+    rec.Q_values[0].append(q)
     rec.learn_losses.append([])
 
     final_structure = structure if fail_reason == "minimum_section" else original_structure
@@ -682,6 +705,7 @@ def _testing(agent: DeepQAgent,
     score = 0
     timestep = 0
     done = False
+    q = 0
     while not done:
         original_structure = deepcopy(structure)
         # select and perform an action
@@ -690,10 +714,10 @@ def _testing(agent: DeepQAgent,
             state = agent.gnn.forward(graph.x, graph.edge_index, graph.edge_attr, None, structure.aux["story_batch"].to(agent.device), None)
 
         dont_select_story_member_indexes = structure.restrict_action_space() if agent.restrict_action else []
-        action, _ = agent.choose_action(state, 
-                                        structure.already_minimum_section_story_indexes,
-                                        dont_select_story_member_indexes, 
-                                        greedy=True)
+        action, q_val = agent.choose_action(state, 
+                                            structure.already_minimum_section_story_indexes,
+                                            dont_select_story_member_indexes, 
+                                            greedy=True)
         member_category = structure.story_level_categories[action]
         update_story = (action % structure.story_num) + 1
         print(f"\n*****Testing Episode, story_level_sections: {structure.story_level_sections}, action: {action:3d} [{update_story}F {member_category}]")
@@ -707,12 +731,16 @@ def _testing(agent: DeepQAgent,
         timestep += 1
         logger.info(f"*****Testing Episode, timestep: {timestep:3d}, action: {action:3d}, reward: {reward:4f},  acculmulate_score: {score:.4f} [ORIGINAL]")
 
+        if q == 0 and q_val > 0: q = q_val  # Q-value of the first timestep
+
         if env.saved_material_record_SCWB[-1] != 0:
             actions_SCWB = '_'.join([str(a) for a in env.update_actions_record_SCWB[-1]])
             saved_material_SCWB = env.saved_material_record_SCWB[-1]
             cumulative_saved_material_SCWB = sum(env.saved_material_record_SCWB)
             logger.info(f"*****Testing Episode, timestep: {timestep:3d}, action: {actions_SCWB}, reward_volume: {saved_material_SCWB:4f},  acculmulate_score_volume: {cumulative_saved_material_SCWB:.4f} [SCWB]")
     
+    rec.Q_values[1].append(q)
+
     final_structure = structure if fail_reason == "minimum_section" else original_structure
     test_final_story_level_sections = final_structure.story_level_sections
     logger.info("---> Constraint not satisfied, found optimal section at previous timestep")

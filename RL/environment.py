@@ -260,7 +260,7 @@ class Environment:
                 else:
                     reward = (acc_decrement_x + acc_decrement_z)
         else: 
-            reward = -1.0
+            reward = 0.0
 
         self.reward_record.append(reward)
 
