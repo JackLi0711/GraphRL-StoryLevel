@@ -167,7 +167,7 @@ def _generate_analysis_ipt(structure: Structure, ipt_path: Path, analysis="stati
     for node_name in structure.node_translational_mass_dict.keys():
         trans_mass = structure.node_translational_mass_dict[node_name]  # kN / mm/s^2
         Rx, Ry, Rz = structure.node_inertia_dict[node_name]             # kN / (mm/s2) * mm2
-        mass_string += '#  Mass  ' + node_name + ' ' + f"{trans_mass:.5f}" + ' ' + f"{trans_mass:.5f}" + ' ' + f"{trans_mass:.5f}" + ' ' + str(int(Rx)) + ' ' + str(int(Ry)) + ' ' + str(int(Rz)) + '\n'
+        mass_string += '#Mass  ' + node_name + ' ' + f"{trans_mass:.5f}" + ' ' + f"{trans_mass:.5f}" + ' ' + f"{trans_mass:.5f}" + ' ' + str(int(Rx)) + ' ' + str(int(Ry)) + ' ' + str(int(Rz)) + '\n'
     
     # master node's translational mass (Ux, Uy, Uz, Rx, Ry, Rz)
     for master_name in master_node_list:

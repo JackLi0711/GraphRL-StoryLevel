@@ -1,11 +1,9 @@
 import time
-import gc, os, psutil
 import numpy as np
 import openseespy.opensees as ops
 from pathlib import Path
 
-from Structure import earthquake
-from Structure.load import NodalLoad
+from Structure import earthquake, load
 from Structure.structure import Structure
 from Structure.sections import beam_sections, column_sections
 
@@ -75,6 +73,62 @@ class Response:
             self.node_neighbor_Puc_matrix[node2_index, face_number2] = AXIAL
 
 
+class NewResponse:
+    def __init__(self, structure: Structure):
+        self.structure = structure
+        self.node_number = structure.node_number
+        self.member_number = structure.member_number
+        self.all_node_response = np.array([ops.nodeDisp(nodeTag) for nodeTag in range(1, self.node_number+1)])  # shape: (node_number, 6)
+        self.all_member_response = np.array([np.array(ops.eleResponse(eleTag, 'force')).reshape(-1, 6) for eleTag in range(1, self.member_number+1)])  # shape: (member_number, 2, 6)
+        
+        self.node_response = dict()
+        self.node_response["dispX"] = dict()
+        self.node_response["dispZ"] = dict()
+        self.member_response = dict()
+        self.member_response["shearY"] = dict()
+        self.member_response["shearZ"] = dict()
+        self.member_response["momentY"] = dict()
+        self.member_response["momentZ"] = dict()
+        self.member_response["axial"] = dict()
+        self.node_neighbor_Puc_matrix = np.zeros((self.node_number, 6))
+
+    def to_response_dict(self):
+        for nodeTag in range(1, self.node_number+1):
+            node_disp = self.all_node_response[nodeTag-1]  # shape: (6,)
+            node_name = f"N{nodeTag}"
+            self.node_response["dispX"][node_name] = node_disp[0]
+            self.node_response["dispZ"][node_name] = node_disp[1]
+        for eleTag in range(1, self.member_number+1):
+            member_name = f"E{eleTag}"
+            category = self.structure.member_category_dict[member_name]
+            member_response = self.all_member_response[eleTag-1]  # shape: (2, 6)
+            FXI, FYI, FZI, MXI, MYI, MZI = member_response[0]
+            FXJ, FYJ, FZJ, MXJ, MYJ, MZJ = member_response[1]
+            if category == 'y':
+                self.member_response["shearY"][member_name] = FXI if abs(FXI) > abs(FXJ) else FXJ
+                self.member_response["shearZ"][member_name] = FYI if abs(FYI) > abs(FYJ) else FYJ
+                self.member_response["momentY"][member_name] = MXI if abs(MXI) > abs(MXJ) else MXJ
+                self.member_response["momentZ"][member_name] = MYI if abs(MYI) > abs(MYJ) else MYJ
+                self.member_response["axial"][member_name] = FZI if abs(FZI) > abs(FZJ) else FZJ
+            elif category == 'x':
+                self.member_response["shearY"][member_name] = FZI if abs(FZI) > abs(FZJ) else FZJ
+                self.member_response["shearZ"][member_name] = FYI if abs(FYI) > abs(FYJ) else FYJ
+                self.member_response["momentY"][member_name] = MZI if abs(MZI) > abs(MZJ) else MZJ
+                self.member_response["momentZ"][member_name] = MYI if abs(MYI) > abs(MYJ) else MYJ
+                self.member_response["axial"][member_name] = FXI if abs(FXI) > abs(FXJ) else FXJ
+            elif category == 'z':
+                self.member_response["shearY"][member_name] = FZI if abs(FZI) > abs(FZJ) else FZJ
+                self.member_response["shearZ"][member_name] = FXI if abs(FXI) > abs(FXJ) else FXJ
+                self.member_response["momentY"][member_name] = MZI if abs(MZI) > abs(MZJ) else MZJ
+                self.member_response["momentZ"][member_name] = MXI if abs(MXI) > abs(MXJ) else MXJ
+                self.member_response["axial"][member_name] = FYI if abs(FYI) > abs(FYJ) else FYJ
+
+            node1_index, node2_index, face_number1, face_number2, _, _ = self.structure.member_to_nodeIndex_dict[member_name]
+            AXIAL = self.member_response["axial"][member_name]
+            self.node_neighbor_Puc_matrix[node1_index, face_number1] = AXIAL
+            self.node_neighbor_Puc_matrix[node2_index, face_number2] = AXIAL
+
+
 def design_spectrum():
     """
     Design spectrum for Taipei Zone III
@@ -113,7 +167,7 @@ def design_spectrum():
 def CQC(responses, lambdas, damping_ratios, scale_factors):
     """
     Complete Quadratic Combination (CQC) function
-    * responses: list of modal responses (e.g., disp, vel, acc, force), shape: (n_modes, n_elements)
+    * responses: np.array of modal responses (e.g., disp, vel, acc, force), shape: (n_modes, n_elements, ...)
     * lambdas: list of eigenvalues
     * damping_ratios: list of damping ratios
     * scale_factors: list of scaling factors
@@ -127,7 +181,7 @@ def CQC(responses, lambdas, damping_ratios, scale_factors):
             rho = (8*np.sqrt(zeta_i*zeta_j)*(zeta_i+r*zeta_j)*(r**(3/2))) / ((1-r**2)**2 + 4*zeta_i*zeta_j*r*(1+r**2) + 4*(zeta_i**2+zeta_j**2)*r**2)
             total_responses += scale_factors[i]*responses[i, :] * scale_factors[j]*responses[j, :] * rho
     
-    return np.sqrt(total_responses)  # shape: (n_elements, )
+    return np.sqrt(total_responses)  # shape: (n_elements, ...)
 
 
 mm = 1  # length
@@ -254,6 +308,9 @@ def _generate_analysis_model(structure: Structure) -> None:
     # # 4.11. rayleigh command (https://openseespydoc.readthedocs.io/en/latest/src/reyleigh.html)
     # ops.rayleigh(alphaM, betaK, 0, 0)  # set damping matrix (for desired damping ratio)
 
+    filename = str(structure.analysis_dir / "model.json")
+    ops.printModel('-JSON', '-file',filename)
+
 
 def _run_single_modal_analysis(structure: Structure) -> tuple[np.ndarray, np.ndarray]:
     """
@@ -302,7 +359,7 @@ def run_modal_analysis(structure: Structure) -> tuple[np.ndarray, np.ndarray]:
     return mode_periods, mode_shapes
 
 
-def _run_single_static_analysis(structure: Structure, nodal_loads: list[np.ndarray], analysis_dir: Path) -> Response:
+def _run_single_static_analysis(structure: Structure, nodal_loads: list[np.ndarray], analysis_dir: Path, response_type="original"):
     """
     * Run **OpenSees** static analysis
     * Return response
@@ -366,21 +423,24 @@ def _run_single_static_analysis(structure: Structure, nodal_loads: list[np.ndarr
     # 5.9. analyze command (https://openseespydoc.readthedocs.io/en/latest/src/analyze.html)
     ops.analyze(1)
 
-    # Reset load
     # 7.5. loadConst command (https://openseespydoc.readthedocs.io/en/latest/src/loadConst.html)
     ops.loadConst('-time', 0.0)
+
     # 7.8. remove command (https://openseespydoc.readthedocs.io/en/latest/src/remove.html)
     ops.remove('timeSeries', tsTag)
     ops.remove('loadPattern', patternTag)
 
-    response = Response(structure)
+    if response_type == "original":
+        response = Response(structure)
+    elif response_type == "new":
+        response = NewResponse(structure)
 
     t_end = time.time()
     # print(f"\t\t\tused time for opensees._run_single_static_analysis: {t_end - t_start:.3f} sec")
 
-    return response, t_end - t_start
+    return response
 
-def run_static_analysis(structure: Structure, load_cases: list[NodalLoad], analysis_dir: Path) -> list[Response]:
+def run_static_analysis(structure: Structure, load_cases: list[load.NodalLoad], analysis_dir: Path):
     """
     1. Generate analysis model in **OpenSees**
     2. Run static analysis
@@ -388,9 +448,9 @@ def run_static_analysis(structure: Structure, load_cases: list[NodalLoad], analy
     """
     t_start = time.time()
 
+    _generate_analysis_model(structure)
     responses = []
     for load_case in load_cases:
-        _generate_analysis_model(structure)  # regenerate model every time to avoid warning message from ConstraintHandler object
         nodal_loads = load_case.calculate_nodal_load(structure)
         response = _run_single_static_analysis(structure, nodal_loads, analysis_dir)
         responses.append(response)
@@ -401,7 +461,7 @@ def run_static_analysis(structure: Structure, load_cases: list[NodalLoad], analy
     return responses
 
 
-def _run_single_response_spectrum_analysis(structure: Structure, analysis_dir: Path, lambdas: list[float], Tn: np.ndarray, Sa: np.ndarray, direction=1) -> Response:
+def _run_single_response_spectrum_analysis_v1(structure: Structure, lambdas: list[float], Tn: np.ndarray, Sa: np.ndarray, direction=1) -> Response:
     """
     * Run **OpenSees** response spectrum analysis
     * Return modal response
@@ -461,18 +521,40 @@ def _run_single_response_spectrum_analysis(structure: Structure, analysis_dir: P
     t_end = time.time()
     # print(f"\t\t\tused time for opensees._run_single_response_spectrum_analysis: {t_end - t_start:.3f} sec")
 
-    return superposition_modal_response, t_end - t_start
+    return superposition_modal_response
 
-def run_response_spectrum_analysis(structure: Structure, load_cases: list[NodalLoad], analysis_dir: Path) -> list[Response]:
-    """
-    1. Run response spectrum analysis and get base shear
-    2. Scale reponse spectrum compared to design eatrhquake force
-    3. Run reponse spectrum analysis again and get modal responses
-    4. Run static analysis to get the directional information of horizontal responses (+ or -)
-    5. Run static analysis to get the vertical responses
-    6. Combine the modal, horizontal and vertical responses
-    7. Return a list of combined responses for each load case
-    """
+def _run_single_response_spectrum_analysis_v2(structure: Structure, lambdas: list[float], Tn: np.ndarray, Sa: np.ndarray, direction=1) -> NewResponse:
+    modal_all_node_response = np.zeros((len(lambdas), structure.node_number, 6))  # shape: (mode, node_number, 6)
+    modal_all_member_response = np.zeros((len(lambdas), structure.member_number, 2, 6))  # shape: (mode, member_number, 2, 6)
+
+    for mode in range(1, len(lambdas)+1):
+        ops.responseSpectrumAnalysis(direction, '-Tn',*Tn, '-Sa',*Sa, '-mode',mode)
+        response = NewResponse(structure) 
+        modal_all_node_response[mode-1, :, :] = response.all_node_response  # shape: (node_number, 6)
+        modal_all_member_response[mode-1, :, :, :] = response.all_member_response  # shape: (member_number, 2, 6)
+
+    damping_ratios = [0.05] * len(lambdas)  # same damping for each mode (5% as same as used one in response spectrum)
+    scale_factors = [1.0] * len(lambdas)  # treat all modes equally
+    superposition_modal_node_response = CQC(modal_all_node_response, lambdas, damping_ratios, scale_factors)  # shape: (node_number, 6)
+    superposition_modal_member_response = CQC(modal_all_member_response, lambdas, damping_ratios, scale_factors)  # shape: (member_number, 2, 6)
+
+    superposition_modal_response = NewResponse(structure)
+    superposition_modal_response.all_node_response = superposition_modal_node_response  # shape: (node_number, 6)
+    superposition_modal_response.all_member_response = superposition_modal_member_response  # shape: (member_number, 2, 6)
+
+    # For base shear in practice (1. sum all column reponse, 2. perform CQC)
+    # modal_column_response = modal_all_member_response[:, structure.story_column_member[0], 0, :]
+    # sum_modal_column_response = np.sum(modal_column_response, axis=1)  # shape: (mode, 6)
+    # superposition_modal_column_response = CQC(sum_modal_column_response, lambdas, damping_ratios, scale_factors)  # shape: (6,)
+    # if direction == 1:
+    #     modal_base_shear = superposition_modal_column_response[0]  # shearY
+    # elif direction == 2:
+    #     modal_base_shear = superposition_modal_column_response[1]  # shearZ
+
+    return superposition_modal_response
+
+
+def run_response_spectrum_analysis(structure: Structure, load_cases: list[load.NodalLoad], analysis_dir: Path) -> list[NewResponse]:
     t_start = time.time()
 
     _, _, periods, design_spectrum_BSE1, design_spectrum_BSE2 = design_spectrum()
@@ -482,70 +564,96 @@ def run_response_spectrum_analysis(structure: Structure, load_cases: list[NodalL
     mode_periods = np.array([structure.first_mode_period, structure.second_mode_period, structure.third_mode_period])
     eigenvalues = 4 * np.pi**2 / mode_periods**2
 
-    analysis_time = 0
+    static_analysis_counter = 0
+    response_spectrum_analysis_counter = 0
+
+    horizontal_earthquake_forces, scale_factors, Fus, vertical_earthquake_force, Fuv = earthquake.design_earthquake_force(structure)
+    horizontal_earthquake_forces_xdir, horizontal_earthquake_forces_zdir = horizontal_earthquake_forces
+    scale_factors_xdir, scale_factors_zdir = scale_factors
+    horizontal_earthquake_force_xdir = horizontal_earthquake_forces_xdir["V"]
+    horizontal_earthquake_force_zdir = horizontal_earthquake_forces_zdir["V"]
+    scale_factor_xdir = scale_factors_xdir["V"]
+    scale_factor_zdir = scale_factors_zdir["V"]
+
+    ### Vertical Response ###
+    nodal_dead_loads = load.get_nodal_dead_load(structure)
+    nodal_live_loads = load.get_nodal_live_load(structure)
+    nodal_self_weights = load.get_nodal_self_weight(structure)
+    nodal_Ey_loads = load.get_nodal_vertical_earthquake_load(structure, vertical_earthquake_force)
+    dead_load_response = _run_single_static_analysis(structure, nodal_dead_loads, analysis_dir, response_type="new")
+    live_load_response = _run_single_static_analysis(structure, nodal_live_loads, analysis_dir, response_type="new")
+    self_weight_response = _run_single_static_analysis(structure, nodal_self_weights, analysis_dir, response_type="new")
+    Ey_response = _run_single_static_analysis(structure, nodal_Ey_loads, analysis_dir, response_type="new")
+    static_analysis_counter += 4
+
+    ### Horizontal Response ###
+    scale_Sa_xdir = Sa * scale_factor_xdir
+    scale_Sa_zdir = Sa * scale_factor_zdir
+    modal_response_xdir = _run_single_response_spectrum_analysis_v2(structure, eigenvalues, Tn, scale_Sa_xdir, direction=1)
+    modal_response_zdir = _run_single_response_spectrum_analysis_v2(structure, eigenvalues, Tn, scale_Sa_zdir, direction=2)
+    modal_response_xdir.to_response_dict()
+    modal_response_zdir.to_response_dict()
+    modal_base_shear_xdir = np.sum([modal_response_xdir.member_response["shearY"][f"E{member_index+1}"] for member_index in structure.story_column_member[0]])
+    modal_base_shear_zdir = np.sum([modal_response_zdir.member_response["shearZ"][f"E{member_index+1}"] for member_index in structure.story_column_member[0]])
+    base_shear_ratio_xdir = horizontal_earthquake_force_xdir / modal_base_shear_xdir
+    base_shear_ratio_zdir = horizontal_earthquake_force_zdir / modal_base_shear_zdir
+    response_spectrum_analysis_counter += 2
+
+    Exn_loads = load.get_nodal_horizontal_earthquake_load(structure, horizontal_earthquake_force_xdir, direction="x_n")
+    Exp_loads = load.get_nodal_horizontal_earthquake_load(structure, horizontal_earthquake_force_xdir, direction="x_p")
+    Ezn_loads = load.get_nodal_horizontal_earthquake_load(structure, horizontal_earthquake_force_zdir, direction="z_n")
+    Ezp_loads = load.get_nodal_horizontal_earthquake_load(structure, horizontal_earthquake_force_zdir, direction="z_p")
+    Exn_response = _run_single_static_analysis(structure, Exn_loads, analysis_dir, response_type="new")
+    Exp_response = _run_single_static_analysis(structure, Exp_loads, analysis_dir, response_type="new")
+    Ezn_response = _run_single_static_analysis(structure, Ezn_loads, analysis_dir, response_type="new")
+    Ezp_response = _run_single_static_analysis(structure, Ezp_loads, analysis_dir, response_type="new")
+    static_analysis_counter += 4
+
+    all_node_response_Exn = base_shear_ratio_xdir * (modal_response_xdir.all_node_response * np.sign(Exn_response.all_node_response))
+    all_node_response_Exp = base_shear_ratio_xdir * (modal_response_xdir.all_node_response * np.sign(Exp_response.all_node_response))
+    all_node_response_Ezn = base_shear_ratio_zdir * (modal_response_zdir.all_node_response * np.sign(Ezn_response.all_node_response))
+    all_node_response_Ezp = base_shear_ratio_zdir * (modal_response_zdir.all_node_response * np.sign(Ezp_response.all_node_response))
+    all_member_response_Exn = base_shear_ratio_xdir * (modal_response_xdir.all_member_response * np.sign(Exn_response.all_member_response))
+    all_member_response_Exp = base_shear_ratio_xdir * (modal_response_xdir.all_member_response * np.sign(Exp_response.all_member_response))
+    all_member_response_Ezn = base_shear_ratio_zdir * (modal_response_zdir.all_member_response * np.sign(Ezn_response.all_member_response))
+    all_member_response_Ezp = base_shear_ratio_zdir * (modal_response_zdir.all_member_response * np.sign(Ezp_response.all_member_response))
+
     responses = []
     for load_case in load_cases:
-
-        ### Horizontal Response ###
-        if load_case.direction == 1:
-            target = "shearY"
-        elif load_case.direction == 2:
-            target = "shearZ"
-            
-        horizontal_earthquake_force = load_case.horizontal_earthquake_load
-        scale_Sa = Sa * load_case.horizontal_scale_factor
-
-        superposition_modal_response, t1 = _run_single_response_spectrum_analysis(structure, analysis_dir, eigenvalues, Tn, scale_Sa, load_case.direction)
-        total_modal_base_shear = np.sum([superposition_modal_response.member_response[target][f"E{member_index+1}"] for member_index in structure.story_column_member[0]])
-        base_shear_ratio = horizontal_earthquake_force / total_modal_base_shear
-        # print(f"Scale Factor: {load_case.horizontal_scale_factor:.3f}, Horizontal Earthquake Force: {horizontal_earthquake_force:.3f} / Total Modal Base Shear: {total_modal_base_shear:.3f} = {base_shear_ratio:.3f}")
-
-        # Scale CQC base shear to the magnitude of design earthquake force 
-        scale_Sa *= base_shear_ratio
-        superposition_modal_response, t2 = _run_single_response_spectrum_analysis(structure, analysis_dir, eigenvalues, Tn, scale_Sa, load_case.direction)
-        # total_modal_base_shear = np.sum([superposition_modal_response.member_response[target][f"E{member_index+1}"] for member_index in structure.story_column_member[0]])
-        # print(f"Scale Factor: {load_case.horizontal_scale_factor:.3f}, Horizontal Earthquake Force: {horizontal_earthquake_force:.3f} / Total Modal Base Shear: {total_modal_base_shear:.3f} = {horizontal_earthquake_force / total_modal_base_shear:.3f}")
-        
-        # Perform static analysis to get the directional information of responses (+ or -)
-        load_case.horizontal_earthquake_load *= base_shear_ratio
-        nodal_loads = list(load_case.calculate_nodal_load(structure))
-        load_case.horizontal_earthquake_load /= base_shear_ratio
-        nodal_loads[0] = np.zeros_like(nodal_loads[0])  # only consider the horizontal load
-        horizontal_response, t3 = _run_single_static_analysis(structure, nodal_loads, analysis_dir)
-
         ### Vertical Response ###
-        nodal_loads = list(load_case.calculate_nodal_load(structure))
-        nodal_loads[1] = np.zeros_like(nodal_loads[1])  # only consider the vertical load
-        nodal_loads[2] = np.zeros_like(nodal_loads[2])  # only consider the vertical load
-        vertical_response, t4 = _run_single_static_analysis(structure, nodal_loads, analysis_dir)
-
-        ### Combined Response ###
-        combined_response = Response(structure)
-        for nodeTag in range(1, structure.node_number+1):
-            node_name = f"N{nodeTag}"
-            combined_response.node_response["dispX"][node_name] = superposition_modal_response.node_response["dispX"][node_name] * np.sign(horizontal_response.node_response["dispX"][node_name]) + vertical_response.node_response["dispX"][node_name] if load_case.E else vertical_response.node_response["dispX"][node_name]
-            combined_response.node_response["dispZ"][node_name] = superposition_modal_response.node_response["dispZ"][node_name] * np.sign(horizontal_response.node_response["dispZ"][node_name]) + vertical_response.node_response["dispZ"][node_name] if load_case.E else vertical_response.node_response["dispZ"][node_name]
-        for eleTag in range(1, structure.member_number+1):
-            member_name = f"E{eleTag}"
-            combined_response.member_response["shearY"][member_name] = superposition_modal_response.member_response["shearY"][member_name] * np.sign(horizontal_response.member_response["shearY"][member_name]) + vertical_response.member_response["shearY"][member_name] if load_case.E else vertical_response.member_response["shearY"][member_name]
-            combined_response.member_response["shearZ"][member_name] = superposition_modal_response.member_response["shearZ"][member_name] * np.sign(horizontal_response.member_response["shearZ"][member_name]) + vertical_response.member_response["shearZ"][member_name] if load_case.E else vertical_response.member_response["shearZ"][member_name]
-            combined_response.member_response["momentY"][member_name] = superposition_modal_response.member_response["momentY"][member_name] * np.sign(horizontal_response.member_response["momentY"][member_name]) + vertical_response.member_response["momentY"][member_name] if load_case.E else vertical_response.member_response["momentY"][member_name]
-            combined_response.member_response["momentZ"][member_name] = superposition_modal_response.member_response["momentZ"][member_name] * np.sign(horizontal_response.member_response["momentZ"][member_name]) + vertical_response.member_response["momentZ"][member_name] if load_case.E else vertical_response.member_response["momentZ"][member_name]
-            combined_response.member_response["axial"][member_name] = superposition_modal_response.member_response["axial"][member_name] * np.sign(horizontal_response.member_response["axial"][member_name]) + vertical_response.member_response["axial"][member_name] if load_case.E else vertical_response.member_response["axial"][member_name]
-
-            node1_index, node2_index, face_number1, face_number2, _, _ = structure.member_to_nodeIndex_dict[member_name]
-            AXIAL = combined_response.member_response["axial"][member_name]
-            combined_response.node_neighbor_Puc_matrix[node1_index, face_number1] = AXIAL
-            combined_response.node_neighbor_Puc_matrix[node2_index, face_number2] = AXIAL
+        all_node_response_vertical = load_case.D * (dead_load_response.all_node_response + self_weight_response.all_node_response) + load_case.L * live_load_response.all_node_response
+        all_member_response_vertical = load_case.D * (dead_load_response.all_member_response + self_weight_response.all_member_response) + load_case.L * live_load_response.all_member_response
+        if load_case.E:
+            all_node_response_vertical += load_case.E_y * Ey_response.all_node_response
+            all_member_response_vertical += load_case.E_y * Ey_response.all_member_response
         
-        responses.append(combined_response)
-        analysis_time += (t1 + t2 + t3 + t4)
-        # print("\n")
-    
-    print(f"\t\tused time for all response spectrum & static analysis: {analysis_time:.3f} sec")
+        ### Horizontal Response ###
+        if load_case.E_x_n:
+            all_node_response_horizontal = load_case.E_x_n * all_node_response_Exn * (load_case.horizontal_earthquake_force / horizontal_earthquake_force_xdir)
+            all_member_response_horizontal = load_case.E_x_n * all_member_response_Exn * (load_case.horizontal_earthquake_force / horizontal_earthquake_force_xdir)
+        elif load_case.E_x_p:
+            all_node_response_horizontal = load_case.E_x_p * all_node_response_Exp * (load_case.horizontal_earthquake_force / horizontal_earthquake_force_xdir)
+            all_member_response_horizontal = load_case.E_x_p * all_member_response_Exp * (load_case.horizontal_earthquake_force / horizontal_earthquake_force_xdir)
+        elif load_case.E_z_n:
+            all_node_response_horizontal = load_case.E_z_n * all_node_response_Ezn * (load_case.horizontal_earthquake_force / horizontal_earthquake_force_zdir)
+            all_member_response_horizontal = load_case.E_z_n * all_member_response_Ezn * (load_case.horizontal_earthquake_force / horizontal_earthquake_force_zdir)
+        elif load_case.E_z_p:
+            all_node_response_horizontal = load_case.E_z_p * all_node_response_Ezp * (load_case.horizontal_earthquake_force / horizontal_earthquake_force_zdir)
+            all_member_response_horizontal = load_case.E_z_p * all_member_response_Ezp * (load_case.horizontal_earthquake_force / horizontal_earthquake_force_zdir)
+        
+        ### Total Response ###
+        total_response = NewResponse(structure)
+        total_response.all_node_response = all_node_response_vertical
+        total_response.all_member_response = all_member_response_vertical
+        if load_case.E:
+            total_response.all_node_response += all_node_response_horizontal
+            total_response.all_member_response += all_member_response_horizontal
+        total_response.to_response_dict()
+        responses.append(total_response)
 
     t_end = time.time()
     print(f"\t\tused time for opensees.run_response_spectrum_analysis: {t_end - t_start:.3f} sec")
+    # print(f"\t\tstatic analysis count: {static_analysis_counter}, response spectrum analysis count: {response_spectrum_analysis_counter}")
 
     return responses
 
