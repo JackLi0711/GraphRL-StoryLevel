@@ -273,6 +273,12 @@ class Environment:
         2. Based on the analysis result, see whether meets the code.
         3. Return [updated structure, reward, whether meet terminal state, fail load name, fail reason].
         """
+        if action is None:
+            # This case is for MCTS simulation to get the final reward of a terminal state.
+            # No action is taken, just calculate the reward for the current state.
+            passed, fail_name, fail_reason = self._check_design_feasibility(structure), "Terminal", "Terminal"
+            reward = self.calculate_reward(passed)
+            return deepcopy(structure), reward, True, fail_name, fail_reason
 
         # 1-1. update structure, graph and get saved material amount(m^3) (ORIGINAL)
         material_saved = structure.update_action(action)
@@ -352,5 +358,61 @@ class Environment:
             self.fail_reason = fail_reason
 
         return structure, reward, done, fail_name, fail_reason
+	
+
+    def clone(self):
+        """Creates a deep copy of the environment for MCTS simulation."""
+        # The logger can't be deep-copied, so we handle it manually.
+        logger = self.logger
+        self.logger = None
+        cloned = deepcopy(self)
+        cloned.logger = logger
+        self.logger = logger
+        return cloned
+
+    
+    def get_legal_actions(self, structure_obj) -> typing.List[int]:
+        """
+        Returns a list of all valid actions from the given structure state.
+        An action is an integer representing the story index to modify.
+        An action is illegal if the story is already at its minimum section size (index 0).
+        """
+        num_actions = structure_obj.story_num
+        all_actions = list(range(num_actions))
+        
+        # A story's section is at minimum if its section index is 0.
+        # We find all story indices where the section is at its minimum.
+        illegal_actions = [
+            i for i, section_index in enumerate(structure_obj.story_level_sections)
+            if section_index == 0
+        ]
+        
+        legal_actions = [a for a in all_actions if a not in illegal_actions]
+        
+        return legal_actions
+
+    def _check_design_feasibility(self, structure_obj):
+        """
+        Helper function to run the full design check process.
+        Returns True if the design passes, False otherwise.
+        """
+        from Structure import check, load
+        try:
+            load_cases, responses = check.get_response(structure_obj, self.code_analysis_dir)
+            constraint_condition, _, _ = check.process_response(structure_obj, load_cases, responses)
+            passed, _, _ = check.check_pass(load_cases, constraint_condition, self.check_displacement)
+            return passed
+        except Exception as e:
+            # If any error occurs during opensees analysis, consider it a failure.
+            self.logger.error(f"Error during feasibility check: {e}")
+            return False
+
+    def is_terminal(self, structure_obj):
+        """
+        Checks if a given structure state is terminal.
+        A state is terminal if the design is infeasible (fails checks).
+        """
+        passed = self._check_design_feasibility(structure_obj)
+        return not passed
         
 

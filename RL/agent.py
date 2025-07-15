@@ -395,10 +395,30 @@ class DeepQAgent(Agent):
         self.target_q_network.load_state_dict(checkpoint['target_q_network'])    
         self.logger.info(f"model are loaded from {save_model_path}")
 
+    
+    @torch.no_grad()
+    def get_state_value(self, graph_state):
+        """
+        Estimates the value of a given state by computing max_a Q(s, a).
+        Used by Hybrid MCTS.
+        NOTE: The input 'graph_state' is a torch_geometric.data.Data object.
+        """
+        self.gnn.eval()
+        self.online_q_network.eval()
+        
+        # The state is a graph object, we first need to get the member embeddings
+        member_embeddings = self.gnn(graph_state)
+        
+        # Then, get the Q values from the Q-network
+        q_values = self.online_q_network(member_embeddings)
+        
+        # The state value is the maximum Q-value among all possible actions
+        # We assume no actions are infeasible here, as MCTS should handle legal moves.
+        state_value = torch.max(q_values).item()
+        return state_value
 
 
-
-class JapanDeepQAgent():
+class JapanDeepQAgent(DeepQAgent):
     def __init__(self, 
                  node_feature_dim: int,
                  edge_feature_dim: int,
