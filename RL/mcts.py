@@ -168,8 +168,25 @@ class MCTSAgent:
         
         # After rollout, estimate value with DQN
         graph_for_dqn = deepcopy(current_state)
-        graph_for_dqn.init_graph_GraphRL(None, None) # Ensure graph features are initialized
-        state_value_estimate = self.dqn_agent.get_state_value(graph_for_dqn.graph)
+
+        # To get the graph features required by the GNN, we need to run a static analysis.
+        from Structure import check
+        try:
+            # Run the full analysis process to get 'static_response_features'
+            load_cases, responses = check.get_response(graph_for_dqn, self.env.code_analysis_dir)
+            _, static_features, _ = check.process_response(graph_for_dqn, load_cases, responses)
+        except Exception as e:
+            # If the analysis itself fails, it's a very bad state.
+            self.env.logger.error(f"Analysis failed during hybrid simulation: {e}")
+            return -100.0  # Return a very low value for designs that cause errors.
+
+        # Now, initialize the graph with the real features. Dynamic features are not needed for this evaluation.
+        graph_for_dqn.init_graph_GraphRL(static_features, None)
+        
+        # Move the graph object's tensors to the same device as the DQN agent.
+        graph_to_evaluate = graph_for_dqn.graph.to(self.dqn_agent.device)
+
+        state_value_estimate = self.dqn_agent.get_state_value(graph_to_evaluate)
 
         return total_rollout_reward + (self.gamma ** self.rollout_depth) * state_value_estimate
 

@@ -407,7 +407,15 @@ class DeepQAgent(Agent):
         self.online_q_network.eval()
         
         # The state is a graph object, we first need to get the member embeddings
-        member_embeddings = self.gnn(graph_state)
+        # We must unpack the graph object into the arguments expected by the StateGNN.forward method.
+        member_embeddings = self.gnn(
+            x=graph_state.x.to(self.device),
+            edge_index=graph_state.edge_index.to(self.device),
+            edge_attr=graph_state.edge_attr.to(self.device),
+            batch=getattr(graph_state, 'batch', None),  # batch is usually None for single graph inference
+            story_batch=getattr(graph_state, 'story_batch', torch.zeros(graph_state.edge_attr[::2].shape[0], dtype=torch.long, device=self.device)).to(self.device),
+            structure_story_ptr=getattr(graph_state, 'structure_story_ptr', None)
+        )
         
         # Then, get the Q values from the Q-network
         q_values = self.online_q_network(member_embeddings)
