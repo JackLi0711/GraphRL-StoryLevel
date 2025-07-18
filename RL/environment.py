@@ -373,20 +373,32 @@ class Environment:
     
     def get_legal_actions(self, structure_obj) -> typing.List[int]:
         """
-        Returns a list of all valid actions from the given structure state.
-        An action is an integer representing the story index to modify.
-        An action is illegal if the story is already at its minimum section size (index 0).
+        Returns a list of all valid actions from the given structure state,
+        aligned with the DeepQAgent's action space and restriction rules.
+
+        An action is an integer representing a story-level member group to modify
+        (e.g., 1F outer columns, 3F x-direction beams).
+
+        An action is illegal if:
+        1. The member group is already at its minimum section size.
+        2. The action would violate structural hierarchy (e.g., making a lower
+           column weaker than an upper column).
         """
-        num_actions = structure_obj.story_num
+        # 步驟 1: 使用 story_num * 4 的完整 Action Space
+        num_actions = len(structure_obj.story_level_actions)
         all_actions = list(range(num_actions))
+
+        # 步驟 2: 整合兩種限制規則來計算所有不合法的 actions
+        # 規則一: 最小斷面規則
+        illegal_min_section = structure_obj.already_minimum_section_story_indexes
+
+        # 規則二: 結構層級規則
+        illegal_hierarchy = structure_obj.restrict_action_space()
+
+        # 合併兩種非法動作列表
+        illegal_actions = set(illegal_min_section + illegal_hierarchy)
         
-        # A story's section is at minimum if its section index is 0.
-        # We find all story indices where the section is at its minimum.
-        illegal_actions = [
-            i for i, section_index in enumerate(structure_obj.story_level_sections)
-            if section_index == 0
-        ]
-        
+        # 步驟 3: 從所有 actions 中排除不合法的，得到最終的合法 actions
         legal_actions = [a for a in all_actions if a not in illegal_actions]
         
         return legal_actions

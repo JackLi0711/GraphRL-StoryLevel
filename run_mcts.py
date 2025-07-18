@@ -36,7 +36,7 @@ def parse_args() -> Namespace:
     parser.add_argument("--dqn_checkpoint_dir", type=Path, default='./models/DQN/20250605_RSA_model_HighestScore.pt', help="Required for HybridMCTS. Path to a pretrained DQN agent checkpoint.")
 
     # MCTS Hyperparameters
-    parser.add_argument("--n_simulations", type=int, default=100, help="Number of simulations per MCTS search.")
+    parser.add_argument("--n_simulations", type=int, default=50, help="Number of simulations per MCTS search.")
     parser.add_argument("--c_puct", type=float, default=1.0, help="Exploration constant for UCT in MCTS.")
     parser.add_argument("--rollout_depth", type=int, default=5, help="For HybridMCTS, number of random steps in rollout before using DQN.")
     parser.add_argument("--gamma", type=float, default=0.99, help="Discount factor for MCTS.")
@@ -97,9 +97,11 @@ def run_mcts_episode(mcts_agent, env, rec, logger):
     total_reward = 0
     step_count = 0
     last_good_state = state # Initialize with the initial state
+    episode_actions = []
 
     while not done:
         action = mcts_agent.search(state)
+        episode_actions.append(action)
         
         if action is None:
             logger.warning("MCTS search returned no action. Ending episode.")
@@ -127,6 +129,7 @@ def run_mcts_episode(mcts_agent, env, rec, logger):
     rec.testing_record["score"].append(score)
     rec.testing_record["final_volume"].append(final_volume)
     rec.testing_record["final_design"].append(final_state_to_record.story_level_sections)
+    rec.testing_record["action"].append(episode_actions)
     rec.testing_record["fail_name"].append(fail_name)
     rec.testing_record["fail_reason"].append(fail_reason)
 
