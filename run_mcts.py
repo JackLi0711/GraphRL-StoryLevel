@@ -26,17 +26,17 @@ def parse_args() -> Namespace:
     
     # General
     parser.add_argument("--comment", type=str, default="MCTS run")
-    parser.add_argument("--ckpt_dir", type=Path, default="./Results/AdjustedMoreSections/RandomShape/MCTS_Runs")
+    parser.add_argument("--ckpt_dir", type=Path, default="./Results/AdjustedMoreSections/RandomShape/HybridMCTS_Runs")
     parser.add_argument("--suffix", type=str, default="MCTS_Test")
-    parser.add_argument("--num_epoch", type=int, default=1, help="Number of episodes to run.")
+    parser.add_argument("--num_epoch", type=int, default=3, help="Number of episodes to run.")
     parser.add_argument("--random_seed", type=int, default=732, help="Fixed random seed.")
 
     # Algorithm
-    parser.add_argument("--algorithm", type=str, default="MCTS", choices=["MCTS", "HybridMCTS"], help="MCTS algorithm to use.")
-    parser.add_argument("--dqn_checkpoint_dir", type=Path, default=None, help="Required for HybridMCTS. Path to a pretrained DQN agent checkpoint.")
+    parser.add_argument("--algorithm", type=str, default="HybridMCTS", choices=["MCTS", "HybridMCTS"], help="MCTS algorithm to use.")
+    parser.add_argument("--dqn_checkpoint_dir", type=Path, default='./models/DQN/20250605_RSA_model_HighestScore.pt', help="Required for HybridMCTS. Path to a pretrained DQN agent checkpoint.")
 
     # MCTS Hyperparameters
-    parser.add_argument("--n_simulations", type=int, default=2, help="Number of simulations per MCTS search.")
+    parser.add_argument("--n_simulations", type=int, default=100, help="Number of simulations per MCTS search.")
     parser.add_argument("--c_puct", type=float, default=1.0, help="Exploration constant for UCT in MCTS.")
     parser.add_argument("--rollout_depth", type=int, default=5, help="For HybridMCTS, number of random steps in rollout before using DQN.")
     parser.add_argument("--gamma", type=float, default=0.99, help="Discount factor for MCTS.")
@@ -44,7 +44,7 @@ def parse_args() -> Namespace:
     # Environment Arguments (copied from train.py for consistency)
     parser.add_argument("--structure_shape", type=str, default="fixed", help="fixed, small_random, random")
     parser.add_argument("--add_structure_geometry", action="store_true", default=True)
-    parser.add_argument("--add_response_features", action="store_true", default=False)
+    parser.add_argument("--add_response_features", action="store_true", default=True)
     parser.add_argument("--reward_type", type=str, default="material", help="material, acceleration, displacement, normalized, total, combined")
     parser.add_argument("--scwb_driven_design", action="store_true", default=False)
     
@@ -96,6 +96,7 @@ def run_mcts_episode(mcts_agent, env, rec, logger):
     done = False
     total_reward = 0
     step_count = 0
+    last_good_state = state # Initialize with the initial state
 
     while not done:
         action = mcts_agent.search(state)
@@ -103,6 +104,10 @@ def run_mcts_episode(mcts_agent, env, rec, logger):
         if action is None:
             logger.warning("MCTS search returned no action. Ending episode.")
             break
+
+        # Before stepping, the current 'state' is a good state
+        last_good_state = deepcopy(state)
+        last_total_reward = deepcopy(total_reward)
             
         next_state, reward, done, fail_name, fail_reason = env.step(state, action)
         total_reward += reward
@@ -111,15 +116,21 @@ def run_mcts_episode(mcts_agent, env, rec, logger):
     
     # Record final state
     logger.info(f"Episode Finished in {step_count} steps. Total Reward: {total_reward:.3f}")
-    final_volume = state.calculate_material_usage()
-    score = env.calculate_reward(not done) if done else 0
+    
+    # Decide which state to record as the final one
+    final_design_passed = env._check_design_feasibility(state)
+    final_state_to_record = state if final_design_passed else last_good_state
+    
+    final_volume = final_state_to_record.calculate_material_usage()
+    score = total_reward if final_design_passed else last_total_reward
+    
     rec.testing_record["score"].append(score)
     rec.testing_record["final_volume"].append(final_volume)
-    rec.testing_record["final_design"].append(state.story_level_sections)
+    rec.testing_record["final_design"].append(final_state_to_record.story_level_sections)
     rec.testing_record["fail_name"].append(fail_name)
     rec.testing_record["fail_reason"].append(fail_reason)
 
-    logger.info(f"Final Design: {state.story_level_sections}, Volume: {final_volume:.3f}, Score: {score:.3f}")
+    logger.info(f"Final Design: {final_state_to_record.story_level_sections}, Volume: {final_volume:.3f}, Score: {score:.3f}")
 
 
 def main(args):

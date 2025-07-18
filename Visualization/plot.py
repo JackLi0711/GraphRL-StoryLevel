@@ -7,18 +7,27 @@ from RL.record import Record
 from RL.environment import Environment
 
 
-def plot_reward(train_scores: List[float], test_scores: List[float], checkpoint_dir: Path) -> None:
+def plot_reward(train_scores: List[float], test_scores: List[float], checkpoint_dir: Path, is_mcts: bool = False) -> None:
     """Plot train scores during every episode and test score every few episode."""
-    train_episodes = np.arange(1, len(train_scores)+1)
-    episode_per_test = len(train_scores) / len(test_scores)
-    test_episodes = np.arange(episode_per_test, len(train_scores)+1, episode_per_test)
     plt.figure(figsize=(12, 6))
-    plt.plot(train_episodes, train_scores, label="training", color='black', linestyle='--', linewidth=1)
-    plt.plot(test_episodes, test_scores, label="testing", color='red', linestyle='-', linewidth=2)
+    
+    if is_mcts:
+        eval_episodes = np.arange(1, len(test_scores) + 1)
+        plt.plot(eval_episodes, test_scores, label="evaluation", color='blue', linestyle='-', linewidth=2)
+        plt.xlabel("Evaluation Episodes", fontsize=16)
+        plt.title("MCTS Evaluation Scores", fontsize=18)
+    else:
+        train_episodes = np.arange(1, len(train_scores)+1)
+        episode_per_test = len(train_scores) / len(test_scores) if len(test_scores) > 0 else 0
+        test_episodes = np.arange(episode_per_test, len(train_scores)+1, episode_per_test)
+        plt.plot(train_episodes, train_scores, label="training", color='black', linestyle='--', linewidth=1)
+        plt.plot(test_episodes, test_scores, label="testing", color='red', linestyle='-', linewidth=2)
+        plt.xlabel("Trained Episodes", fontsize=16)
+        plt.title("Training and Testing Scores", fontsize=18)
+
     plt.legend(fontsize=14)
     plt.grid()
-    plt.xlabel("trained episodes", fontsize=16)
-    plt.ylabel("cumulative reward", fontsize=16)
+    plt.ylabel("Cumulative Reward", fontsize=16)
     plt.xticks(fontsize=14)
     plt.yticks(fontsize=14)
     plt.savefig(checkpoint_dir / "reward.png")
@@ -54,61 +63,83 @@ def plot_Qvalues(Q_values: List[List[float]], checkpoint_dir: Path) -> None:
     plt.close()
 
 
-def plot_fail_names(train_fail_names: List[str], test_fail_names: List[str], checkpoint_dir: Path) -> None:
-    train_names = {}
-    test_names = {}
-    for name in train_fail_names:
-        if name == None: name = "none"
-        if name in train_names:
-            train_names[name] += 1
-        else:
-            train_names[name] = 1
-    
-    for name in test_fail_names:
-        if name == None: name = "none"
-        if name in test_names:
-            test_names[name] += 1
-        else:
-            test_names[name] = 1
-    
-    fig, axs = plt.subplots(1, 2, figsize=(15, 5))
+def plot_fail_names(train_fail_names: List[str], test_fail_names: List[str], checkpoint_dir: Path, is_mcts: bool = False) -> None:
+    if is_mcts:
+        test_names = {}
+        for name in test_fail_names:
+            if name is None: name = "pass"
+            test_names[name] = test_names.get(name, 0) + 1
+        
+        plt.figure(figsize=(10, 6))
+        plt.bar(test_names.keys(), test_names.values())
+        plt.title("MCTS Evaluation Fail Names", fontsize=16)
+        plt.xticks(rotation=45, ha="right")
+        plt.tight_layout()
 
-    axs[0].bar(train_names.keys(), train_names.values())
-    axs[0].set_title("training fail names")
+    else:
+        train_names = {}
+        test_names = {}
+        for name in train_fail_names:
+            if name == None: name = "pass"
+            train_names[name] = train_names.get(name, 0) + 1
+        
+        for name in test_fail_names:
+            if name == None: name = "pass"
+            test_names[name] = test_names.get(name, 0) + 1
+        
+        fig, axs = plt.subplots(1, 2, figsize=(15, 5))
 
-    axs[1].bar(test_names.keys(), test_names.values())
-    axs[1].set_title("testing fail names")
+        axs[0].bar(train_names.keys(), train_names.values())
+        axs[0].set_title("Training Fail Names")
+        axs[0].tick_params(axis='x', rotation=45)
+
+        axs[1].bar(test_names.keys(), test_names.values())
+        axs[1].set_title("Testing Fail Names")
+        axs[1].tick_params(axis='x', rotation=45)
+        
+        plt.tight_layout()
 
     plt.savefig(checkpoint_dir / "fail_names.png")
     plt.close()
 
 
-def plot_fail_reasons(train_fail_reasons: List[str], test_fail_reasons: List[str], checkpoint_dir: Path) -> None:
-    # full string is too long, only keep first half
-    train_fail_reasons = [reason.split('_')[0] for reason in train_fail_reasons]
-    test_fail_reasons = [reason.split('_')[0] for reason in test_fail_reasons]
-    
-    train_reasons = {}
-    test_reasons = {}
-    for reason in train_fail_reasons:
-        if reason in train_reasons:
-            train_reasons[reason] += 1
-        else:
-            train_reasons[reason] = 1
-    
-    for reason in test_fail_reasons:
-        if reason in test_reasons:
-            test_reasons[reason] += 1
-        else:
-            test_reasons[reason] = 1
-    
-    fig, axs = plt.subplots(1, 2, figsize=(15, 5))
+def plot_fail_reasons(train_fail_reasons: List[str], test_fail_reasons: List[str], checkpoint_dir: Path, is_mcts: bool = False) -> None:
+    if is_mcts:
+        test_fail_reasons = [r.split('_')[0] if r else "pass" for r in test_fail_reasons]
+        test_reasons = {}
+        for reason in test_fail_reasons:
+            test_reasons[reason] = test_reasons.get(reason, 0) + 1
+            
+        plt.figure(figsize=(10, 6))
+        plt.bar(test_reasons.keys(), test_reasons.values())
+        plt.title("MCTS Evaluation Fail Reasons", fontsize=16)
+        plt.xticks(rotation=45, ha="right")
+        plt.tight_layout()
 
-    axs[0].bar(train_reasons.keys(), train_reasons.values())
-    axs[0].set_title("training fail reasons")
+    else:
+        # full string is too long, only keep first half
+        train_fail_reasons = [reason.split('_')[0] if reason else "pass" for reason in train_fail_reasons]
+        test_fail_reasons = [reason.split('_')[0] if reason else "pass" for reason in test_fail_reasons]
+        
+        train_reasons = {}
+        test_reasons = {}
+        for reason in train_fail_reasons:
+            train_reasons[reason] = train_reasons.get(reason, 0) + 1
+        
+        for reason in test_fail_reasons:
+            test_reasons[reason] = test_reasons.get(reason, 0) + 1
+        
+        fig, axs = plt.subplots(1, 2, figsize=(15, 5))
 
-    axs[1].bar(test_reasons.keys(), test_reasons.values())
-    axs[1].set_title("testing fail reasons")
+        axs[0].bar(train_reasons.keys(), train_reasons.values())
+        axs[0].set_title("Training Fail Reasons")
+        axs[0].tick_params(axis='x', rotation=45)
+
+        axs[1].bar(test_reasons.keys(), test_reasons.values())
+        axs[1].set_title("Testing Fail Reasons")
+        axs[1].tick_params(axis='x', rotation=45)
+        
+        plt.tight_layout()
 
     plt.savefig(checkpoint_dir / "fail_reasons.png")
     plt.close()
