@@ -67,6 +67,9 @@ class MCTSAgent:
         # A node is terminal if the env says so, or if there are no legal actions
         is_terminal_state = self.env.is_terminal(root.state)
         legal_actions = [] if is_terminal_state else self.env.get_legal_actions(root.state)
+        print('='*100)
+        print(f"legal_actions: {legal_actions}")
+        print('='*100)
         root.is_terminal = not bool(legal_actions) or is_terminal_state
         if root.is_terminal:
             return None # No actions to take from the start
@@ -74,22 +77,45 @@ class MCTSAgent:
         for _ in range(self.n_simulations):
             node = root
             
-            # 1. Selection: Traverse the tree to find a leaf node
-            while node.children:
-                node = node.select_child(self.c_puct)
-
-            # 2. Expansion: If the node is not terminal, expand it
-            if not node.is_terminal:
+            # --- Corrected Selection & Expansion Phase ---
+            while not node.is_terminal:
                 if node.untried_actions is None:
+                    # First time visiting this node, get its possible actions
                     node.set_untried_actions(self.env.get_legal_actions(node.state))
-                
+
+                # If the node has untried actions, it's not fully expanded
                 if node.untried_actions:
+                    # Expand the node by creating one new child
                     node = self._expand(node)
+                    # This new child is the leaf for this simulation, so we break
+                    break
+                
+                # If no untried actions, the node is fully expanded.
+                # Select the best child to continue traversal, unless it's a leaf.
+                if not node.children:
+                    # Reached a leaf node that has no further moves
+                    break
+                node = node.select_child(self.c_puct)
+            # --- End of Corrected Phase ---
             
             # 3. Simulation & 4. Backpropagation
             reward = self._simulate_and_evaluate(node)
             self._backpropagate(node, reward)
-        
+            
+        # DEBUGGING LOGS =======================================================
+        if root.children:
+            self.env.logger.info("--- MCTS Root Children Stats ---")
+            sorted_children = sorted(root.children, key=lambda c: c.action)
+            for child in sorted_children:
+                self.env.logger.info(
+                    f"Action: {child.action}, "
+                    f"Q-Value: {child.q_value:.4f}, "
+                    f"Visit Count: {child.visit_count}, "
+                    f"UCT Value: {child.uct_value(c_puct=0):.4f}" # Use c_puct=0 to see pure Q-value
+                )
+            self.env.logger.info("------------------------------------")
+        # ======================================================================
+
         if not root.children:
             return None 
         best_child = max(root.children, key=lambda c: c.visit_count)
@@ -148,7 +174,7 @@ class MCTSAgent:
         """
         current_state = deepcopy(state)
         total_rollout_reward = 0.0
-
+        actions_taken = []
         for i in range(self.rollout_depth):
             if self.env.is_terminal(current_state):
                 _, final_reward, _, _, _ = self.env.step(current_state, action=None)
@@ -161,8 +187,9 @@ class MCTSAgent:
             
             action = random.choice(legal_actions)
             _, reward, done, _, _ = self.env.step(current_state, action)
-            
+            actions_taken.append(action)
             total_rollout_reward += (self.gamma ** i) * reward
+
             if done:
                 return total_rollout_reward
         
@@ -187,6 +214,11 @@ class MCTSAgent:
         graph_to_evaluate = graph_for_dqn.graph.to(self.dqn_agent.device)
 
         state_value_estimate = self.dqn_agent.get_state_value(graph_to_evaluate)
+        final_value = total_rollout_reward + (self.gamma ** self.rollout_depth) * state_value_estimate
+        self.env.logger.info('='*100)
+        self.env.logger.info(f"Hybrid Sim: Rollout Reward={total_rollout_reward:.4f}, DQN Value={state_value_estimate:.4f}, Final Value={final_value:.4f}")
+        self.env.logger.info(f"Hybrid Sim: Actions Taken={actions_taken}")
+        self.env.logger.info('='*100)
 
         return total_rollout_reward + (self.gamma ** self.rollout_depth) * state_value_estimate
 
