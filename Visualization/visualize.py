@@ -125,6 +125,7 @@ def _visualize_one_iteration(structure: structure.Structure,
                              iteration: int, 
                              env: environment.Environment, 
                              accumulated_reward: float, 
+                             action: int,
                              q_values: torch.Tensor, 
                              save_fig_path: Path):
     # plot 3d
@@ -244,7 +245,17 @@ def _visualize_one_iteration(structure: structure.Structure,
     else: 
         total_acc_decrement = 0
 
+    # define action type
+    if action < structure.story_num: type = "xdir-beam"
+    elif action < structure.story_num*2: type = "zdir-beam"
+    elif action < structure.story_num*3: type = "out-col"
+    else: type = "in-col"
+    # find floor 
+    floor = (action % structure.story_num) + 1
+
+
     infos = f"material usage: {env.material_usage_record[-1]:5.2f} m3\n" + f"reduced material: {saved_material:5.2f} m3\n"
+    infos += f"action: {action}, floor: {floor}, type: {type}\n"
     if env.scwb_driven_design:
         infos += f"reduced material(SCWB): {saved_material_SCWB:5.2f} m3"
     title = f"Reward: {env.reward_type}\n" + f"Iteration: {iteration:4d}\n" + infos
@@ -348,7 +359,7 @@ def visualize_design_process(agent: agent.DeepQAgent,
         # visualize
         vis_path = save_dir / f"{timestep}.png"
         q_values = agent.online_q_network(state)
-        _visualize_one_iteration(structure, timestep, env, accumulated_reward, q_values, vis_path)
+        _visualize_one_iteration(structure, timestep, env, accumulated_reward, action, q_values, vis_path)
 
         # update action
         structure, reward, done, fail_name, fail_reason = env.step(structure, action)
@@ -421,3 +432,48 @@ def visualize_design_process(agent: agent.DeepQAgent,
     print(f"final design: {original_structure.story_level_sections}")
     print(f"material usage: {env.material_usage_record[-1]:5.2f} m3")
     print(f"reduced material: {np.sum(env.saved_material_record):5.2f} m3")  
+
+    # ========================== plot the action sequence ==========================
+    # added for better realization of action sequence
+    action_types = []
+    for a in action_list:
+        # find action type
+        if a < structure.story_num: type = "xdir-beam"
+        elif a < structure.story_num*2: type = "zdir-beam"
+        elif a < structure.story_num*3: type = "out-col"
+        else: type = "in-col"
+        
+        action_types.append(type)
+        
+    test_episodes = 1
+    color_mapping = {'xdir-beam': 'dodgerblue', 'zdir-beam': 'yellowgreen', 'out-col': 'orange', 'in-col': 'red'}
+
+    fig, ax1 = plt.subplots(figsize=(10, 8))
+
+    
+    for j, type in enumerate(action_types):
+        color = color_mapping[type]
+        count = 1
+        ax1.bar(0, count, color=color, width=3, bottom=j, zorder=1)
+        
+    ax1.set_xlabel('Trained Episode', fontsize=16)
+    ax1.set_ylabel('Iteration', fontsize=16)
+    ax1.tick_params(labelsize=14)
+
+    ax2 = ax1.twinx()
+    ax2.plot([0], [accumulated_reward], color='black', linestyle='-', linewidth=1, label='test score', zorder=2)
+    ax2.set_ylabel('Test score', fontsize=16)
+    ax2.tick_params(labelsize=14)
+    ax2.grid(zorder=0)
+
+    legend_labels = ['xdir-beam', 'zdir-beam', 'out-col', 'in-col']
+    legend_colors = ['dodgerblue', 'yellowgreen', 'orange', 'red']
+
+    ax1.legend(labels=legend_labels, loc='upper left', fontsize=14, handles=[plt.Line2D([0], [0], color=color, linewidth=4) for color in legend_colors])
+    ax2.legend(loc='upper right', fontsize=14)
+
+    plt.tight_layout()
+    plt.savefig(env.checkpoint_dir / "testing_behaviors.png", dpi=1000)
+    plt.close()
+
+    print(f'testing_behaviors.png saved')

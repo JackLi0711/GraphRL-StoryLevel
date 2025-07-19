@@ -3,6 +3,7 @@ import random
 import logging
 import numpy as np
 from pathlib import Path
+from datetime import datetime
 from argparse import ArgumentParser, Namespace
 
 import os
@@ -23,9 +24,9 @@ def parse_args() -> Namespace:
 	# trained model path
 	# without doNDA: "./Results/AdjustedSections/2023_05_06__21_36_03__test/model.pt"
 	# with doNDA: "./Results/AdjustedSections/2023_05_07__11_39_51__test/model.pt"
-	parser.add_argument("--trained_model_path", type=Path, default="./Results/AdjustedMoreSections/RandomShape/OpenSees_RSA/2025_06_05__21_45_28__TaiModifiedModel_MatReward_StaResFeatures_SoftUpdate_LinearDecay010_Buffer10000_Batch256_Epoch1000/models/model_HighestScore.pt")
+	parser.add_argument("--trained_model_path", type=Path, default='./models/DQN/20250605_RSA_model_HighestScore.pt')
 	# checkpoint directory
-	parser.add_argument("--ckpt_dir", type=Path, default="./Results/AdjustedMoreSections/RandomShape/OpenSees_RSA/2025_06_05__21_45_28__TaiModifiedModel_MatReward_StaResFeatures_SoftUpdate_LinearDecay010_Buffer10000_Batch256_Epoch1000")
+	parser.add_argument("--ckpt_dir", type=Path, default="./Results/AdjustedMoreSections/RandomShape/inference_4_4_4/")
 
 	# chances
 	parser.add_argument("--chances", type=int, default=0)
@@ -94,9 +95,9 @@ def get_loggings(ckpt_dir):
 	stream_handler.setFormatter(formatter)
 	logger.addHandler(stream_handler)
 	# file handler
-	# file_handler = logging.FileHandler(ckpt_dir / "record.log")
-	# file_handler.setFormatter(formatter)
-	# logger.addHandler(file_handler)
+	file_handler = logging.FileHandler(ckpt_dir / "record.log")
+	file_handler.setFormatter(formatter)
+	logger.addHandler(file_handler)
 	return logger
 
 
@@ -105,6 +106,9 @@ def get_loggings(ckpt_dir):
 def main(args):
 	# set random seed
 	set_random_seed(args.random_seed)
+
+	args.ckpt_dir = args.ckpt_dir / f'{datetime.now().strftime("%Y_%m_%d__%H_%M_%S")}'
+	args.ckpt_dir.mkdir(parents=True, exist_ok=True)
 
 	# set logger
 	logger = get_loggings(args.ckpt_dir)

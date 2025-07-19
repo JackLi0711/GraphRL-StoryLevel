@@ -111,7 +111,7 @@ class MCTSAgent:
                     f"Action: {child.action}, "
                     f"Q-Value: {child.q_value:.4f}, "
                     f"Visit Count: {child.visit_count}, "
-                    f"UCT Value: {child.uct_value(c_puct=0):.4f}" # Use c_puct=0 to see pure Q-value
+                    f"UCT Value: {child.uct_value(c_puct=self.c_puct):.4f}" # Use c_puct=0 to see pure Q-value
                 )
             self.env.logger.info("------------------------------------")
         # ======================================================================

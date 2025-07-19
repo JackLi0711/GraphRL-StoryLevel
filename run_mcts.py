@@ -28,7 +28,7 @@ def parse_args() -> Namespace:
     parser.add_argument("--comment", type=str, default="MCTS run")
     parser.add_argument("--ckpt_dir", type=Path, default="./Results/AdjustedMoreSections/RandomShape/HybridMCTS_Runs")
     parser.add_argument("--suffix", type=str, default="MCTS_Test")
-    parser.add_argument("--num_epoch", type=int, default=3, help="Number of episodes to run.")
+    parser.add_argument("--num_epoch", type=int, default=1, help="Number of episodes to run.")
     parser.add_argument("--random_seed", type=int, default=732, help="Fixed random seed.")
 
     # Algorithm
@@ -36,8 +36,8 @@ def parse_args() -> Namespace:
     parser.add_argument("--dqn_checkpoint_dir", type=Path, default='./models/DQN/20250605_RSA_model_HighestScore.pt', help="Required for HybridMCTS. Path to a pretrained DQN agent checkpoint.")
 
     # MCTS Hyperparameters
-    parser.add_argument("--n_simulations", type=int, default=100, help="Number of simulations per MCTS search.")
-    parser.add_argument("--c_puct", type=float, default=1.0, help="Exploration constant for UCT in MCTS.")
+    parser.add_argument("--n_simulations", type=int, default=160, help="Number of simulations per MCTS search.")
+    parser.add_argument("--c_puct", type=float, default=3.0, help="Exploration constant for UCT in MCTS.")
     parser.add_argument("--rollout_depth", type=int, default=3, help="For HybridMCTS, number of random steps in rollout before using DQN.")
     parser.add_argument("--gamma", type=float, default=0.99, help="Discount factor for MCTS.")
 

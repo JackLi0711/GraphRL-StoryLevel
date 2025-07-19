@@ -72,14 +72,22 @@ class Environment:
             story_num = 3
             story_height = 3500
         elif self.structure_shape == "random":
-            x_span_num = 4  # original: 3
-            z_span_num = 4  # original: 3
-            x_span_len = 6000
-            z_span_len = 8000
+            # x_span_num = 4  # original: 3
+            # z_span_num = 4  # original: 3
+            # x_span_len = 6000
+            # z_span_len = 8000
+            # x_span_lens = [x_span_len for i in range(x_span_num)]
+            # z_span_lens = [z_span_len for i in range(z_span_num)]
+            # story_num = 6  # original: 5
+            # story_height = 3200
+            x_span_num = 4 # 4, 6
+            z_span_num = 4 # 4, 6
+            x_span_len = 7000
+            z_span_len = 7000
             x_span_lens = [x_span_len for i in range(x_span_num)]
             z_span_lens = [z_span_len for i in range(z_span_num)]
-            story_num = 6  # original: 5
-            story_height = 3200
+            story_num = 4 # 4, 7 
+            story_height = np.random.randint(0, 11) * 100 + 3000
 
         story_level_sections = initial_design if initial_design is not None else new_strategy.sample_initial_story_sections(x_span_num, x_span_len, z_span_num, z_span_len, story_num, thickest_prob=1.0)
         self._testing_structure_kwargs = {"x_span_num": x_span_num, "x_span_lens": x_span_lens, 
@@ -170,14 +178,15 @@ class Environment:
             story_height = 3200
         else:
             if self.structure_shape == "fixed":
-                x_span_num = 3
-                z_span_num = 3
-                x_span_lens = [7000, 11000, 14000]
-                z_span_lens = [12000, 8000, 10000]
-                x_span_len = sum(x_span_lens) / len(x_span_lens)
-                z_span_len = sum(z_span_lens) / len(z_span_lens)
-                story_num = 3
+                x_span_num = 4 # 4, 6
+                z_span_num = 4 # 4, 6
+                x_span_len = 7000
+                z_span_len = 7000
+                x_span_lens = [x_span_len for i in range(x_span_num)]
+                z_span_lens = [z_span_len for i in range(z_span_num)]
+                story_num = 4 # 4, 7 
                 story_height = np.random.randint(0, 11) * 100 + 3000
+
 
             elif self.structure_shape == "small_random":
                 x_span_num = np.random.randint(2, 5)
