@@ -54,6 +54,10 @@ class Environment:
 
         # the prescribed, test generalization ability
         self._testing_structure = None
+        
+        # MuZero 動態動作空間支援
+        self.current_num_actions = None
+        self.muzero_agent = None  # 將在需要時設置
     
         # initiaization
         self._init_testing_structure()
@@ -106,6 +110,9 @@ class Environment:
         if self.scwb_driven_design:
             new_strategy.strong_column_weak_beam_driven_update(self._testing_structure, self.code_analysis_dir)
         self.logger.info(f"after_SCWB_update, testing_story_level_sections: {self._testing_structure.story_level_sections}\n")
+        
+        # 設置動作空間
+        self._update_action_space(self._testing_structure)
 
 
     def init_check_setting(self, check_acc: bool, check_disp: bool):
@@ -230,6 +237,9 @@ class Environment:
                 new_strategy.strong_column_weak_beam_driven_update(random_structure, self.code_analysis_dir)
             self.logger.info(f"after_SCWB_update, story_level_sections: {random_structure.story_level_sections}")
             self.init_records(random_structure)
+            
+            # 設置動作空間
+            self._update_action_space(random_structure)
 
         return random_structure
     
@@ -411,6 +421,29 @@ class Environment:
         legal_actions = [a for a in all_actions if a not in illegal_actions]
         
         return legal_actions
+    
+    def _update_action_space(self, structure_obj):
+        """更新動作空間資訊並通知 MuZero Agent"""
+        self.current_num_actions = len(structure_obj.story_level_actions)
+        
+        # 通知 MuZero Agent 動作空間變化
+        if self.muzero_agent is not None:
+            self.muzero_agent.set_action_space(self.current_num_actions)
+        
+        self.logger.info(f"Action space updated: {self.current_num_actions} actions for structure_shape={self.structure_shape}")
+    
+    def set_muzero_agent(self, agent):
+        """設置 MuZero Agent 的引用"""
+        self.muzero_agent = agent
+        if self.current_num_actions is not None:
+            agent.set_action_space(self.current_num_actions)
+    
+    def get_action_space_info(self):
+        """返回當前動作空間資訊"""
+        return {
+            'num_actions': self.current_num_actions,
+            'structure_shape': self.structure_shape
+        }
 
     def _check_design_feasibility(self, structure_obj):
         """

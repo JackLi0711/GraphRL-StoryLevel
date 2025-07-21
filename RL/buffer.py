@@ -172,3 +172,75 @@ class PrioritizedExperienceReplayBuffer:
         """Update the priorities associated with particular experiences."""
         self._buffer["priority"][idxs] = priorities
         print(f"mean priority: {np.mean(self._buffer['priority'])}")
+
+
+### MuZero Buffer Implementation ###
+
+class MuZeroGame:
+    """ 儲存一場完整的 MuZero 遊戲軌跡 """
+    def __init__(self):
+        self.observations = []  # 環境觀察
+        self.actions = []       # 執行的動作
+        self.rewards = []       # 獲得的獎勵
+        self.policies = []      # MCTS 產生的策略 (訪問次數分佈)
+        self.dones = []         # 是否結束
+        self.values = []        # 網路預測的價值
+    
+    def add_step(self, obs, action, reward, policy, done, value=None):
+        """
+        新增一步遊戲數據
+        
+        Args:
+            obs: 環境觀察
+            action: 執行的動作
+            reward: 獲得的獎勵
+            policy: MCTS 產生的策略
+            done: 是否結束
+            value: 網路預測的價值（可選）
+        """
+        self.observations.append(obs)
+        self.actions.append(action)
+        self.rewards.append(reward)
+        self.policies.append(policy)
+        self.dones.append(done)
+        if value is not None:
+            self.values.append(value)
+    
+    def __len__(self):
+        return len(self.observations)
+
+
+class MuZeroReplayBuffer:
+    """ MuZero 專用的回放緩衝區 """
+    def __init__(self, capacity):
+        self.capacity = capacity
+        self.buffer = []
+        self.position = 0
+    
+    def push(self, game: MuZeroGame):
+        """
+        將一場完整的遊戲加入緩衝區
+        
+        Args:
+            game: MuZeroGame 實例
+        """
+        if len(self.buffer) < self.capacity:
+            self.buffer.append(None)
+        self.buffer[self.position] = game
+        self.position = (self.position + 1) % self.capacity
+    
+    def sample(self, batch_size):
+        """
+        從緩衝區中隨機抽樣
+        
+        Args:
+            batch_size: 抽樣大小
+            
+        Returns:
+            遊戲軌跡列表
+        """
+        import random
+        return random.sample(self.buffer, min(batch_size, len(self.buffer)))
+    
+    def __len__(self):
+        return len(self.buffer)

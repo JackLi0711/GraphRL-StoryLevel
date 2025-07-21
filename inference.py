@@ -70,6 +70,18 @@ def parse_args() -> Namespace:
 	parser.add_argument("--num_epoch", type=int, default=1000)
 	parser.add_argument("--random_seed", type=int, default=731, help="fixed random seed")
 
+	# MuZero 相關參數
+	parser.add_argument("--use_muzero", action="store_true", default=False,
+					   help="是否使用 MuZero 演算法")
+	parser.add_argument("--muzero_num_simulations", type=int, default=50,
+					   help="MuZero MCTS 模擬次數")
+	parser.add_argument("--muzero_unroll_steps", type=int, default=3,
+					   help="MuZero 訓練時的展開步數")
+	parser.add_argument("--muzero_temperature", type=float, default=1.0,
+					   help="MuZero 動作選擇的溫度參數")
+	parser.add_argument("--muzero_discount", type=float, default=0.99,
+					   help="MuZero 折扣因子")
+
 	args = parser.parse_args()
 	return args
 
@@ -157,31 +169,100 @@ def main(args):
 	# Agent
 	node_feature_dim = 8 if args.add_structure_geometry else 5
 	edge_feature_dim = 13 if args.add_response_features else 11
-	_agent_kwargs = {
-		"node_feature_dim": node_feature_dim,
-		"edge_feature_dim": edge_feature_dim,
-		"hidden_dim": args.hidden_dim,
-		"num_layers": args.num_layers,
-		"batch_size": args.batch_size,
-		"lr": args.lr,
-		"buffer_size": args.buffer_size,
-		"epsilon_decay_schedule": straight_decay_schedule,
-		"synchronize_steps": args.synchronize_steps,
-		"soft_update_alpha": args.soft_update_alpha,
-		"gamma": args.gamma,
-		"update_frequency": args.update_frequency,
-		"add_experience_frequency": args.add_experience_frequency,
-		"test_frequency": args.test_frequency,
-		"restrict_action": args.restrict_action,
-		"seed": args.random_seed,
-		"logger": logger,
-		"pretrained_ckpt_dir": args.trained_model_path,
-		"device":device,
-	}
-	if args.model_type == "Taiwan":
-		double_dqn_agent = agent.DeepQAgent(**_agent_kwargs)
-	elif args.model_type == "Japan":
-		double_dqn_agent = agent.JapanDeepQAgent(**_agent_kwargs)
+	
+	if args.use_muzero:
+		# 創建 MuZero Agent
+		# 首先需要計算動作數量，這需要根據您的環境來決定
+		# 暫時創建環境來獲取動作數量
+		temp_env_kwargs = {
+			"structure_shape": args.structure_shape,
+			"add_structure_geometry": args.add_structure_geometry,
+			"add_response_features": args.add_response_features,
+			"reward_type": args.reward_type,
+			"scwb_driven_design": args.scwb_driven_design,
+			"do_nonlinear_dynamic_analysis": False,  # 暫時關閉以加快初始化
+			"check_acceleration": args.check_acceleration,
+			"check_displacement": args.check_displacement,
+			"nda_simulator": None,
+			"nda_norm_dict": None,
+			"DBE_ground_motion_set": None,
+			"MCE_ground_motion_set": None,
+			"checkpoint_dir": args.ckpt_dir,
+			"logger": logger,
+			"device": device,
+		}
+		temp_env = environment.Environment(**temp_env_kwargs)
+		
+		# 根據不同 structure_shape 計算最大可能的動作數量
+		if args.structure_shape == "fixed":
+			max_num_actions = 16  # story_num = 4, 4 * 4 = 16
+		elif args.structure_shape == "small_random":
+			max_num_actions = 16  # story_num = 2-4, 最大 4 * 4 = 16
+		elif args.structure_shape == "random":
+			max_num_actions = 32  # story_num = 4-7, 最大 7 * 4 = 28，設為 32 保險
+		else:
+			max_num_actions = 32  # 默認值
+		
+		# 創建 MuZero 網路
+		muzero_network = model.MuZeroNetwork(
+			node_feature_dim=node_feature_dim,
+			edge_feature_dim=edge_feature_dim,
+			hidden_dim=args.hidden_dim,
+			max_num_actions=max_num_actions,  # 使用最大動作數量
+			num_layers=args.num_layers,
+			representation_network_type=args.model_type
+		)
+		
+		# 載入預訓練模型（如果有的話）
+		if args.trained_model_path.exists():
+			try:
+				checkpoint = torch.load(args.trained_model_path, map_location=device)
+				if 'model_state_dict' in checkpoint:
+					muzero_network.load_state_dict(checkpoint['model_state_dict'])
+					logger.info(f"Loaded MuZero model from {args.trained_model_path}")
+				else:
+					logger.warning(f"No model_state_dict found in {args.trained_model_path}")
+			except Exception as e:
+				logger.warning(f"Failed to load MuZero model: {e}")
+		
+		# 創建 MuZero Agent
+		muzero_agent = agent.MuZeroAgent(
+			network=muzero_network,
+			num_simulations=args.muzero_num_simulations,
+			discount=args.muzero_discount,
+			temperature=args.muzero_temperature,
+			device=device
+		)
+		
+		# 用於向後兼容
+		double_dqn_agent = muzero_agent
+	else:
+		# 原本的 DQN Agent
+		_agent_kwargs = {
+			"node_feature_dim": node_feature_dim,
+			"edge_feature_dim": edge_feature_dim,
+			"hidden_dim": args.hidden_dim,
+			"num_layers": args.num_layers,
+			"batch_size": args.batch_size,
+			"lr": args.lr,
+			"buffer_size": args.buffer_size,
+			"epsilon_decay_schedule": straight_decay_schedule,
+			"synchronize_steps": args.synchronize_steps,
+			"soft_update_alpha": args.soft_update_alpha,
+			"gamma": args.gamma,
+			"update_frequency": args.update_frequency,
+			"add_experience_frequency": args.add_experience_frequency,
+			"test_frequency": args.test_frequency,
+			"restrict_action": args.restrict_action,
+			"seed": args.random_seed,
+			"logger": logger,
+			"pretrained_ckpt_dir": args.trained_model_path,
+			"device":device,
+		}
+		if args.model_type == "Taiwan":
+			double_dqn_agent = agent.DeepQAgent(**_agent_kwargs)
+		elif args.model_type == "Japan":
+			double_dqn_agent = agent.JapanDeepQAgent(**_agent_kwargs)
 
 	# Environment
 	_env_kwargs = {
@@ -202,6 +283,10 @@ def main(args):
 		"device": device,
 	}
 	env = environment.Environment(**_env_kwargs)
+	
+	# 如果使用 MuZero，設置 Agent 與環境的連接
+	if args.use_muzero:
+		env.set_muzero_agent(double_dqn_agent)
 
 	initial_design = [14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 13, 9, 5, 4, 4, 1, 13, 12, 10, 9, 8, 4]
 

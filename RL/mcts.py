@@ -231,3 +231,119 @@ class MCTSAgent:
             node.visit_count += 1
             node.total_reward += reward
             node = node.parent      
+
+
+### MuZero MCTS Implementation ###
+
+class MuZeroNode:
+    """ MuZero MCTS 的節點類別 """
+    def __init__(self, prior: float):
+        self.visit_count = 0
+        self.prior = prior
+        self.value_sum = 0
+        self.children = {}
+        self.hidden_state = None
+        self.reward = 0
+    
+    def expanded(self) -> bool:
+        return len(self.children) > 0
+    
+    def value(self) -> float:
+        if self.visit_count == 0:
+            return 0
+        return self.value_sum / self.visit_count
+
+
+def muzero_ucb_score(parent: MuZeroNode, child: MuZeroNode, 
+                     c1: float = 1.25, c2: float = 19652) -> float:
+    """ 
+    MuZero 的 UCB 分數計算 
+    基於論文中的 PUCT (Polynomial Upper Confidence Trees) 公式
+    """
+    pb_c = math.log((parent.visit_count + c2 + 1) / c2) + c1
+    pb_c *= math.sqrt(parent.visit_count) / (child.visit_count + 1)
+    prior_score = pb_c * child.prior
+    value_score = child.value()
+    return prior_score + value_score
+
+
+def run_muzero_mcts(root_hidden_state: torch.Tensor, network, 
+                    num_simulations: int, num_actions: int, discount: float = 0.99):
+    """
+    執行 MuZero MCTS 搜尋
+    支援動態動作空間
+    
+    Args:
+        root_hidden_state: 根節點的隱藏狀態
+        network: MuZero 神經網路
+        num_simulations: 模擬次數
+        num_actions: 當前環境的動作數量
+        discount: 折扣因子
+    
+    Returns:
+        visit_counts: 根節點各子節點的訪問次數
+    """
+    # 1. 建立根節點
+    root = MuZeroNode(0)
+    
+    # 使用 network 的 predict 方法獲取根節點的策略和價值
+    with torch.no_grad():
+        policy_logits, value = network.predict(root_hidden_state, num_actions)
+        policy_probs = torch.softmax(policy_logits, dim=-1).squeeze(0)
+    
+    # 2. 擴展根節點
+    for action in range(num_actions):
+        root.children[action] = MuZeroNode(prior=policy_probs[action].item())
+    root.hidden_state = root_hidden_state
+    
+    # 3. 進行模擬
+    for simulation in range(num_simulations):
+        node = root
+        search_path = [node]
+        
+        # a. Selection - 沿著樹往下走，選擇 UCB 分數最高的節點
+        while node.expanded():
+            action, node = max(node.children.items(), 
+                             key=lambda item: muzero_ucb_score(node, item[1]))
+            search_path.append(node)
+        
+        # 獲取選擇的動作
+        parent = search_path[-2]
+        action_taken = None
+        for action, child in parent.children.items():
+            if child is node:
+                action_taken = action
+                break
+        
+        # b. Expansion & Simulation - 使用神經網路進行「想像」
+        with torch.no_grad():
+            # 用 dynamics 網路得到下一步的 reward 和 hidden_state
+            action_tensor = torch.tensor([[action_taken]], dtype=torch.long)
+            reward, next_hidden_state = network.dynamics(parent.hidden_state, action_tensor, num_actions)
+            
+            # 用 prediction 網路得到下一步的 policy 和 value
+            policy_logits, value = network.predict(next_hidden_state, num_actions)
+            policy_probs = torch.softmax(policy_logits, dim=-1).squeeze(0)
+        
+        # 擴展新節點
+        for action in range(num_actions):
+            node.children[action] = MuZeroNode(prior=policy_probs[action].item())
+        node.hidden_state = next_hidden_state
+        node.reward = reward.item()
+        
+        # c. Backpropagation - 更新路徑上所有節點的統計值
+        current_value = value.item()
+        for node_in_path in reversed(search_path):
+            node_in_path.value_sum += current_value
+            node_in_path.visit_count += 1
+            # 應用折扣因子和節點獎勵
+            current_value = node_in_path.reward + discount * current_value
+    
+    # 回傳根節點的訪問次數分佈，作為訓練策略的目標
+    # 確保返回的 visit_counts 長度等於 num_actions
+    visit_counts = torch.zeros(num_actions, dtype=torch.float32)
+    for action, child in root.children.items():
+        if action < num_actions:  # 確保動作索引在有效範圍內
+            visit_counts[action] = child.visit_count
+    
+    return visit_counts      

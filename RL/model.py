@@ -64,6 +64,17 @@ class StateGNN(nn.Module):
 
     def forward(self, x, edge_index, edge_attr, batch, story_batch, structure_story_ptr) -> torch.Tensor:
         t_start = time.time()
+        # 確保所有輸入都在同一個設備上
+        device = x.device
+        edge_index = edge_index.to(device)
+        edge_attr = edge_attr.to(device)
+        if batch is not None:
+            batch = batch.to(device)
+        if story_batch is not None:
+            story_batch = story_batch.to(device)
+        if structure_story_ptr is not None:
+            structure_story_ptr = structure_story_ptr.to(device)
+        
         # node embedding
         x = self.encoder_mlp(x)
         for i in range(self.num_layers):
@@ -74,11 +85,23 @@ class StateGNN(nn.Module):
         # edge embedding --> concat node embedding in two ends and go through an MLP
         index_i, index_j = edge_index
         node_embedding_i, node_embedding_j = node_embedding[index_i], node_embedding[index_j]
-        edge_input = torch.cat([node_embedding_i[::2], node_embedding_j[::2], edge_attr[::2]], dim=1)  # shape: [total edge_num, hidden_dim] + [total edge_num, hidden_dim] + [total edge_num, edge_feature_dim] = [total edge_num, hidden_dim*2 + edge_feature_dim]
+        
+        # 確保維度匹配
+        edge_attr_half = edge_attr[::2]  # 只取一半的邊特徵
+        node_embedding_i_half = node_embedding_i[::2]  # 只取一半的節點嵌入
+        node_embedding_j_half = node_embedding_j[::2]  # 只取一半的節點嵌入
+        
+        # 確保所有張量都有相同的批次大小
+        min_size = min(node_embedding_i_half.size(0), node_embedding_j_half.size(0), edge_attr_half.size(0))
+        node_embedding_i_half = node_embedding_i_half[:min_size]
+        node_embedding_j_half = node_embedding_j_half[:min_size]
+        edge_attr_half = edge_attr_half[:min_size]
+        
+        edge_input = torch.cat([node_embedding_i_half, node_embedding_j_half, edge_attr_half], dim=1)  # shape: [total edge_num, hidden_dim] + [total edge_num, hidden_dim] + [total edge_num, edge_feature_dim] = [total edge_num, hidden_dim*2 + edge_feature_dim]
         edge_embedding = self.edge_mlp(edge_input)  # shape: [total edge_num, member_state_dim]
 
         # graph embedding --> use edge embedding to create story-level and graph-level embedding
-        batch = torch.zeros(edge_embedding.shape[0]).to(x.device).to(torch.int64) if batch is None else batch
+        batch = torch.zeros(edge_embedding.shape[0], device=device, dtype=torch.int64) if batch is None else batch
         graph_embedding = global_add_pool(edge_embedding, batch)        # shape: [graph_num, member_state_dim]
         story_embedding = global_add_pool(edge_embedding, story_batch)  # shape: [total story_member_num, member_state_dim], story_member_num = story_num * 4 (x-beam, z-beam, out-col, in-col)
 
@@ -238,6 +261,16 @@ class GraphEmbedding(nn.Module):
         - story_batch [edge_num]: used
         - structure_story_ptr [graph_num + 1], e.g., [0, story_member_num1, story_member_num1+story_member_num2, story_member_num1+story_member_num2+story_member_num3, ..., total story_member_num]
         '''
+        # 確保所有輸入都在同一個設備上
+        device = self.device
+        x = x.to(device)
+        edge_index = edge_index.to(device)
+        edge_attr = edge_attr.to(device)
+        if story_batch is not None:
+            story_batch = story_batch.to(device)
+        if structure_story_ptr is not None:
+            structure_story_ptr = structure_story_ptr.to(device)
+        
         v = x
         w = edge_attr[::2, :]
         #edge_ptr = [0, w.shape[0]] if edge_ptr is None else edge_ptr
@@ -274,6 +307,11 @@ class GraphEmbedding(nn.Module):
         story_mu_sum = torch.zeros((story_mu.shape[0],self.n_feature_outputs), dtype=torch.float32, device=self.device)
         for b in range(len(structure_story_ptr)-1):
             story_mu_sum[structure_story_ptr[b]:structure_story_ptr[b+1], :] = torch.sum(story_mu[structure_story_ptr[b]:structure_story_ptr[b+1], :], axis=0)
+        
+        # 確保兩個張量都在同一個設備上
+        story_mu_sum = story_mu_sum.to(device)
+        story_mu = story_mu.to(device)
+        
         state = torch.cat((story_mu_sum,story_mu), 1)  # shape: [total n_story_members, n_edge_out_features*2]
 
         return state
@@ -284,3 +322,199 @@ class GraphEmbedding(nn.Module):
         q_value = self.l2_1(edge_state)  # shape: [total n_story_members, n_action_types=2]
         
         return q_value[:, 0]  # action_type = 0: dec, 1: inc
+
+
+### MuZero Implementation ###
+
+class MuZeroNetwork(nn.Module):
+    """
+    MuZero 的核心神經網路，包含三個子網路：
+    - Representation Network (h): 將觀察編碼成隱藏狀態
+    - Dynamics Network (g): 在隱藏狀態空間中進行推演
+    - Prediction Network (f): 預測策略和價值
+    支援動態動作空間
+    """
+    def __init__(self, node_feature_dim, edge_feature_dim, hidden_dim, max_num_actions=32, 
+                 num_layers=3, representation_network_type="Taiwan"):
+        super().__init__()
+        self.hidden_dim = hidden_dim
+        self.max_num_actions = max_num_actions  # 最大動作數量
+        self.num_layers = num_layers
+        
+        # Representation Network (h) - 使用與現有 DQN 相同的架構
+        if representation_network_type == "Taiwan":
+            # 使用 StateGNN 作為 representation network
+            self.representation_network = StateGNN(
+                node_feature_dim=node_feature_dim,
+                edge_feature_dim=edge_feature_dim,
+                hidden_dim=hidden_dim,
+                member_state_dim=hidden_dim,  # 讓輸出維度等於 hidden_dim
+                num_layers=num_layers
+            )
+        elif representation_network_type == "Japan":
+            # 使用 GraphEmbedding 作為 representation network
+            self.representation_network = GraphEmbedding(
+                n_node_inputs=node_feature_dim,
+                n_edge_inputs=edge_feature_dim,
+                n_feature_outputs=hidden_dim // 2,  # GraphEmbedding 輸出 hidden_dim
+                n_action_types=max_num_actions,  # 使用最大動作數量
+                device=torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            )
+        else:
+            # 簡單的 MLP 作為備用
+            self.representation_network = nn.Sequential(
+                nn.Linear(node_feature_dim, hidden_dim),
+                nn.ReLU(),
+                nn.Linear(hidden_dim, hidden_dim)
+            )
+        
+        self.representation_network_type = representation_network_type
+        
+        # Prediction Network (f) - 從隱藏狀態預測策略和價值
+        self.prediction_network = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim // 2),
+            nn.ReLU(),
+            nn.Linear(hidden_dim // 2, hidden_dim // 4),
+            nn.ReLU()
+        )
+        self.policy_head = nn.Linear(hidden_dim // 4, max_num_actions)  # 使用最大動作數量
+        self.value_head = nn.Linear(hidden_dim // 4, 1)
+        
+        # Dynamics Network (g) - 在隱藏狀態空間中推演
+        # 輸入：hidden_state + action_one_hot
+        self.dynamics_network = nn.Sequential(
+            nn.Linear(hidden_dim + max_num_actions, hidden_dim // 2),  # 使用最大動作數量
+            nn.ReLU(),
+            nn.Linear(hidden_dim // 2, hidden_dim // 2),
+            nn.ReLU()
+        )
+        self.reward_head = nn.Linear(hidden_dim // 2, 1)
+        self.next_state_head = nn.Linear(hidden_dim // 2, hidden_dim)
+        
+        # 正規化層
+        self.state_norm = nn.LayerNorm(hidden_dim)
+        
+    def represent(self, observation):
+        """ 
+        Representation Network: h(o) -> s_0 
+        將環境觀察編碼成隱藏狀態
+        """
+        if self.representation_network_type == "Taiwan":
+            # StateGNN 需要完整的圖數據
+            if hasattr(observation, 'x'):  # GraphData object
+                hidden_state = self.representation_network(
+                    observation.x, 
+                    observation.edge_index, 
+                    observation.edge_attr, 
+                    observation.batch, 
+                    observation.story_batch, 
+                    observation.structure_story_ptr
+                )
+                # StateGNN 輸出的是 [story_num, hidden_dim*2]，我們取前 hidden_dim
+                if hidden_state.dim() > 1 and hidden_state.size(-1) > self.hidden_dim:
+                    hidden_state = hidden_state[:, :self.hidden_dim]
+            else:
+                raise ValueError("Taiwan representation network requires GraphData object")
+                
+        elif self.representation_network_type == "Japan":
+            # GraphEmbedding 的處理方式
+            if hasattr(observation, 'x'):
+                hidden_state = self.representation_network(
+                    observation.x, 
+                    observation.edge_index, 
+                    observation.edge_attr, 
+                    observation.batch, 
+                    observation.story_batch, 
+                    observation.structure_story_ptr
+                )
+                # GraphEmbedding 輸出的是 [story_num, hidden_dim]
+            else:
+                raise ValueError("Japan representation network requires GraphData object")
+        else:
+            # 簡單的處理方式
+            if hasattr(observation, 'x'):
+                hidden_state = self.representation_network(observation.x.mean(dim=0, keepdim=True))
+            else:
+                hidden_state = self.representation_network(observation)
+        
+        # 確保輸出維度正確
+        if hidden_state.dim() == 1:
+            hidden_state = hidden_state.unsqueeze(0)
+            
+        # 取第一個樣本（batch中的第一個）作為代表
+        if hidden_state.size(0) > 1:
+            hidden_state = hidden_state[0:1]  # [1, hidden_dim]
+            
+        # 正規化隱藏狀態
+        hidden_state = self.state_norm(hidden_state)
+        return hidden_state
+    
+    def predict(self, hidden_state, num_actions=None):
+        """ 
+        Prediction Network: f(s) -> p, v 
+        從隱藏狀態預測策略和價值
+        支援動態動作空間
+        """
+        x = self.prediction_network(hidden_state)
+        policy_logits = self.policy_head(x)
+        
+        # 如果提供了當前動作數量，只取前 num_actions 個輸出
+        if num_actions is not None and num_actions < self.max_num_actions:
+            policy_logits = policy_logits[:, :num_actions]
+        
+        value = self.value_head(x)
+        return policy_logits, value
+    
+    def dynamics(self, hidden_state, action, num_actions=None):
+        """ 
+        Dynamics Network: g(s, a) -> r, s' 
+        在隱藏狀態空間中推演下一步
+        支援動態動作空間
+        """
+        # 確保 action 在有效範圍內
+        if num_actions is not None:
+            action = torch.clamp(action, 0, num_actions - 1)
+        
+        # 將 action 轉為 one-hot vector
+        if action.dim() == 1:
+            action = action.unsqueeze(0)
+        if action.dim() == 2 and action.size(0) == 1 and action.size(1) == 1:
+            action = action.squeeze()
+        
+        # 確保 action 在正確的設備上
+        device = hidden_state.device
+        action = action.to(device)
+        
+        # 確保 action 是標量或單個值
+        if action.dim() == 0:
+            action = action.unsqueeze(0)  # 變成 [1]
+        
+        # 如果提供了當前動作數量，使用當前大小的 one-hot
+        if num_actions is not None and num_actions < self.max_num_actions:
+            action_one_hot = F.one_hot(action, num_classes=num_actions).float()
+            # 填充到最大大小
+            padded_one_hot = torch.zeros(action_one_hot.size(0), self.max_num_actions, device=device)
+            padded_one_hot[:, :num_actions] = action_one_hot
+            action_one_hot = padded_one_hot
+        else:
+            action_one_hot = F.one_hot(action, num_classes=self.max_num_actions).float()
+        
+        # 確保 action_one_hot 在正確的設備上
+        action_one_hot = action_one_hot.to(device)
+        
+        # 確保 action_one_hot 的批次維度與 hidden_state 匹配
+        if action_one_hot.size(0) != hidden_state.size(0):
+            # 如果批次大小不匹配，取第一個樣本
+            action_one_hot = action_one_hot[0:1]  # 只取第一個樣本
+            
+        # 拼接 hidden_state 和 action_one_hot
+        stacked_input = torch.cat([hidden_state, action_one_hot], dim=-1)
+        
+        x = self.dynamics_network(stacked_input)
+        reward = self.reward_head(x)
+        next_hidden_state = self.next_state_head(x)
+        
+        # 正規化下一個隱藏狀態
+        next_hidden_state = self.state_norm(next_hidden_state)
+        
+        return reward, next_hidden_state
