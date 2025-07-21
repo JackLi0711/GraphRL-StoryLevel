@@ -96,7 +96,6 @@ def run_mcts_episode(mcts_agent, env, rec, logger):
     done = False
     total_reward = 0
     step_count = 0
-    last_good_state = state # Initialize with the initial state
     episode_actions = []
 
     while not done:
@@ -106,11 +105,7 @@ def run_mcts_episode(mcts_agent, env, rec, logger):
         if action is None:
             logger.warning("MCTS search returned no action. Ending episode.")
             break
-
-        # Before stepping, the current 'state' is a good state
-        last_good_state = deepcopy(state)
-        last_total_reward = deepcopy(total_reward)
-            
+    
         next_state, reward, done, fail_name, fail_reason = env.step(state, action)
         total_reward += reward
         state = next_state
@@ -120,11 +115,9 @@ def run_mcts_episode(mcts_agent, env, rec, logger):
     logger.info(f"Episode Finished in {step_count} steps. Total Reward: {total_reward:.3f}")
     
     # Decide which state to record as the final one
-    final_design_passed = env._check_design_feasibility(state)
-    final_state_to_record = state if final_design_passed else last_good_state
-    
+    final_state_to_record = state 
     final_volume = final_state_to_record.calculate_material_usage()
-    score = total_reward if final_design_passed else last_total_reward
+    score = total_reward
     
     rec.testing_record["score"].append(score)
     rec.testing_record["final_volume"].append(final_volume)
