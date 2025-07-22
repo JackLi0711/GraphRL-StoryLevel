@@ -398,6 +398,6 @@ def inference_record_to_pisa_ipt(args):
 if __name__ == "__main__":
 	args = parse_args()
 	
-	# main(args)
+	main(args)
 
-	inference_record_to_pisa_ipt(args)
+	# inference_record_to_pisa_ipt(args)

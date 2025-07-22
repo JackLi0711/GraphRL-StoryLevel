@@ -10,8 +10,8 @@ from Structure.structure import Structure
 from torch_geometric.loader import DataLoader
 
 
-NDA_MEAN_DRIFT_RATIO_LIMIT = 0.03
-NDA_PEAK_DRIFT_RATIO_LIMIT = 0.045
+NDA_MEAN_DRIFT_RATIO_LIMIT = 0.02  # original: 0.03
+NDA_PEAK_DRIFT_RATIO_LIMIT = 0.03  # original: 0.045
 
 
 def get_response(structure: Structure, nda_simulator: torch.nn.Module, ground_motion_set: list[torch.Tensor], device: torch.device) -> np.ndarray:
