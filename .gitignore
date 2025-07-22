@@ -1,25 +1,17 @@
-/Results/
+Check/
+Results/
+NewStrategy/
+參考資料/
+暫時用不到的程式碼/
 
-/NonlinearDynamicAnalysisSimulator/trained_GraphLSTM/
-/NonlinearDynamicAnalysisSimulator/ground_motions/
+NonlinearDynamicAnalysisSimulator/trained_GraphLSTM/
+NonlinearDynamicAnalysisSimulator/ground_motions/
 
-/Validation/AdjustedMoreSections_RestrictAction_StraightDecay0.1_BufferSize20000_BatchSize512_Epoch300/
-/Validation/AdjustedMoreSections_RestrictAction_StraightDecay0.1_BufferSize20000_BatchSize512_Epoch300_BetterGraphLSTM/
-/Validation/TonySettings/
-/Validation/useless_analyze_file/
-/Validation/design_earthquake_force_comparison
+Validation/useless_analyze_file/
+Validation/design_earthquake_force_comparison
+Validation/Final_Design_Comparison/
 
-/NewStrategy/
-
-/參考資料/
-/暫時用不到的程式碼/
-
-check_inference.ipynb
-check_performance.ipynb
-check_section.ipynb
-check_Tony_design.ipynb
-check_new_strategy.ipynb
-analyize_seismic_behavior.ipynb
+*PISA3D_Batch_500nodes.exe
 
 .DS_Store
 .DS_Store?

@@ -1,7 +1,12 @@
 import os
+import time
+import threading
 import numpy as np
-from typing import Tuple
-from Structure.sections import *
+from pathlib import Path
+
+from Structure.load import NodalLoad
+from Structure.structure import Structure
+from Structure.sections import beam_sections, column_sections
 
 
 DISP_UX_INDEX = 1
@@ -16,18 +21,20 @@ ELEM_SZI_INDEX = 15
 ELEM_SZJ_INDEX = 16
 ELEM_AXIAL_INDEX = 18
 
+THREAD_QUOTA = 4
 PISA_EXE = "PISA3D_Batch_500nodes.exe"
 
 
 class Response:        
-    def __init__(self, analysis_name: str, structure):
+    def __init__(self, analysis_name: str, structure: Structure):
         disp_file = open(analysis_name + ".NodeAbsDisp", 'r').readlines()
         elem_file = open(analysis_name + ".Element", 'r').readlines()
         self.structure = structure
         self.node_number = structure.node_number
         self.member_number = structure.member_number
         self.node_response = dict()
-        self.node_response["disp"] = dict()
+        self.node_response["dispX"] = dict()
+        self.node_response["dispZ"] = dict()
         self.member_response = dict()
         self.member_response["shearY"] = dict()
         self.member_response["shearZ"] = dict()
@@ -40,8 +47,8 @@ class Response:
 
     def __str__(self):
         info = ""
-        for node_name in self.node_response["disp"].keys():
-            info += f"{node_name:^4s}, {self.node_response['disp'][node_name]:^8.2f}\n"
+        for node_name in self.node_response["dispX"].keys():
+            info += f"{node_name:^4s}, {self.node_response['dispX'][node_name]:^8.2f}\n"
         return info
 
     def _load_disp(self, disp_file):
@@ -52,8 +59,11 @@ class Response:
                 contents = line.split()
                 node_name = contents[0]
                 UX, UZ = float(contents[DISP_UX_INDEX]), float(contents[DISP_UZ_INDEX])
-                self.node_response["disp"][node_name] = UX if abs(UX) > abs(UZ) else UZ
-        assert len(self.node_response["disp"].keys()) == self.node_number
+                #self.node_response["disp"][node_name] = UX if abs(UX) > abs(UZ) else UZ
+                self.node_response["dispX"][node_name] = UX
+                self.node_response["dispZ"][node_name] = UZ
+        assert len(self.node_response["dispX"].keys()) == self.node_number
+        assert len(self.node_response["dispZ"].keys()) == self.node_number
 
     def _load_elem(self, elem_file):
         for line in elem_file:
@@ -80,31 +90,47 @@ class Response:
 
 
 
-# return period from modal analysis
-def dynamic_analysis_period(structure, analysis_dir) -> Tuple[float, np.array]:
-    modal_ipt_path = os.path.join(analysis_dir, "modal.ipt")
+def dynamic_analysis_period(structure: Structure) -> tuple[float, float, float, np.ndarray, np.ndarray, np.ndarray]:
+    """Return periods and mode shapes from modal analysis."""
+    t_start = time.time()
+    modal_ipt_path = os.path.join(structure.analysis_dir, "modal.ipt")
     # 1. generate modal analysis ipt file
     _generate_analysis_ipt(structure, modal_ipt_path, analysis="modal")
     # 2. run modal analysis, derive the period
-    periods_and_shapes = _run_modal_analysis(structure.node_number, analysis_dir)
+    periods_and_shapes = _run_modal_analysis(structure.node_number, structure.analysis_dir)
+    t_end = time.time()
+    print(f"\t\tused time for pisa.dynamic_analysis_period(): {t_end - t_start:.3f} sec")
     return periods_and_shapes
 
 
-# return structure's response under the given load case
-def run_load_case(structure, load_case, analysis_dir) -> Response:
+def run_load_case(structure: Structure, load_case: NodalLoad, analysis_dir: Path) -> Response:
+    """Return structure's response under the given load case."""
+    t_start = time.time()
     # 1. generate load case's ipt file
     load_name = load_case.load_name
-    analysis_ipt_path = os.path.join(analysis_dir, f"{load_name}.ipt")
+    ipt_path = os.path.join(analysis_dir, f"{load_name}.ipt")
     nodal_loads = load_case.calculate_nodal_load(structure)
-    _generate_analysis_ipt(structure, analysis_ipt_path, analysis="static", nodal_loads=nodal_loads)
+    _generate_analysis_ipt(structure, ipt_path, analysis="static", nodal_loads=nodal_loads)
     # 2. run analysis, derive the response
-    response = _run_static_analysis(analysis_dir, analysis_ipt_path, load_name, structure)
+    response = _run_static_analysis(analysis_dir, ipt_path, load_name, structure)
+    t_end = time.time()
+    # print(f"\t\tused time for pisa.run_load_case({load_name}): {t_end - t_start:.3f} sec")
     return response
 
 
+mm = 1  # length
+kN = 1  # force
+m = 1e+3 * mm
+N = 1e-3 * kN
+
+Pa = N / m**2
+GPa = 1e+9 * Pa
+E = 200 * GPa  # Young's modulud, GPa
+Nu = 0.3  # Poisson's ratio
+G = E / (2 * (1 + Nu))  # Shear modulus, GPa
 
 
-def _generate_analysis_ipt(structure, ipt_path: str, analysis="static", nodal_loads=None) -> None:
+def _generate_analysis_ipt(structure: Structure, ipt_path: Path, analysis="static", nodal_loads=None) -> None:
     """Generate modal.ipt""" 
     x_grid, y_grid, z_grid = structure.x_grid, structure.y_grid, structure.z_grid
     x_grid_string = '  ' + '  '.join([str(x) for x in x_grid])
@@ -139,15 +165,15 @@ def _generate_analysis_ipt(structure, ipt_path: str, analysis="static", nodal_lo
     # nodal mass, translational mass (Ux, Uy, Uz, Rx, Ry, Rz) | U: translational mass, R: moment of inertia
     mass_string = ''
     for node_name in structure.node_translational_mass_dict.keys():
-        trans_mass = structure.node_translational_mass_dict[node_name]  # kN
+        trans_mass = structure.node_translational_mass_dict[node_name]  # kN / mm/s^2
         Rx, Ry, Rz = structure.node_inertia_dict[node_name]             # kN / (mm/s2) * mm2
-        mass_string += '#NodeMass  Mass  ' + node_name + ' ' + f"{trans_mass:.5f}" + ' ' + f"{trans_mass:.5f}" + ' ' + f"{trans_mass:.5f}" + ' ' + str(int(Rx)) + ' ' + str(int(Ry)) + ' ' + str(int(Rz)) + '\n'
+        mass_string += '#Mass  ' + node_name + ' ' + f"{trans_mass:.5f}" + ' ' + f"{trans_mass:.5f}" + ' ' + f"{trans_mass:.5f}" + ' ' + str(int(Rx)) + ' ' + str(int(Ry)) + ' ' + str(int(Rz)) + '\n'
     
     # master node's translational mass (Ux, Uy, Uz, Rx, Ry, Rz)
     for master_name in master_node_list:
         trans_mass, Ry = 0, 0
         for slave_name in structure.slave_node_dict[master_name]:
-            trans_mass += structure.node_translational_mass_dict[slave_name]  # kN
+            trans_mass += structure.node_translational_mass_dict[slave_name]  # kN / mm/s^2
             Ry += structure.node_inertia_dict[slave_name][1]                  # kN / (mm/s2) * mm2
         mass_string += 'Mass  ' + master_name + ' ' + f"{trans_mass:.7f}" + ' ' + f"{0}" + ' ' + f"{trans_mass:.7f}" + ' ' + str(0) + ' ' + str(int(Ry)) + ' ' + str(0) + '\n'
 
@@ -222,11 +248,10 @@ def _generate_analysis_ipt(structure, ipt_path: str, analysis="static", nodal_lo
     f.write('\n'*2)
 
     f.write('% MATERIAL DATA %\n')
-    f.write('Material  Elastic steel 200 0.3\n')
+    f.write(f'Material  Elastic steel {E} {Nu}\n')
     f.write('\n'*2)
 
     f.write('% SECTION DATA %\n')
-
     for section in beam_sections:
         R, G, B = np.array(section['color'])/255
         f.write(f"GUI_Section I_SHAPE_SECTION {section['name']} steel steel steel steel steel steel steel steel steel 0 {section['H(mm)']} {section['B(mm)']} {section['t_f(mm)']} {section['t_w(mm)']} {section['B(mm)']} {section['t_f(mm)']} \n")
@@ -244,7 +269,6 @@ def _generate_analysis_ipt(structure, ipt_path: str, analysis="static", nodal_lo
         f.write('\n')
 
     f.write('\n'*2)
-
     f.write('GUI_LoadCase  GUI_AREA_LOAD_DL  DL\n')
     f.write('GUI_AREA_LOAD_ASSIGNED_TYPE  BY_BEAN_SPAN_LOAD\n')
     f.write('GUI_Output  OutFlag  1  1  0  1  1  1  1\n')
@@ -255,15 +279,15 @@ def _generate_analysis_ipt(structure, ipt_path: str, analysis="static", nodal_lo
     f.close()        
 
 
-def _check_modal_analysis(eigen_file_path) -> bool:
+def _check_modal_analysis(eigen_file_path: Path) -> bool:
     if os.path.exists(eigen_file_path):
         return True
     return False
 
 
-def _run_modal_analysis(node_number: int, analysis_dir: str) -> float:
+def _run_modal_analysis(node_number: int, analysis_dir: Path) -> tuple[np.ndarray, np.ndarray]:
     """Run modal analysis with PISA3D"""
-    
+    t_start = time.time()
     modal_path = os.path.join(analysis_dir, 'modal.ipt')
     modal_name = modal_path.replace(".ipt", "")
 
@@ -282,8 +306,8 @@ def _run_modal_analysis(node_number: int, analysis_dir: str) -> float:
         # print("in pisa while loop")
         os.system(PISA_EXE + " " + modal_name + " " + f">{os.path.join(analysis_dir, 'null')} 2>&1")
         finished = _check_modal_analysis(eigen_file_path)
-        if finished == False:
-            continue
+        print(f"\t\t\tfinished: {finished}")
+        if finished == False: continue
 
         is_mode_1, is_mode_2, is_mode_3 = False, False, False
         
@@ -298,7 +322,6 @@ def _run_modal_analysis(node_number: int, analysis_dir: str) -> float:
                 # in case the line is not finished, it will occur error, like the number beocome -9.616E
                 # and cannot be converted to float.
                 try:    
-                    
                     if "Period of Mode 1" in line:
                         contents = line.strip().split()
                         first_mode_period = float(contents[5])
@@ -311,10 +334,10 @@ def _run_modal_analysis(node_number: int, analysis_dir: str) -> float:
 
                     elif "Mode 1, Period =" in line:
                         is_mode_1 = True
-                    elif "----------" in line:
+                    elif "----------" in line and is_mode_1:
                         is_mode_1 = False
                     elif is_mode_1 == True:
-                        if "Node" in line or "N" not in line:   continue
+                        if "Node" in line or "N" not in line: continue
                         contents = line.strip().split()
                         node_index = int(contents[0][1:]) - 1
                         node_first_mode_shape[node_index, 0] = float(contents[1])
@@ -344,19 +367,21 @@ def _run_modal_analysis(node_number: int, analysis_dir: str) -> float:
                         node_third_mode_shape[node_index, 0] = float(contents[1])
                         node_third_mode_shape[node_index, 1] = float(contents[3])
                         node_third_mode_shape[node_index, 2] = float(contents[5])
-                
                 except:
                     continue
 
-        if first_mode_period is None or second_mode_period is None or third_mode_period is None:
-            continue
+        if first_mode_period is None or second_mode_period is None or third_mode_period is None: continue
+    
+    mode_periods = np.array([first_mode_period, second_mode_period, third_mode_period])
+    mode_shapes = np.hstack((node_first_mode_shape, node_second_mode_shape, node_third_mode_shape))
+    
+    t_end = time.time()
+    # print(f"\t\t\tused time for pisa._run_modal_analysis(): {t_end - t_start:.3f} sec")
+    
+    return mode_periods, mode_shapes
 
-    return first_mode_period, second_mode_period, third_mode_period, node_first_mode_shape, node_second_mode_shape, node_third_mode_shape
 
-
-
-
-def _check_static_analysis(disp_file_path, elem_file_path) -> bool:
+def _check_static_analysis(disp_file_path: Path, elem_file_path: Path) -> bool:
     if os.path.exists(disp_file_path) is True and \
        os.stat(disp_file_path).st_size > 1024 and \
        os.stat(elem_file_path).st_size > 8192:
@@ -364,8 +389,9 @@ def _check_static_analysis(disp_file_path, elem_file_path) -> bool:
     return False
 
 
-def _run_static_analysis(analysis_dir, ipt_path, load_name, structure) -> Response:    
+def _run_static_analysis(analysis_dir: Path, ipt_path: Path, load_name: str, structure: Structure) -> Response:    
     """Run static analysis with PISA3D"""
+    t_start = time.time()
     analysis_name = ipt_path.replace(".ipt", "")
 
     # delete the last .NodeAbsDisp file, ensure pisa really run it
@@ -379,11 +405,189 @@ def _run_static_analysis(analysis_dir, ipt_path, load_name, structure) -> Respon
     while not finished:
         os.system(PISA_EXE + " " + analysis_name + " " + f">{os.path.join(analysis_dir, f'null_{load_name}')} 2>&1")
         finished = _check_static_analysis(disp_file_path, elem_file_path)
-        if finished == False:
-            continue
+        if finished == False: continue
 
     # get response from the analysis result
     response = Response(analysis_name, structure)
+    t_end = time.time()
+    # print(f"\t\t\tused time for pisa._run_static_analysis({load_name}): {t_end - t_start:.3f} sec")
     return response
 
+
+# multi-threading version
+global semaphore
+semaphore = threading.Semaphore(value=THREAD_QUOTA)
+
+
+def _run_single_modal_analysis(analysis_dir: Path) -> None:
+    global semaphore
+    semaphore.acquire()
+    t_start = time.time()
+    modal_name = os.path.join(analysis_dir, "modal")
+    os.system(PISA_EXE + " " + modal_name + " " + f">{os.path.join(analysis_dir, 'null')} 2>&1")
+    t_end = time.time()
+    # print(f"\t\t\tused time for pisa._run_single_modal_analysis(): {t_end - t_start:.3f} sec")
+    semaphore.release()
+
+
+def run_modal_analysis(structure: Structure) -> tuple[np.ndarray, np.ndarray]:
+    """
+    * Run PISA3D modal analysis with multi-threading
+    * Return mode periods and mode shapes
+    """ 
+    t_start = time.time()
+    modal_ipt_path = os.path.join(structure.analysis_dir, "modal.ipt")
+    _generate_analysis_ipt(structure, modal_ipt_path, analysis="modal")
+
+    # delete the last .Eigen file, ensure pisa really run it
+    eigen_file_path = os.path.join(structure.analysis_dir, 'MODAL.Eigen')
+    if os.path.exists(eigen_file_path): os.remove(eigen_file_path)
+
+    # semaphore = threading.Semaphore(value=THREAD_QUOTA)
+    case_counter_unfinished = 1
+    while (case_counter_unfinished != 0):
+        case_counter_unfinished = 0
+
+        finished = _check_modal_analysis(eigen_file_path)
+        if not finished: case_counter_unfinished += 1
+        
+        t_pool = []
+        if (case_counter_unfinished != 0):
+            t_pool.append(threading.Thread(target=_run_single_modal_analysis, args=(structure.analysis_dir, )))
+            for t in t_pool: t.start()
+            for t in t_pool: t.join()
+
+    first_mode_period = None
+    second_mode_period = None
+    third_mode_period = None
+    node_first_mode_shape = np.zeros((structure.node_number, 3))
+    node_second_mode_shape = np.zeros((structure.node_number, 3))
+    node_third_mode_shape = np.zeros((structure.node_number, 3))
+    while first_mode_period is None:
+        is_mode_1, is_mode_2, is_mode_3 = False, False, False
+
+        # get first mode shape from modal result
+        with open(eigen_file_path, 'r') as f:
+            for line in f.readlines():
+                # in case the line is not finished, it will occur error, like the number beocome -9.616E and cannot be converted to float.
+                try:    
+                    if "Period of Mode 1" in line:
+                        contents = line.strip().split()
+                        first_mode_period = float(contents[5])
+                    elif "Period of Mode 2" in line:
+                        contents = line.strip().split()
+                        second_mode_period = float(contents[5])
+                    elif "Period of Mode 3" in line:
+                        contents = line.strip().split()
+                        third_mode_period = float(contents[5])
+
+                    elif "Mode 1, Period =" in line:
+                        is_mode_1 = True
+                    elif "----------" in line and is_mode_1:
+                        is_mode_1 = False
+                    elif is_mode_1 == True:
+                        if "Node" in line or "N" not in line: continue
+                        contents = line.strip().split()
+                        node_index = int(contents[0][1:]) - 1
+                        node_first_mode_shape[node_index, 0] = float(contents[1])
+                        node_first_mode_shape[node_index, 1] = float(contents[3])
+                        node_first_mode_shape[node_index, 2] = float(contents[5])
+
+                    elif "Mode 2, Period =" in line:
+                        is_mode_2 = True
+                    elif "-----------" in line and is_mode_2:
+                        is_mode_2 = False
+                    elif is_mode_2 == True:
+                        if "Node" in line or "N" not in line: continue
+                        contents = line.strip().split()
+                        node_index = int(contents[0][1:]) - 1
+                        node_second_mode_shape[node_index, 0] = float(contents[1])
+                        node_second_mode_shape[node_index, 1] = float(contents[3])
+                        node_second_mode_shape[node_index, 2] = float(contents[5])
+                    
+                    elif "Mode 3, Period =" in line:
+                        is_mode_3 = True
+                    elif "-----------" in line and is_mode_3:
+                        is_mode_3 = False
+                    elif is_mode_3 == True:
+                        if "Node" in line or "N" not in line: continue
+                        contents = line.strip().split()
+                        node_index = int(contents[0][1:]) - 1
+                        node_third_mode_shape[node_index, 0] = float(contents[1])
+                        node_third_mode_shape[node_index, 1] = float(contents[3])
+                        node_third_mode_shape[node_index, 2] = float(contents[5])
+                except: 
+                    continue
+
+        if first_mode_period is None or second_mode_period is None or third_mode_period is None: continue
+    
+    mode_periods = np.array([first_mode_period, second_mode_period, third_mode_period])
+    mode_shapes = np.hstack((node_first_mode_shape, node_second_mode_shape, node_third_mode_shape))
+    
+    t_end = time.time()
+    # print(f"\t\tused time for pisa.run_modal_analysis(): {t_end - t_start:.3f} sec")
+
+    return mode_periods, mode_shapes
+
+
+def _run_single_static_analysis(load_name: str, analysis_dir: Path) -> None:
+    global semaphore
+    semaphore.acquire()
+    t_start = time.time()
+    static_name = os.path.join(analysis_dir, load_name)
+    os.system(PISA_EXE + " " + static_name + " " + f">{os.path.join(analysis_dir, f'null_{load_name}')} 2>&1")
+    t_end = time.time()
+    # print(f"\t\t\tused time for pisa._run_single_static_analysis({load_name}): {t_end - t_start:.3f} sec")
+    semaphore.release()
+
+
+def run_static_analysis(structure: Structure, load_cases: list[NodalLoad], analysis_dir: Path) -> list[Response]:
+    """
+    * Run PISA3D static analysis with multi-threading
+    * Return a list of responses for each load case
+    """ 
+    t_start = time.time()
+    for load_case in load_cases:
+        load_name = load_case.load_name
+        ipt_path = os.path.join(analysis_dir, f"{load_name}.ipt")
+        nodal_loads = load_case.calculate_nodal_load(structure)
+        _generate_analysis_ipt(structure, ipt_path, analysis="static", nodal_loads=nodal_loads)
+
+        # delete the last .NodeAbsDisp and .Element files, ensure pisa really runs it
+        disp_file_path = os.path.join(analysis_dir, load_name.upper() + ".NodeAbsDisp")
+        elem_file_path = os.path.join(analysis_dir, load_name.upper() + ".Element")
+        if os.path.exists(disp_file_path): os.remove(disp_file_path)
+        if os.path.exists(elem_file_path): os.remove(elem_file_path)
+
+    # semaphore = threading.Semaphore(value=THREAD_QUOTA)
+    case_counter_unfinished = len(load_cases)
+    while (case_counter_unfinished != 0):
+        case_counter_unfinished = 0
+        target_case_list = []
+
+        for load_case in load_cases:
+            load_name = load_case.load_name
+            disp_file_path = os.path.join(analysis_dir, load_name.upper() + ".NodeAbsDisp")
+            elem_file_path = os.path.join(analysis_dir, load_name.upper() + ".Element")
+            finished = _check_static_analysis(disp_file_path, elem_file_path)
+            if not finished: 
+                case_counter_unfinished += 1
+                target_case_list.append(load_name)
+        
+        t_pool = []
+        if (case_counter_unfinished != 0):
+            for load_name in target_case_list:
+                t_pool.append(threading.Thread(target=_run_single_static_analysis, args=(load_name, analysis_dir, )))
+            for t in t_pool: t.start()
+            for t in t_pool: t.join()
+
+    responses = []
+    for load_case in load_cases:
+        analysis_name = os.path.join(analysis_dir, load_case.load_name)
+        response = Response(analysis_name, structure)
+        responses.append(response)
+    assert len(responses) == len(load_cases)
+    t_end = time.time()
+    print(f"\t\tused time for pisa.run_static_analysis(): {t_end - t_start:.3f} sec")
+    return responses
 

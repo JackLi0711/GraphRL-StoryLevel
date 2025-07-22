@@ -1,12 +1,11 @@
+import json
 import numpy as np
 import matplotlib.pyplot as plt
-
 from tqdm import tqdm
 from pathlib import Path
 
-from Structure import check
-from Structure import check_nda
-from Structure.sections import *
+from Structure import check, check_nda
+from Structure.sections import beam_sections, column_sections
 
 
 def check_one_design(structure,
@@ -18,34 +17,40 @@ def check_one_design(structure,
                      check_acceleration,
                      check_displacement,
                      nda_norm_dict,
-                     device):
-    
+                     device) -> tuple[bool, str, str]:
     # 1. check if linear static analysis response pass regulation
-    whether_pass, fail_name, fail_reason, auxiliary_values = check.check(structure, 
-                                                                         check_displacement, 
-                                                                         code_analysis_dir)
+    # original code 
+    # whether_pass, fail_name, fail_reason, auxiliary_values = check.check(structure, check_displacement, code_analysis_dir)
+    
+    # modified code
+    auxiliary_values, load_cases, static_responses = check.get_response(structure, code_analysis_dir)
+    static_constraint_condition, static_response_features, static_response_rewards = check.process_response(structure, load_cases, static_responses)
+    whether_pass, fail_name, fail_reason = check.check_pass(load_cases, static_constraint_condition, check_displacement)
 
     # 2. check if nonlinear dynamic analysis response pass regulation if needed
     if do_nonlinear_dynamic_analysis and whether_pass == True:
-        whether_pass, fail_reason = check_nda.check(structure, 
-                                                    nda_simulator, 
-                                                    DBE_ground_motion_set,  
-                                                    MCE_ground_motion_set,
-                                                    check_acceleration,
-                                                    check_displacement,
-                                                    nda_norm_dict, 
-                                                    auxiliary_values,
-                                                    device)
+        # original code
+        # whether_pass, fail_reason = check_nda.check(structure, 
+        #                                             nda_simulator, 
+        #                                             DBE_ground_motion_set,  
+        #                                             MCE_ground_motion_set,
+        #                                             check_acceleration,
+        #                                             check_displacement,
+        #                                             nda_norm_dict, 
+        #                                             auxiliary_values,
+        #                                             device)
+        
+        # modified code
+        dynamic_responses = check_nda.get_response(structure, nda_simulator, MCE_ground_motion_set, device)
+        dynamic_constraint_condition, dynamic_response_features, dynamic_response_rewards = check_nda.process_response(structure, dynamic_responses, nda_norm_dict)
+        whether_pass, fail_name, fail_reason = check_nda.check_pass(dynamic_constraint_condition, check_displacement)
 
-    return whether_pass, fail_reason
-
-
+    return whether_pass, fail_name, fail_reason
 
 
 def visualize_one_design(structure, reward, whether_pass, fail_reason, save_root, i):
     # plot 3d
     fig = plt.figure(figsize=(7, 7), facecolor="w")
-
     ax = fig.add_subplot(1, 1, 1, projection="3d", facecolor="w")
     ax.set_axis_off()
 
@@ -87,12 +92,7 @@ def visualize_one_design(structure, reward, whether_pass, fail_reason, save_root
         color = edges_color[edge_i]
         ax.plot(xx, zz, yy, c=(color), linewidth=3)
 
-
-    # reward, whether_pass, fail_reason
-    if whether_pass:
-        save_dir = save_root / "pass"
-    else:
-        save_dir = save_root / "fail"
+    save_dir = save_root / "pass" if whether_pass else save_root / "fail"
     save_dir.mkdir(parents=True, exist_ok=True)
     save_fig_path = save_dir / f"{reward:5.3f}_structure{i}.png"
 
@@ -100,8 +100,6 @@ def visualize_one_design(structure, reward, whether_pass, fail_reason, save_root
     fig.tight_layout()
     plt.savefig(save_fig_path)
     plt.close()
-
-
 
 
 def check_designs_from_design_space(structures,
@@ -115,29 +113,38 @@ def check_designs_from_design_space(structures,
                                     check_displacement,
                                     nda_norm_dict,
                                     device,
-                                    save_root):
+                                    save_root) -> None:
+    # pass_dir = save_root / "pass"
+    # fail_dir = save_root / "fail"
+    # pass_dir.mkdir(parents=True, exist_ok=True)
+    # fail_dir.mkdir(parents=True, exist_ok=True)
 
-    pass_dir = save_root / "pass"
-    fail_dir = save_root / "fail"
-    pass_dir.mkdir(parents=True, exist_ok=True)
-    fail_dir.mkdir(parents=True, exist_ok=True)
-
+    sampling_record = {"geometry": [], "final_design": [], 
+                       "final_volume": [], "saved_material": [], 
+                       "whether_pass": [], "fail_name": [], "fail_reason": []}
     for i, (structure, reward) in tqdm(enumerate(zip(structures, rewards))):
-        
-        # check if pass
-        whether_pass, fail_reason = check_one_design(structure,
-                                                     code_analysis_dir,
-                                                     do_nonlinear_dynamic_analysis,
-                                                     nda_simulator,
-                                                     DBE_ground_motion_set,
-                                                     MCE_ground_motion_set,
-                                                     check_acceleration,
-                                                     check_displacement,
-                                                     nda_norm_dict,
-                                                     device)
-        
-        # visualize result
-        visualize_one_design(structure, reward, whether_pass, fail_reason, save_root, i)
-
-
-
+        # check whether pass
+        whether_pass, fail_name, fail_reason = check_one_design(structure,
+                                                                code_analysis_dir,
+                                                                do_nonlinear_dynamic_analysis,
+                                                                nda_simulator,
+                                                                DBE_ground_motion_set,
+                                                                MCE_ground_motion_set,
+                                                                check_acceleration,
+                                                                check_displacement,
+                                                                nda_norm_dict,
+                                                                device)
+        # record the result
+        sampling_record["geometry"].append([structure.x_span_num, structure.z_span_num, structure.story_num, structure.x_span_lens, structure.z_span_lens, structure.story_height])
+        sampling_record["final_design"].append([i for i in structure.story_level_sections])
+        sampling_record["final_volume"].append(structure.calculate_material_usage())
+        sampling_record["saved_material"].append(reward)
+        print("heaviest weight: ", structure.calculate_material_usage() + reward)
+        sampling_record["whether_pass"].append(whether_pass)
+        sampling_record["fail_name"].append(fail_name)
+        sampling_record["fail_reason"].append(fail_reason)
+        # visualize the result --> the saved figures take too much space
+        # visualize_one_design(structure, reward, whether_pass, fail_reason, save_root, i)
+    
+    with open(save_root / "sampling_record.txt", 'w') as f:
+        json.dump(sampling_record, f)

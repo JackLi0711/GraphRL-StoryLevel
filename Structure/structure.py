@@ -1,13 +1,11 @@
+import time
 import torch
 import numpy as np
 
-from copy import deepcopy
 from typing import Tuple, List, Dict
 from torch_geometric.data import Data
 
-from Structure import pisa
-from Structure.sections import *
-from Structure.sections import _Fcr, _Mn
+from Structure.sections import beam_sections, column_sections, _Fcr, _Mn
 
 
 # A table which correspond face to node feature's My face index
@@ -40,7 +38,7 @@ DL = 1.0    # kN/m2
 
 GRAPH_NORM_DICT = {
     # node
-    "grid_num": 8,
+    "story_num": 7,
     "coord": 7,
     # edge
     "L": 8,
@@ -55,13 +53,15 @@ GRAPH_NORM_DICT = {
 
 class Structure:
     def __init__(self, 
-                 x_span_num, x_span_lens, 
-                 z_span_num, z_span_lens, 
-                 story_num, story_height,
-                 analysis_dir,
-                 add_structure_geometry, 
-                 do_nonlinear_dynamic_analysis, 
-                 nda_norm_dict):
+                 x_span_num: int, x_span_lens: List[int], 
+                 z_span_num: int, z_span_lens: List[int], 
+                 story_num: int, story_height: float,
+                 story_level_sections: List[int]=None,
+                 add_structure_geometry=True, 
+                 add_response_features=True,
+                 do_nonlinear_dynamic_analysis=False, 
+                 nda_norm_dict: Dict=None, 
+                 analysis_dir: str=None):
         
         self.x_span_num = x_span_num
         self.x_span_lens = x_span_lens
@@ -70,17 +70,17 @@ class Structure:
         self.story_num = story_num
         self.story_height = story_height
         self.story_height_1F = story_height + 1000
-        self.analysis_dir = analysis_dir
+        self.story_level_sections = story_level_sections
         self.add_structure_geometry = add_structure_geometry
+        self.add_response_features = add_response_features
         self.do_nonlinear_dynamic_analysis = do_nonlinear_dynamic_analysis
         self.nda_norm_dict = nda_norm_dict
+        self.analysis_dir = analysis_dir  # modal_analysis_dir
         
         self._structure_initialization()
-        self._init_graph()
-        # print("graph:", self.graph)
-        if do_nonlinear_dynamic_analysis:
-            self._init_nda_graph()
-            # print("nda_graph", self.nda_graph)
+        # self.init_graph()
+        # if do_nonlinear_dynamic_analysis:
+        #     self._init_nda_graph()
 
     def __str__(self):
         description = f"Structure: x_span_num: {self.x_span_num}, z_span_num: {self.z_span_num}, story_num: {self.story_num}, "
@@ -244,16 +244,20 @@ class Structure:
         story_xdir_beam_member = []
         story_zdir_beam_member = []
         story_column_member = []
-        story_inner_column_member = []
         story_outer_column_member = []
+        story_inner_column_member = []
+
+        # prepare story level member group sections for member_section_dict
+        if self.story_level_sections is not None:
+            story_xdir_beam_section, story_zdir_beam_section, story_outer_column_section, story_inner_column_section = np.array_split(self.story_level_sections, 4)
         
         member_index = 0
         for i, y in enumerate(y_grid):
             # for columns:
             if y != y_grid[-1]:
                 story_column = []
-                story_inner_column = []
                 story_outer_column = []
+                story_inner_column = []
                 y_upper = y_grid[i+1]
                 for x in x_grid:
                     for z in z_grid:
@@ -283,8 +287,14 @@ class Structure:
                             member_same_location_dict[column_XZ] = []
                         member_same_location_dict[column_XZ].append(member_name)
             
-                        init_section = len(column_sections) - 1
-                        member_section_dict[member_name] = init_section
+                        if self.story_level_sections is None:
+                            init_section = len(column_sections) - 1
+                        else:
+                            if x == 0 or x == x_grid[-1] or z == 0 or z == z_grid[-1]:
+                                init_section = story_outer_column_section[y_grid.index(y)]
+                            else:
+                                init_section = story_inner_column_section[y_grid.index(y)]
+                        member_section_dict[member_name] = int(init_section)
                         member_category_dict[member_name] = 'y'
 
                         # Fcr
@@ -292,7 +302,7 @@ class Structure:
                         A = column_sections[init_section]["A(cm2)"]
                         L = (y_upper - y) / 10  # cm
                         member_Fcr_dict[member_name] = _Fcr(I, A, L)
-                        member_A_dict[member_name] = A * 1e+2  # mm2
+                        member_A_dict[member_name] = A * 1e+2  # mm^2
                         member_length_dict[member_name] = L / 100  # m
 
                         # Mnx, Mny
@@ -326,7 +336,6 @@ class Structure:
                         node2_index = coord_to_nodeIndex_dict[coord2]
                         member_to_nodeIndex_dict[member_name] = [node1_index, node2_index, FACE_INDEX['x_p'], FACE_INDEX['x_n'], NODE_FEATURE_FACE_INDEX['x_p'], NODE_FEATURE_FACE_INDEX['x_n']]
                         member_beam_index_list.append(member_index)
-
                         
                         # assign member with same location (vertically)
                         beam_XZ = "_".join([str((x + x_next) / 2), str(z)])
@@ -335,9 +344,11 @@ class Structure:
                             member_same_location_dict[beam_XZ] = []
                         member_same_location_dict[beam_XZ].append(member_name)
                         
-                        
-                        init_section = len(beam_sections) - 1
-                        member_section_dict[member_name] = init_section
+                        if self.story_level_sections is None:
+                            init_section = len(beam_sections) - 1
+                        else:
+                            init_section = story_xdir_beam_section[y_grid.index(y)-1]
+                        member_section_dict[member_name] = int(init_section)
                         member_category_dict[member_name] = 'x'
 
                         # Fcr
@@ -345,7 +356,7 @@ class Structure:
                         A = beam_sections[init_section]["A(cm2)"]
                         L = (x_next - x) / 10  # cm
                         member_Fcr_dict[member_name] = _Fcr(I, A, L)
-                        member_A_dict[member_name] = A * 1e+2  # mm2
+                        member_A_dict[member_name] = A * 1e+2  # mm^2
                         member_length_dict[member_name] = L / 100  # m
 
                         # Mnx, Mny
@@ -378,8 +389,11 @@ class Structure:
                             member_same_location_dict[beam_XZ] = []
                         member_same_location_dict[beam_XZ].append(member_name)
                         
-                        init_section = len(beam_sections) - 1
-                        member_section_dict[member_name] = init_section
+                        if self.story_level_sections is None:
+                            init_section = len(beam_sections) - 1
+                        else:
+                            init_section = story_zdir_beam_section[y_grid.index(y)-1]
+                        member_section_dict[member_name] = int(init_section)
                         member_category_dict[member_name] = 'z'
 
                         # Fcr
@@ -387,7 +401,7 @@ class Structure:
                         A = beam_sections[init_section]["A(cm2)"]
                         L = (z_next - z) / 10  # cm
                         member_Fcr_dict[member_name] = _Fcr(I, A, L)
-                        member_A_dict[member_name] = A * 1e+2  # mm2
+                        member_A_dict[member_name] = A * 1e+2  # mm^2
                         member_length_dict[member_name] = L / 100  # m
 
                         # Mnx, Mny
@@ -417,7 +431,7 @@ class Structure:
 
         self.member_column_index_list = member_column_index_list
         self.member_beam_index_list = member_beam_index_list
-        self.already_minimum_section_story_indexes = []
+        self.already_minimum_section_story_indexes = [] if self.story_level_sections is None else [i for i in range(len(self.story_level_sections)) if self.story_level_sections[i] == 0]
 
         self.story_beam_member = story_beam_member
         self.story_xdir_beam_member = story_xdir_beam_member
@@ -426,14 +440,21 @@ class Structure:
         self.story_outer_column_member = story_outer_column_member
         self.story_inner_column_member = story_inner_column_member
 
-        self.story_xdir_beam_section = [len(beam_sections) - 1 for _ in range(len(story_xdir_beam_member))]
-        self.story_zdir_beam_section = [len(beam_sections) - 1 for _ in range(len(story_zdir_beam_member))]
-        self.story_outer_column_section = [len(column_sections) - 1 for _ in range(len(story_outer_column_member))]
-        self.story_inner_column_section = [len(column_sections) - 1 for _ in range(len(story_inner_column_member))]
+        if self.story_level_sections is None:
+            self.story_xdir_beam_section = [len(beam_sections) - 1 for _ in range(len(self.story_xdir_beam_member))]
+            self.story_zdir_beam_section = [len(beam_sections) - 1 for _ in range(len(self.story_zdir_beam_member))]
+            self.story_outer_column_section = [len(column_sections) - 1 for _ in range(len(self.story_outer_column_member))]
+            self.story_inner_column_section = [len(column_sections) - 1 for _ in range(len(self.story_inner_column_member))]
+            self.story_level_sections = self.story_xdir_beam_section + self.story_zdir_beam_section + self.story_outer_column_section + self.story_inner_column_section
+        else:
+            xdir_beam, zdir_beam, outer_column, inner_column = np.array_split(self.story_level_sections, 4)
+            self.story_xdir_beam_section = xdir_beam.tolist()
+            self.story_zdir_beam_section = zdir_beam.tolist()
+            self.story_outer_column_section = outer_column.tolist()
+            self.story_inner_column_section = inner_column.tolist()
 
-        self.story_level_actions = story_xdir_beam_member + story_zdir_beam_member + story_outer_column_member + story_inner_column_member
-        self.story_level_sections = self.story_xdir_beam_section + self.story_zdir_beam_section + self.story_outer_column_section + self.story_inner_column_section
-        self.story_level_categories = ['xdir_beam' for _ in range(len(story_xdir_beam_member))] + ['zdir_beam' for _ in range(len(story_zdir_beam_member))] + ['outer_column' for _ in range(len(story_outer_column_member))] + ['inner_column' for _ in range(len(story_inner_column_member))]
+        self.story_level_actions = self.story_xdir_beam_member + self.story_zdir_beam_member + self.story_outer_column_member + self.story_inner_column_member
+        self.story_level_categories = ['xdir_beam' for _ in range(len(self.story_xdir_beam_member))] + ['zdir_beam' for _ in range(len(self.story_zdir_beam_member))] + ['outer_column' for _ in range(len(self.story_outer_column_member))] + ['inner_column' for _ in range(len(self.story_inner_column_member))]
         self.full_section_sum = sum(self.story_level_sections)
 
         # update member feature into node feature and the node neighbor Mp list, and embedding node
@@ -442,10 +463,10 @@ class Structure:
             section_index = member_section_dict[member_name]
             category = member_category_dict[member_name]
             if category == 'y':
-                member_Zz = column_sections[section_index]['Z_z(cm3)']
+                member_Zz = column_sections[section_index]['Z_z(cm3)'] * 1e+3  # mm3
                 member_Ag = column_sections[section_index]['A(cm2)'] * 1e+2    # mm2
             else:
-                member_Zz = beam_sections[section_index]['Z_z(cm3)']
+                member_Zz = beam_sections[section_index]['Z_z(cm3)'] * 1e+3    # mm3
                 member_Ag = beam_sections[section_index]['A(cm2)'] * 1e+2      # mm2
             
             node1_index, node2_index, face_number1, face_number2, _, _ = member_to_nodeIndex_dict[member_name]
@@ -470,8 +491,8 @@ class Structure:
         node_area_dict = dict()                   # m^2
         node_self_weight_dict = dict()            # kN
         node_dead_load_self_weight_dict = dict()  # kN
-        node_translational_mass_dict = dict()     # kN
-        node_inertia_dict = dict()                # kN / (mm/s2) * mm^2
+        node_translational_mass_dict = dict()     # kN / (mm/s^2)
+        node_inertia_dict = dict()                # kN / (mm/s^2) * mm^2
         story_weight_distribution_ratio_dict = dict()
 
         node_index = 0
@@ -482,7 +503,7 @@ class Structure:
                     # node name
                     node_name = f"N{node_index+1}"
                     # node area: m^2
-                    distributed_area = self._calculate_node_distributed_area(x, y, z)
+                    distributed_area = self._calculate_node_distributed_area(node_name)
                     node_area_dict[node_name] = distributed_area
                     # node mass: kN
                     node_self_weight = self._calculate_node_distributed_mass(node_name, distributed_area)
@@ -490,10 +511,10 @@ class Structure:
                     story_weight += node_self_weight
                     # self weight + dead load: kN
                     node_dead_load_self_weight_dict[node_name] = node_self_weight + distributed_area * DL
-                    # translational mass: kN
+                    # translational mass: kN / (mm/s^2)
                     node_translational_mass_dict[node_name] = self._calculate_translational_mass(node_self_weight)
-                    # node inertia: kN / (mm/s2) * mm^2
-                    node_inertia_dict[node_name] = self._calculate_moment_inertia(x, y, z)
+                    # node inertia: kN / (mm/s^2) * mm^2
+                    node_inertia_dict[node_name] = self._calculate_moment_inertia(node_name)
                     node_index += 1
 
                 story_weight_distribution_ratio_dict[f"{story}F"] = story_weight * y
@@ -552,14 +573,36 @@ class Structure:
         self.node_Ezp_ratio_dict = node_Ezp_ratio_dict
         self.node_Ey_ratio_dict = node_Ey_ratio_dict
 
+        self.first_mode_period, self.second_mode_period, self.third_mode_period = None, None, None
+        self.node_first_mode_shape, self.node_second_mode_shape, self.node_third_mode_shape = None, None, None
 
-    def _calculate_node_distributed_area(self, x, y, z) -> float:
+
+    def _calculate_node_distributed_area(self, node_name) -> float:
         # given node x, y, z, return the area distrubte to node
         # node distributed area depends on only neighboring slab, so doesn't need to update when reducing sections
+        x, y, z = self.node_coord_dict[node_name]
         if y == 0: return 0
-        width_x = self.x_grid[1]/2 if x == min(self.x_grid) or x == max(self.x_grid) else self.x_grid[1]
-        width_z = self.z_grid[1]/2 if z == min(self.z_grid) or z == max(self.z_grid) else self.z_grid[1]
+
+        x_grid_coord = self.x_grid.index(x)
+        if x_grid_coord == 0:
+            width_x = (self.x_grid[1] - self.x_grid[0]) / 2
+        elif x_grid_coord == len(self.x_grid) - 1:
+            width_x = (self.x_grid[-1] - self.x_grid[-2]) / 2
+        else:
+            width_x = (self.x_grid[x_grid_coord+1] - self.x_grid[x_grid_coord-1]) / 2
+        
+        z_grid_coord = self.z_grid.index(z)
+        if z_grid_coord == 0:
+            width_z = (self.z_grid[1] - self.z_grid[0]) / 2
+        elif z_grid_coord == len(self.z_grid) - 1:
+            width_z = (self.z_grid[-1] - self.z_grid[-2]) / 2
+        else:
+            width_z = (self.z_grid[z_grid_coord+1] - self.z_grid[z_grid_coord-1]) / 2
+
+        # width_x = self.x_grid[1]/2 if x == min(self.x_grid) or x == max(self.x_grid) else self.x_grid[1]
+        # width_z = self.z_grid[1]/2 if z == min(self.z_grid) or z == max(self.z_grid) else self.z_grid[1]
         area = width_x/1000 * width_z/1000  # m2
+
         return area
 
 
@@ -590,10 +633,11 @@ class Structure:
         return translational_mass
 
 
-    def _calculate_moment_inertia(self, x, y, z) -> Tuple[float]:
+    def _calculate_moment_inertia(self, node_name) -> Tuple[float]:
         # Inertia is mostly contributed by slab, so here only calculate slab's inertia. 
         # Since inertia is only contributed by slab, inertia values don't need updation during reducing sections
         # first find the surrounding slabs, define quarter_slab as 1/4 slab, 1/2 x_span_len * 1/2 z_span_len
+        x, y, z = self.node_coord_dict[node_name]
         quarter_slab_number = 0
         if y == 0:
             quarter_slab_number += 0
@@ -625,19 +669,19 @@ class Structure:
         # For simplicity, use the average span len instead of the variant individual span lengths
         x_span_len = sum(self.x_span_lens) / len(self.x_span_lens)
         z_span_len = sum(self.z_span_lens) / len(self.z_span_lens)
-        quarter_slab_mass = x_span_len/1000 * z_span_len/1000 * SLAB_THICKNESS * CONCRETE_DENSITY   # kg
+        slab_mass = x_span_len/1000 * z_span_len/1000 * SLAB_THICKNESS * CONCRETE_DENSITY   # kg
 
         # 1 kN = 1e+6 kg * 1 mm/s2 --> 1 kg = 1e-6 kN / (mm/s2)
         # E.g., mass = 300 kg, it will be represented as 3e-4 (kN / (mm/s2)) in PISA
-        quarter_slab_translational_mass = quarter_slab_mass / 1e+06  # kN / (mm/s2)
+        slab_translational_mass = slab_mass / 1e+06  # kN / (mm/s2)
             
-        quarter_slab_global_Ix = 1 / 12 * quarter_slab_translational_mass * ((SLAB_THICKNESS*1000) ** 2 + z_span_len ** 2) 
-        quarter_slab_global_Iy = 1 / 12 * quarter_slab_translational_mass * (x_span_len ** 2 + z_span_len ** 2)
-        quarter_slab_global_Iz = 1 / 12 * quarter_slab_translational_mass * ((SLAB_THICKNESS*1000) ** 2 + x_span_len ** 2)
+        slab_global_Ix = 1 / 12 * slab_translational_mass * ((SLAB_THICKNESS*1000) ** 2 + z_span_len ** 2) 
+        slab_global_Iy = 1 / 12 * slab_translational_mass * (x_span_len ** 2 + z_span_len ** 2)
+        slab_global_Iz = 1 / 12 * slab_translational_mass * ((SLAB_THICKNESS*1000) ** 2 + x_span_len ** 2)
         
-        Rx = (quarter_slab_number / 4) * quarter_slab_global_Ix
-        Ry = (quarter_slab_number / 4) * quarter_slab_global_Iy
-        Rz = (quarter_slab_number / 4) * quarter_slab_global_Iz
+        Rx = (quarter_slab_number / 4) * slab_global_Ix
+        Ry = (quarter_slab_number / 4) * slab_global_Iy
+        Rz = (quarter_slab_number / 4) * slab_global_Iz
 
         return Rx, Ry, Rz  # unit: kN / (mm/s2) * mm2
     
@@ -673,17 +717,18 @@ class Structure:
         return beta_x, beta_z
 
 
-    def _init_graph(self):
-        # new node feature (if fix, if top, if side, beta_x, beta_z)
+    def init_graph_GraphRL(self, static_response_features: dict[str, torch.Tensor]=None, dynamic_response_features: dict[str, torch.Tensor]=None) -> None:
+        # new node feature: if fix, if top, if side, beta_x, beta_z
         node_feature_num = 8 if self.add_structure_geometry else 5
         node_feature = torch.zeros(self.node_number, node_feature_num)
 
-        beta_x, beta_z = self._strongColumn_weakBeam_beta()
+        if self.add_response_features:
+            beta_x = torch.tanh(1.0 / static_response_features["min_SCWB_ratio_x"]) 
+            beta_z = torch.tanh(1.0 / static_response_features["min_SCWB_ratio_z"])
+        else: 
+            beta_x, beta_z = self._strongColumn_weakBeam_beta()
         node_feature[:, 3] = beta_x
         node_feature[:, 4] = beta_z
-
-        if self.add_structure_geometry:
-            node_feature[:, 5] = len(self.y_grid)
 
         node_index = 0
         for y in self.y_grid:
@@ -702,15 +747,17 @@ class Structure:
 
                     if self.add_structure_geometry:
                         x_grid_coord, y_grid_coord, z_grid_coord = self.node_grid_coord_dict[node_name]
-                        node_feature[node_index, 6] = y_grid_coord
-                        node_feature[node_index, 7] = (y_grid_coord + 1) / len(self.y_grid)  # current height ratio
+                        node_feature[node_index, 5] = self.story_num  # story number
+                        node_feature[node_index, 6] = y_grid_coord  # current story
+                        node_feature[node_index, 7] = y_grid_coord / self.story_num  # current height ratio
 
                     node_index += 1
 
                             
         # edge feature:     is_col, is_beam, L, (A, Iz, Iy, Zz), (A', Iz', Iy', Zz')
         # new edge feature: is_col, is_beam, L, (A, Iz, Iy, Zz), (A', Iz', Iy', Zz'), tanh(stress_ratio), tanh(drift_ratio)
-        edge_feature = torch.zeros(self.member_number * 2, 11)
+        edge_feature_num = 13 if self.add_response_features else 11
+        edge_feature = torch.zeros(self.member_number * 2, edge_feature_num)
 
         for original_member_index in range(self.member_number):
             member_name = f"E{original_member_index+1}"
@@ -740,6 +787,10 @@ class Structure:
             edge_feature[member_index, 8] = Iz
             edge_feature[member_index, 9] = Iy
             edge_feature[member_index, 10] = Zz
+
+            if self.add_response_features:
+                edge_feature[member_index, 11] = torch.tanh(static_response_features["max_stress_ratio"][original_member_index])
+                edge_feature[member_index, 12] = torch.tanh(static_response_features["max_drift_ratio"][original_member_index])
 
             # add another direction of edge feature back
             edge_feature[member_index+1, :] = edge_feature[member_index, :]
@@ -776,19 +827,18 @@ class Structure:
             "story_inner_column_member": story_inner_column_member,
             "story_batch": story_batch.to(torch.int64)
         }
-        self.aux = aux
+        self.aux = aux  # don't need to be updated during design process
 
         self.graph = Data(x=node_feature, y=None, edge_index=edge_index, edge_attr=edge_feature)
                         #   story_beam_member=tuple(story_beam_member), 
                         #   story_outer_column_member=tuple(story_outer_column_member), 
                         #   story_inner_column_member=tuple(story_inner_column_member),
                         #   story_batch=story_batch.to(torch.int64))
-        # print("graph:", self.graph)
-        self._normalize()
+        self._normalize_graph_GraphRL()
+        print("graph for Graph-RL:", self.graph)
 
         
-    def _init_nda_graph(self):
-
+    def init_graph_GraphLSTM(self):
         # data.x: XYZ grid nums(3), node_grid(3), if_bottom(1), if_top(1), if_side(1), beta(2), period(3), mode_shape(3*3), section_info_per_face(2*6)
         node_feature_num = 35
         node_feature = torch.zeros(self.node_number, node_feature_num)
@@ -803,14 +853,13 @@ class Structure:
         node_feature[:, 9] = beta_x
         node_feature[:, 10] = beta_z
 
-        # period, mode shape
-        first_mode_period, second_mode_period, third_mode_period, node_first_mode_shape, node_second_mode_shape, node_third_mode_shape = pisa.dynamic_analysis_period(self, self.analysis_dir)
-        node_feature[:, 11] = first_mode_period
-        node_feature[:, 12] = second_mode_period
-        node_feature[:, 13] = third_mode_period
-        node_feature[:, 14:17] = torch.tensor(node_first_mode_shape)   # (Ux, Uz, Ry)
-        node_feature[:, 17:20] = torch.tensor(node_second_mode_shape)  # (Ux, Uz, Ry)
-        node_feature[:, 20:23] = torch.tensor(node_third_mode_shape)   # (Ux, Uz, Ry)
+        # the modal analysis is conducted in the check.get_response()
+        node_feature[:, 11] = self.first_mode_period
+        node_feature[:, 12] = self.second_mode_period
+        node_feature[:, 13] = self.third_mode_period
+        node_feature[:, 14:17] = torch.tensor(self.node_first_mode_shape)   # (Ux, Uz, Ry)
+        node_feature[:, 17:20] = torch.tensor(self.node_second_mode_shape)  # (Ux, Uz, Ry)
+        node_feature[:, 20:23] = torch.tensor(self.node_third_mode_shape)   # (Ux, Uz, Ry)
 
         # geometry
         node_index = 0
@@ -892,14 +941,15 @@ class Structure:
         edge_index = torch.tensor([edge_i, edge_j], dtype=torch.long)
 
         self.nda_graph = Data(x=node_feature, y=None, edge_index=edge_index, edge_attr=edge_feature)
-        self._nda_normalize()
+        self._normalize_graph_GraphLSTM()
+        print("graph for Graph-LSTM", self.nda_graph)
 
 
-    def _normalize(self):
+    def _normalize_graph_GraphRL(self):
         if self.add_structure_geometry:
-            self.graph.x[:, 5] /= GRAPH_NORM_DICT["grid_num"]
-            self.graph.x[:, 6] /= GRAPH_NORM_DICT["coord"]
-        self.graph.edge_attr[:, 2] /= GRAPH_NORM_DICT["L"]
+            self.graph.x[:, 5] /= GRAPH_NORM_DICT["story_num"]  # 7
+            self.graph.x[:, 6] /= GRAPH_NORM_DICT["coord"]  # 7
+        self.graph.edge_attr[:, 2] /= GRAPH_NORM_DICT["L"]  # 8
         self.graph.edge_attr[:, 3] /= GRAPH_NORM_DICT["A"]
         self.graph.edge_attr[:, 4] /= GRAPH_NORM_DICT["Iz"]
         self.graph.edge_attr[:, 5] /= GRAPH_NORM_DICT["Iy"]
@@ -910,17 +960,17 @@ class Structure:
         self.graph.edge_attr[:, 10] /= GRAPH_NORM_DICT["Zz"]
 
     
-    def _nda_normalize(self):
-        self.nda_graph.x[:, :3] /= self.nda_norm_dict["grid_num"]
-        self.nda_graph.x[:, 3:6] /= self.nda_norm_dict["coord"]
-        self.nda_graph.x[:, 11:14] /= self.nda_norm_dict["period"]
-        self.nda_graph.x[:, 14:23] /= self.nda_norm_dict["modal_shape"]
+    def _normalize_graph_GraphLSTM(self):
+        self.nda_graph.x[:, 0:3] = (self.nda_graph.x[:, 0:3] - self.nda_norm_dict['grid_num'][0]) / (self.nda_norm_dict['grid_num'][1] - self.nda_norm_dict['grid_num'][0])
+        self.nda_graph.x[:, 3:6] = (self.nda_graph.x[:, 3:6] - self.nda_norm_dict['coord'][0]) / (self.nda_norm_dict['coord'][1] - self.nda_norm_dict['coord'][0])
+        self.nda_graph.x[:, 11:14] = (self.nda_graph.x[:, 11:14] - self.nda_norm_dict['period'][0]) / (self.nda_norm_dict['period'][1] - self.nda_norm_dict['period'][0])
+        self.nda_graph.x[:, 14:23] = (self.nda_graph.x[:, 14:23] - self.nda_norm_dict['modal_shape'][0]) / (self.nda_norm_dict['modal_shape'][1] - self.nda_norm_dict['modal_shape'][0])
 
-        self.nda_graph.x[:, list(range(23, 35, 2))] /= self.nda_norm_dict["elem_length"]
-        self.nda_graph.x[:, list(range(24, 35, 2))] /= self.nda_norm_dict["moment"]
+        self.nda_graph.x[:, list(range(23, 35, 2))] = (self.nda_graph.x[:, list(range(23, 35, 2))] - self.nda_norm_dict['elem_length'][0]) / (self.nda_norm_dict['elem_length'][1] - self.nda_norm_dict['elem_length'][0])
+        self.nda_graph.x[:, list(range(24, 35, 2))] = (self.nda_graph.x[:, list(range(24, 35, 2))] - self.nda_norm_dict['momentZ'][0]) / (self.nda_norm_dict['momentZ'][1] - self.nda_norm_dict['momentZ'][0])
         
-        self.nda_graph.edge_attr[:, 0] /= self.nda_norm_dict["elem_length"]
-        self.nda_graph.edge_attr[:, 3] /= self.nda_norm_dict["moment"]
+        self.nda_graph.edge_attr[:, 0] = (self.nda_graph.edge_attr[:, 0] - self.nda_norm_dict['elem_length'][0]) / (self.nda_norm_dict['elem_length'][1] - self.nda_norm_dict['elem_length'][0])
+        self.nda_graph.edge_attr[:, 3] = (self.nda_graph.edge_attr[:, 3] - self.nda_norm_dict['momentZ'][0]) / (self.nda_norm_dict['momentZ'][1] - self.nda_norm_dict['momentZ'][0])
 
 
 
@@ -929,8 +979,9 @@ class Structure:
         """Don't choose the member that change section will cause upper members are thicker than lower members"""
         dont_select_story_member_indexes = []
         
-        # start_story_beam_index = 0
-        # start_story_outer_column_index = start_story_beam_index + len(self.story_beam_section)
+        # start_story_xdir_beam_index = 0
+        # start_story_zdir_beam_index = start_story_xdir_beam_index + len(self.start_story_xdir_beam_index)
+        # start_story_outer_column_index = start_story_zdir_beam_index + len(self.start_story_zdir_beam_index)
         # start_story_inner_column_index = start_story_outer_column_index + len(self.story_outer_column_section)
 
         start_story_member_index = 0
@@ -949,7 +1000,7 @@ class Structure:
 
 
     def update_action(self, update_story_index: int) -> float:
-
+        t_start = time.time()
         if self.story_level_sections[update_story_index] == 0:
             print("update_story_index:", update_story_index)
             print("current story sections:", self.story_level_sections)
@@ -993,10 +1044,10 @@ class Structure:
         
         # update story member section from story_level_sections
         xdir_beam, zdir_beam, outer_column, inner_column = np.array_split(self.story_level_sections, 4)
-        self.story_xdir_beam_section = list(xdir_beam)
-        self.story_zdir_beam_section = list(zdir_beam)
-        self.story_outer_column_section = list(outer_column)
-        self.story_inner_column_section = list(inner_column)
+        self.story_xdir_beam_section = xdir_beam.tolist()
+        self.story_zdir_beam_section = zdir_beam.tolist()
+        self.story_outer_column_section = outer_column.tolist()
+        self.story_inner_column_section = inner_column.tolist()
         #print(f"Before & After auto-correct are same: {update_member_names == correct_needed_members}")
         
         # update structure and graph's variables
@@ -1033,8 +1084,8 @@ class Structure:
             
             # node level update
             node1_index, node2_index, face_number1, face_number2, node_feature_face_index1, node_feature_face_index2 = self.member_to_nodeIndex_dict[member_name]
-            self.node_neighbor_Zz_matrix[node1_index, face_number1] = Zz
-            self.node_neighbor_Zz_matrix[node2_index, face_number2] = Zz
+            self.node_neighbor_Zz_matrix[node1_index, face_number1] = Zz * 1e+3  # mm3
+            self.node_neighbor_Zz_matrix[node2_index, face_number2] = Zz * 1e+3  # mm3
             self.node_neighbor_Ag_matrix[node1_index, face_number1] = A * 1e+2  # mm2
             self.node_neighbor_Ag_matrix[node2_index, face_number2] = A * 1e+2  # mm2
             
@@ -1052,40 +1103,109 @@ class Structure:
             
             # graph update
             # edge feature
-            self.graph.edge_attr[member_index, 3:7] = self.graph.edge_attr[member_index, 7:11]
-            self.graph.edge_attr[member_index, 7] = A / GRAPH_NORM_DICT["A"]
-            self.graph.edge_attr[member_index, 8] = Iz / GRAPH_NORM_DICT["Iz"]
-            self.graph.edge_attr[member_index, 9] = Iy / GRAPH_NORM_DICT["Iy"]
-            self.graph.edge_attr[member_index, 10] = Zz / GRAPH_NORM_DICT["Zz"]
-            self.graph.edge_attr[member_index+1, :] = self.graph.edge_attr[member_index, :]
+            # self.graph.edge_attr[member_index, 3:7] = self.graph.edge_attr[member_index, 7:11]
+            # self.graph.edge_attr[member_index, 7] = A / GRAPH_NORM_DICT["A"]
+            # self.graph.edge_attr[member_index, 8] = Iz / GRAPH_NORM_DICT["Iz"]
+            # self.graph.edge_attr[member_index, 9] = Iy / GRAPH_NORM_DICT["Iy"]
+            # self.graph.edge_attr[member_index, 10] = Zz / GRAPH_NORM_DICT["Zz"]
+            # self.graph.edge_attr[member_index+1, :] = self.graph.edge_attr[member_index, :]
 
             # nda_graph update
-            if self.do_nonlinear_dynamic_analysis:
+            # if self.do_nonlinear_dynamic_analysis:
                 # node's member feature
-                self.nda_graph.x[node1_index, node_feature_face_index1+1] = My / self.nda_norm_dict["moment"]
-                self.nda_graph.x[node2_index, node_feature_face_index2+1] = My / self.nda_norm_dict["moment"]
+                # self.nda_graph.x[node1_index, node_feature_face_index1+1] = My / self.nda_norm_dict["moment"]
+                # self.nda_graph.x[node2_index, node_feature_face_index2+1] = My / self.nda_norm_dict["moment"]
                 # edge feature
-                self.nda_graph.edge_attr[member_index, 3] = My / self.nda_norm_dict["moment"]
-                self.nda_graph.edge_attr[member_index+1, :] = self.nda_graph.edge_attr[member_index, :]
+                # self.nda_graph.edge_attr[member_index, 3] = My / self.nda_norm_dict["moment"]
+                # self.nda_graph.edge_attr[member_index+1, :] = self.nda_graph.edge_attr[member_index, :]
             
 
         # graph beta, modal period, shape update
-        beta_x, beta_z = self._strongColumn_weakBeam_beta()
+        # beta_x, beta_z = self._strongColumn_weakBeam_beta()
+        # self.graph.x[:, 3] = beta_x
+        # self.graph.x[:, 4] = beta_z
+
+        # also update nda_graph
+        # if self.do_nonlinear_dynamic_analysis:
+        #     self.nda_graph.x[:, 9] = beta_x
+        #     self.nda_graph.x[:, 10] = beta_z
+        #     first_mode_period, second_mode_period, third_mode_period, node_first_mode_shape, node_second_mode_shape, node_third_mode_shape = pisa.dynamic_analysis_period(self, self.analysis_dir)
+        #     self.nda_graph.x[:, 11] = first_mode_period / self.nda_norm_dict["period"]
+        #     self.nda_graph.x[:, 12] = second_mode_period / self.nda_norm_dict["period"]
+        #     self.nda_graph.x[:, 13] = third_mode_period / self.nda_norm_dict["period"]
+        #     self.nda_graph.x[:, 14:17] = torch.tensor(node_first_mode_shape) / self.nda_norm_dict["modal_shape"]
+        #     self.nda_graph.x[:, 17:20] = torch.tensor(node_second_mode_shape) / self.nda_norm_dict["modal_shape"]
+        #     self.nda_graph.x[:, 20:23] = torch.tensor(node_third_mode_shape) / self.nda_norm_dict["modal_shape"]
+        t_end = time.time()
+        # print(f"\tused time for structue.update_action(): {t_end - t_start:.3f} sec")
+        return volume_saved
+        
+
+    def update_graph_GraphRL(self, static_response_features: dict[str, torch.Tensor]=None, dynamic_response_features: dict[str, torch.Tensor]=None) -> None:
+        t_start = time.time()
+        # update node features
+        if self.add_response_features: 
+            beta_x = torch.tanh(1.0 / static_response_features["min_SCWB_ratio_x"])
+            beta_z = torch.tanh(1.0 / static_response_features["min_SCWB_ratio_z"])
+        else: 
+            beta_x, beta_z = self._strongColumn_weakBeam_beta()
         self.graph.x[:, 3] = beta_x
         self.graph.x[:, 4] = beta_z
 
-        # also update nda_graph
-        if self.do_nonlinear_dynamic_analysis:
-            self.nda_graph.x[:, 9] = beta_x
-            self.nda_graph.x[:, 10] = beta_z
-            first_mode_period, second_mode_period, third_mode_period, node_first_mode_shape, node_second_mode_shape, node_third_mode_shape = pisa.dynamic_analysis_period(self, self.analysis_dir)
-            self.nda_graph.x[:, 11] = first_mode_period / self.nda_norm_dict["period"]
-            self.nda_graph.x[:, 12] = second_mode_period / self.nda_norm_dict["period"]
-            self.nda_graph.x[:, 13] = third_mode_period / self.nda_norm_dict["period"]
-            self.nda_graph.x[:, 14:17] = torch.tensor(node_first_mode_shape) / self.nda_norm_dict["modal_shape"]
-            self.nda_graph.x[:, 17:20] = torch.tensor(node_second_mode_shape) / self.nda_norm_dict["modal_shape"]
-            self.nda_graph.x[:, 20:23] = torch.tensor(node_third_mode_shape) / self.nda_norm_dict["modal_shape"]
-        
-        return volume_saved
-        
+        # update edge features
+        for member_index in range(self.member_number):
+            self.graph.edge_attr[member_index*2, 3:7] = self.graph.edge_attr[member_index*2, 7:11]
+
+            member_name = f"E{member_index+1}"
+            section_index = self.member_section_dict[member_name]  # structure is updated, so section_index is updated
+            section_info = column_sections[section_index] if self.member_category_dict[member_name] == 'y' else beam_sections[section_index]
+            A = section_info["A(cm2)"]
+            Iz = section_info["I_z(cm4)"]
+            Iy = section_info["I_y(cm4)"]
+            Zz = section_info["Z_z(cm3)"]
+            self.graph.edge_attr[member_index*2, 7] = A / GRAPH_NORM_DICT["A"]
+            self.graph.edge_attr[member_index*2, 8] = Iz / GRAPH_NORM_DICT["Iz"]
+            self.graph.edge_attr[member_index*2, 9] = Iy / GRAPH_NORM_DICT["Iy"]
+            self.graph.edge_attr[member_index*2, 10] = Zz / GRAPH_NORM_DICT["Zz"]
+            if self.add_response_features:
+                self.graph.edge_attr[member_index*2, 11] = torch.tanh(static_response_features["max_stress_ratio"][member_index])
+                self.graph.edge_attr[member_index*2, 12] = torch.tanh(static_response_features["max_drift_ratio"][member_index])
+
+            self.graph.edge_attr[member_index*2+1, :] = self.graph.edge_attr[member_index*2, :]
+        t_end = time.time()
+        # print(f"\tused time for structue.update_graph_GraphRL(): {t_end - t_start:.3f} sec")
+
+
+    def update_graph_GraphLSTM(self) -> None:
+        t_start = time.time()
+        # update node features
+        beta_x, beta_z = self._strongColumn_weakBeam_beta()
+        self.nda_graph.x[:, 9] = beta_x
+        self.nda_graph.x[:, 10] = beta_z
+
+        # the modal analysis is conducted in the check.get_response()
+        self.nda_graph.x[:, 11] = (self.first_mode_period - self.nda_norm_dict["period"][0]) / (self.nda_norm_dict["period"][1] - self.nda_norm_dict["period"][0])
+        self.nda_graph.x[:, 12] = (self.second_mode_period - self.nda_norm_dict["period"][0]) / (self.nda_norm_dict["period"][1] - self.nda_norm_dict["period"][0])
+        self.nda_graph.x[:, 13] = (self.third_mode_period - self.nda_norm_dict["period"][0]) / (self.nda_norm_dict["period"][1] - self.nda_norm_dict["period"][0])
+        self.nda_graph.x[:, 14:17] = (torch.tensor(self.node_first_mode_shape) - self.nda_norm_dict["modal_shape"][0]) / (self.nda_norm_dict["modal_shape"][1] - self.nda_norm_dict["modal_shape"][0])
+        self.nda_graph.x[:, 17:20] = (torch.tensor(self.node_second_mode_shape) - self.nda_norm_dict["modal_shape"][0]) / (self.nda_norm_dict["modal_shape"][1] - self.nda_norm_dict["modal_shape"][0])
+        self.nda_graph.x[:, 20:23] = (torch.tensor(self.node_third_mode_shape) - self.nda_norm_dict["modal_shape"][0]) / (self.nda_norm_dict["modal_shape"][1] - self.nda_norm_dict["modal_shape"][0])
+
+        # update edge features
+        for member_index in range(self.member_number):
+            member_name = f"E{member_index+1}"
+            node1_index, node2_index, face_number1, face_number2, node_feature_face_index1, node_feature_face_index2 = self.member_to_nodeIndex_dict[member_name]
+            
+            section_index = self.member_section_dict[member_name]  # structure is updated, so section_index is updated
+            section_info = column_sections[section_index] if self.member_category_dict[member_name] == 'y' else beam_sections[section_index]
+            My = section_info["My_z(kN-mm)"]
+
+            # node's member feature
+            self.nda_graph.x[node1_index, node_feature_face_index1+1] = (My - self.nda_norm_dict["momentZ"][0]) / (self.nda_norm_dict["momentZ"][1] - self.nda_norm_dict["momentZ"][0])
+            self.nda_graph.x[node2_index, node_feature_face_index2+1] = (My - self.nda_norm_dict["momentZ"][0]) / (self.nda_norm_dict["momentZ"][1] - self.nda_norm_dict["momentZ"][0])
+            # edge feature
+            self.nda_graph.edge_attr[member_index*2, 3] = (My - self.nda_norm_dict["momentZ"][0]) / (self.nda_norm_dict["momentZ"][1] - self.nda_norm_dict["momentZ"][0])
+            self.nda_graph.edge_attr[member_index*2+1, :] = self.nda_graph.edge_attr[member_index*2, :]
+        t_end = time.time()
+        # print(f"\tused time for structue.update_graph_GraphLSTM(): {t_end - t_start:.3f} sec")
 
