@@ -3,6 +3,7 @@ import random
 import torch
 import numpy as np
 from copy import deepcopy
+from typing import Sequence
 
 
 class MCTSNode:
@@ -236,22 +237,20 @@ class MCTSAgent:
 ### MuZero MCTS Implementation ###
 
 class MuZeroNode:
-    """ MuZero MCTS 的節點類別 """
-    def __init__(self, prior: float):
+    def __init__(self, prior: float, hidden_state=None, structure=None):
         self.visit_count = 0
+        self.value_sum = 0.0
         self.prior = prior
-        self.value_sum = 0
-        self.children = {}
-        self.hidden_state = None
-        self.reward = 0
-    
+        self.children: Dict[int, MuZeroNode] = {}
+        self.hidden_state = hidden_state   # 從 network.represent 或 dynamics 回傳
+        self.reward = 0.0
+        self.structure = structure         # 真實 env state
+
     def expanded(self) -> bool:
         return len(self.children) > 0
-    
+
     def value(self) -> float:
-        if self.visit_count == 0:
-            return 0
-        return self.value_sum / self.visit_count
+        return 0.0 if self.visit_count == 0 else self.value_sum / self.visit_count
 
 
 def muzero_ucb_score(parent: MuZeroNode, child: MuZeroNode, 
@@ -267,83 +266,179 @@ def muzero_ucb_score(parent: MuZeroNode, child: MuZeroNode,
     return prior_score + value_score
 
 
-def run_muzero_mcts(root_hidden_state: torch.Tensor, network, 
-                    num_simulations: int, num_actions: int, discount: float = 0.99):
-    """
-    執行 MuZero MCTS 搜尋
-    支援動態動作空間
+# def run_muzero_mcts(root_hidden_state: torch.Tensor, network, 
+#                     num_simulations: int, legal_actions: Sequence[int], discount: float = 0.99):
+#     """
+#     執行 MuZero MCTS 搜尋
+#     支援動態動作空間
     
-    Args:
-        root_hidden_state: 根節點的隱藏狀態
-        network: MuZero 神經網路
-        num_simulations: 模擬次數
-        num_actions: 當前環境的動作數量
-        discount: 折扣因子
+#     Args:
+#         root_hidden_state: 根節點的隱藏狀態
+#         network: MuZero 神經網路
+#         num_simulations: 模擬次數
+#         legal_actions: 當前環境的合法動作
+#         discount: 折扣因子
     
-    Returns:
-        visit_counts: 根節點各子節點的訪問次數
-    """
-    # 1. 建立根節點
-    root = MuZeroNode(0)
+#     Returns:
+#         visit_counts: 根節點各子節點的訪問次數
+#     """
+#     # 1. 建立根節點
+#     root = MuZeroNode(0)
     
-    # 使用 network 的 predict 方法獲取根節點的策略和價值
-    with torch.no_grad():
-        policy_logits, value = network.predict(root_hidden_state, num_actions)
-        policy_probs = torch.softmax(policy_logits, dim=-1).squeeze(0)
+#     # 使用 network 的 predict 方法獲取根節點的策略和價值
+#     with torch.no_grad():
+#         full_policy_logits, value = network.predict(root_hidden_state, None)
+#         full_policy_probs = torch.softmax(full_policy_logits, dim=-1).squeeze(0)
     
-    # 2. 擴展根節點
-    for action in range(num_actions):
-        root.children[action] = MuZeroNode(prior=policy_probs[action].item())
-    root.hidden_state = root_hidden_state
+#     priors = [ full_policy_probs[a].item() for a in legal_actions ]
+#     # 2. 擴展根節點
+#     for i, p in enumerate(priors):
+#         root.children[i] = MuZeroNode(prior=p)
+#     root.hidden_state = root_hidden_state
     
-    # 3. 進行模擬
-    for simulation in range(num_simulations):
-        node = root
-        search_path = [node]
+#     # 3. 進行模擬
+#     for simulation in range(num_simulations):
+#         node = root
+#         search_path = [node]
         
-        # a. Selection - 沿著樹往下走，選擇 UCB 分數最高的節點
-        while node.expanded():
-            action, node = max(node.children.items(), 
-                             key=lambda item: muzero_ucb_score(node, item[1]))
-            search_path.append(node)
+#         # a. Selection - 沿著樹往下走，選擇 UCB 分數最高的節點
+#         while node.expanded():
+#             action, node = max(node.children.items(), 
+#                              key=lambda item: muzero_ucb_score(node, item[1]))
+#             search_path.append(node)
         
-        # 獲取選擇的動作
-        parent = search_path[-2]
-        action_taken = None
-        for action, child in parent.children.items():
-            if child is node:
-                action_taken = action
-                break
+#         # 獲取選擇的動作
+#         parent = search_path[-2]
+#         action_taken = None
+#         for action, child in parent.children.items():
+#             if child is node:
+#                 action_taken = action
+#                 break
         
-        # b. Expansion & Simulation - 使用神經網路進行「想像」
-        with torch.no_grad():
-            # 用 dynamics 網路得到下一步的 reward 和 hidden_state
-            action_tensor = torch.tensor([[action_taken]], dtype=torch.long)
-            reward, next_hidden_state = network.dynamics(parent.hidden_state, action_tensor, num_actions)
+#         # b. Expansion & Simulation - 使用神經網路進行「想像」
+#         with torch.no_grad():
+#             # 用 dynamics 網路得到下一步的 reward 和 hidden_state
+#             action_tensor = torch.tensor([[action_taken]], dtype=torch.long)
+#             reward, next_hidden_state = network.dynamics(parent.hidden_state, action_tensor, num_actions)
             
-            # 用 prediction 網路得到下一步的 policy 和 value
-            policy_logits, value = network.predict(next_hidden_state, num_actions)
-            policy_probs = torch.softmax(policy_logits, dim=-1).squeeze(0)
+#             # 用 prediction 網路得到下一步的 policy 和 value
+#             policy_logits, value = network.predict(next_hidden_state, None)
+#             policy_probs = torch.softmax(policy_logits, dim=-1).squeeze(0)
         
-        # 擴展新節點
-        for action in range(num_actions):
-            node.children[action] = MuZeroNode(prior=policy_probs[action].item())
-        node.hidden_state = next_hidden_state
+#         # 擴展新節點
+#         for action in range(num_actions):
+#             node.children[action] = MuZeroNode(prior=policy_probs[action].item())
+#         node.hidden_state = next_hidden_state
+#         node.reward = reward.item()
+        
+#         # c. Backpropagation - 更新路徑上所有節點的統計值
+#         current_value = value.item()
+#         for node_in_path in reversed(search_path):
+#             node_in_path.value_sum += current_value
+#             node_in_path.visit_count += 1
+#             # 應用折扣因子和節點獎勵
+#             current_value = node_in_path.reward + discount * current_value
+    
+#     # 回傳根節點的訪問次數分佈，作為訓練策略的目標
+#     # 確保返回的 visit_counts 長度等於 num_actions
+#     visit_counts = torch.zeros(len(legal_actions))
+#     for i, child in root.children.items():
+#         visit_counts[i] = child.visit_count
+#     return visit_counts  
+
+
+def run_muzero_mcts(
+    root_hidden_state: torch.Tensor,
+    network,
+    env,
+    root_structure,
+    num_simulations: int,
+    discount: float = 0.99
+) -> torch.Tensor:
+    """
+    MCTS on a dynamic action space, using the real env to get legal_actions at each node.
+    Args:
+      env: the real environment, so we can call env.get_legal_actions(structure) and env.step(...)
+      root_structure: the environment state at the root
+    Returns:
+      visit_counts: Tensor shape [len(legal_actions_at_root)]
+    """
+
+    # --- 1) 建立根節點，存初始 hidden & structure ---
+    root = MuZeroNode(
+        prior=0.0,
+        hidden_state=root_hidden_state,
+        structure=root_structure
+    )
+
+    # --- 2) 根節點 priors & children ---
+    legal0 = env.get_legal_actions(root.structure)
+    with torch.no_grad():
+        full_logits, _ = network.predict(root.hidden_state, None)
+        full_probs = torch.softmax(full_logits.squeeze(0), dim=-1)
+    for idx, a in enumerate(legal0):
+        root.children[idx] = MuZeroNode(
+            prior=full_probs[a].item(),
+            hidden_state=None,
+            structure=None
+        )
+
+    # MCTS 模擬
+    for _ in range(num_simulations):
+        node = root
+        path = [node]
+
+        # a) Selection: 沿著展開過的節點往下
+        while node.expanded():
+            best_idx, next_node = max(
+                node.children.items(),
+                key=lambda it: muzero_ucb_score(node, it[1])
+            )
+            node = next_node
+            path.append(node)
+
+        # b) Expansion: 在葉節點做一次「想像」
+        parent = path[-2]
+        # 找到 action_idx → 真實 action
+        action_idx = next(i for i,ch in parent.children.items() if ch is node)
+        action = env.get_legal_actions(parent.structure)[action_idx]
+
+        # -- 用真實 env 推結構狀態 --
+        new_structure, _, _, _, _ = env.step(parent.structure, action)
+
+        # -- 用 network.dynamics 推 hidden state & reward --
+        with torch.no_grad():
+            a_tensor = torch.tensor([[action]], device=root_hidden_state.device)
+            reward, next_hidden = network.dynamics(parent.hidden_state, a_tensor, None)
+            logits, value = network.predict(next_hidden, None)
+            probs = torch.softmax(logits.squeeze(0), dim=-1)
+
+        # 把得到的狀態存到 node
+        node.hidden_state = next_hidden
         node.reward = reward.item()
-        
-        # c. Backpropagation - 更新路徑上所有節點的統計值
-        current_value = value.item()
-        for node_in_path in reversed(search_path):
-            node_in_path.value_sum += current_value
-            node_in_path.visit_count += 1
-            # 應用折扣因子和節點獎勵
-            current_value = node_in_path.reward + discount * current_value
-    
-    # 回傳根節點的訪問次數分佈，作為訓練策略的目標
-    # 確保返回的 visit_counts 長度等於 num_actions
-    visit_counts = torch.zeros(num_actions, dtype=torch.float32)
-    for action, child in root.children.items():
-        if action < num_actions:  # 確保動作索引在有效範圍內
-            visit_counts[action] = child.visit_count
-    
-    return visit_counts      
+        node.structure = new_structure
+
+        # b2) 在新節點上擴展它的 children
+        legal = env.get_legal_actions(new_structure)
+        node.children.clear()
+        for idx, a in enumerate(legal):
+            node.children[idx] = MuZeroNode(
+                prior=probs[a].item(),
+                hidden_state=None,
+                structure=None
+            )
+
+        # c) Backpropagation
+        bootstrap = value.item()
+        for n in reversed(path):
+            n.value_sum += bootstrap
+            n.visit_count += 1
+            bootstrap = n.reward + discount * bootstrap
+
+    # 最後收根節點 visit_counts
+    # legal_final = env.get_legal_actions(root.structure)
+    visit_counts = torch.zeros(len(legal0), device=root_hidden_state.device)
+    for idx, child in root.children.items():
+        visit_counts[idx] = child.visit_count
+
+    return visit_counts

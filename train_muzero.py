@@ -11,6 +11,7 @@ import time
 from pathlib import Path
 from typing import Dict, List, Tuple
 from datetime import datetime
+from copy import deepcopy
 
 import numpy as np
 import torch
@@ -43,11 +44,11 @@ def parse_muzero_args() -> argparse.Namespace:
     
     # 模型參數
     parser.add_argument("--model_type", type=str, default="Taiwan", help="Taiwan, Japan")
-    parser.add_argument("--hidden_dim", type=int, default=100)
+    parser.add_argument("--hidden_dim", type=int, default=10)
     parser.add_argument("--num_layers", type=int, default=3)
     
     # MuZero 參數
-    parser.add_argument("--muzero_num_simulations", type=int, default=50)
+    parser.add_argument("--muzero_num_simulations", type=int, default=100)
     parser.add_argument("--muzero_unroll_steps", type=int, default=3)
     parser.add_argument("--muzero_temperature", type=float, default=1.0)
     parser.add_argument("--muzero_temperature_decay", type=float, default=0.97)
@@ -58,7 +59,7 @@ def parse_muzero_args() -> argparse.Namespace:
     parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--buffer_capacity", type=int, default=1000)
-    parser.add_argument("--training_frequency", type=int, default=10)
+    parser.add_argument("--training_frequency", type=int, default=20)
     parser.add_argument("--evaluation_frequency", type=int, default=20)
     parser.add_argument("--inference_num", type=int, default=1)
     parser.add_argument("--save_frequency", type=int, default=20)
@@ -201,7 +202,8 @@ def muzero_train_step(network: model.MuZeroNetwork, optimizer: torch.optim.Optim
             
             # 計算當前遊戲的動作數量
             current_num_actions = len(game.policies[start_index])
-            
+            logger.info(f"current_num_actions: {current_num_actions}")
+
             policy_logits, value_pred = network.predict(hidden_state, current_num_actions)
             
             # 計算真實的 N-step return
@@ -291,7 +293,7 @@ def muzero_self_play(env, muzero_agent: agent.MuZeroAgent, replay_buffer: buffer
     logger.info("Starting self-play episode")
     
     while not done and step_count < 1000:  # 限制最大步數避免無限循環
-        try:
+        
             # 獲取合法動作
             legal_actions = env.get_legal_actions(structure)
             
@@ -300,10 +302,11 @@ def muzero_self_play(env, muzero_agent: agent.MuZeroAgent, replay_buffer: buffer
                 break
             
             # 選擇動作（只考慮合法動作）
-            action, policy = muzero_agent.select_action(obs, training=True, num_actions=len(legal_actions))
+            structure_temp = deepcopy(structure)
+            actual_action, policy = muzero_agent.select_action(obs, structure, training=True)
             
-            # 將動作索引映射到實際的動作
-            actual_action = legal_actions[action]
+            # # 將動作索引映射到實際的動作
+            # actual_action = legal_actions[action]
             
             # 計算當前狀態的價值預測
             with torch.no_grad():
@@ -311,10 +314,10 @@ def muzero_self_play(env, muzero_agent: agent.MuZeroAgent, replay_buffer: buffer
                 _, value_pred = muzero_agent.network.predict(hidden_state)
             
             # 執行動作
-            next_structure, reward, done, fail_name, fail_reason = env.step(structure, actual_action)
+            next_structure, reward, done, fail_name, fail_reason = env.step(structure_temp, actual_action)
             next_obs = next_structure.graph.clone()  # 提取下一個狀態的 GraphData
             
-            actions.append(action)
+            actions.append(actual_action)
             total_reward += reward
 
             # 確保下一個觀察也包含必要的屬性
@@ -353,28 +356,28 @@ def muzero_self_play(env, muzero_agent: agent.MuZeroAgent, replay_buffer: buffer
             obs = next_obs
             step_count += 1
             
-        except Exception as e:
-            logger.warning(f"Error in self-play step {step_count}: {e}")
-            break
+        # except Exception as e:
+        #     logger.warning(f"Error in self-play step {step_count}: {e}")
+        #     break
         
-        # 獲取最終設計的性能指標
-        final_performance = {
-            'max_stress_ratio': env.static_response_record[-1][0] if env.static_response_record else 0,
-            'max_drift_ratio': env.static_response_record[-1][2] if env.static_response_record else 0,
-            'min_SCWB_ratio': env.static_response_record[-1][3] if env.static_response_record else 0,
-            'material_usage': structure.calculate_material_usage() if hasattr(structure, 'calculate_material_usage') else 0
-        }
-        
-        # 記錄 episode 結果
-        episode_result = {
-            'total_reward': total_reward,
-            'episode_length': step_count,
-            'final_design': structure.story_level_sections.copy() if hasattr(structure, 'story_level_sections') else [],
-            'performance': final_performance,
-            'actions_taken': actions,
-            'fail_name': fail_name,
-            'fail_reason': fail_reason
-        }
+            # 獲取最終設計的性能指標
+            final_performance = {
+                'max_stress_ratio': env.static_response_record[-1][0] if env.static_response_record else 0,
+                'max_drift_ratio': env.static_response_record[-1][2] if env.static_response_record else 0,
+                'min_SCWB_ratio': env.static_response_record[-1][3] if env.static_response_record else 0,
+                'material_usage': structure.calculate_material_usage() if hasattr(structure, 'calculate_material_usage') else 0
+            }
+            
+            # 記錄 episode 結果
+            episode_result = {
+                'total_reward': total_reward,
+                'episode_length': step_count,
+                'final_design': structure.story_level_sections.copy() if hasattr(structure, 'story_level_sections') else [],
+                'performance': final_performance,
+                'actions_taken': actions,
+                'fail_name': fail_name,
+                'fail_reason': fail_reason
+            }
 
     
     # 將遊戲加入緩衝區
@@ -447,11 +450,16 @@ def muzero_inference(env, muzero_agent: agent.MuZeroAgent, num_episodes: int = 5
                 break
             
             # 使用貪婪策略進行 inference
-            action, _ = muzero_agent.select_action(obs, training=False, num_actions=len(legal_actions))
-            actual_action = legal_actions[action]
+            structure_temp = deepcopy(structure)
+            actual_action, _ = muzero_agent.select_action(obs, structure_temp, training=False)
+            # actual_action = legal_actions[action]
+
+            if actual_action not in legal_actions:
+                logger.error(f"Episode {episode}: Actual action {actual_action} not in legal actions {legal_actions}")
+                raise ValueError(f"Actual action {actual_action} not in legal actions {legal_actions}")
             
             # 執行動作
-            next_structure, reward, done, fail_name, fail_reason = env.step(structure, actual_action)
+            next_structure, reward, done, fail_name, fail_reason = env.step(structure_temp, actual_action)
             next_obs = next_structure.graph.clone()
             
             # 確保下一個觀察也包含必要的屬性
@@ -619,6 +627,7 @@ def main():
     # 創建 MuZero Agent
     muzero_agent = agent.MuZeroAgent(
         network=network,
+        env=env,
         num_simulations=args.muzero_num_simulations,
         discount=args.muzero_discount,
         temperature=args.muzero_temperature,

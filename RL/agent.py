@@ -885,19 +885,21 @@ from RL.mcts import run_muzero_mcts
 
 class MuZeroAgent:
     """ MuZero Agent，使用 MCTS 進行決策，支援動態動作空間 """
-    def __init__(self, network, num_simulations: int = 50, 
+    def __init__(self, network, env, num_simulations: int = 50, 
                  discount: float = 0.99, temperature: float = 1.0, device: str = "cpu"):
         """
         初始化 MuZero Agent
         
         Args:
             network: MuZeroNetwork 實例
+            env: 環境實例
             num_simulations: MCTS 模擬次數
             discount: 折扣因子
             temperature: 動作選擇的溫度參數
             device: 計算設備
         """
         self.network = network
+        self.env = env
         self.num_simulations = num_simulations
         self.discount = discount
         self.temperature = temperature
@@ -915,37 +917,36 @@ class MuZeroAgent:
         """設置溫度參數"""
         self.temperature = temperature
     
-    def select_action(self, observation, training: bool = True, num_actions: int = None):
+    def select_action(self, obs, structure, training: bool = True):
         """
         選擇動作
         
         Args:
-            observation: 環境觀察
+            obs: 環境觀察 (obs)
+            structure: 環境觀察 (structure)
             training: 是否處於訓練模式
-            num_actions: 當前環境的動作數量（可選，若不提供則使用 self.current_num_actions）
         
         Returns:
             action: 選擇的動作
             policy: MCTS 產生的策略 (訪問次數分佈)
         """
         # 決定動作數量
-        if num_actions is None:
-            num_actions = self.current_num_actions
-        if num_actions is None:
-            raise ValueError("num_actions must be provided either as parameter or via set_action_space()")
+        num_actions = self.current_num_actions
         # 確保網路處於評估模式
         self.network.eval()
+        legal0 = self.env.get_legal_actions(structure)
         
         # 1. 將觀察編碼成初始隱藏狀態
         with torch.no_grad():
-            hidden_state = self.network.represent(observation)
+            hidden_state = self.network.represent(obs)
         
         # 2. 執行 MCTS 搜尋
         visit_counts = run_muzero_mcts(
             root_hidden_state=hidden_state,
             network=self.network,
+            env=self.env,
+            root_structure=structure,
             num_simulations=self.num_simulations,
-            num_actions=num_actions,  # 使用當前動作數量
             discount=self.discount
         )
         
@@ -958,20 +959,23 @@ class MuZeroAgent:
             
             # 從策略分佈中抽樣
             if policy.sum() > 0:
-                action = torch.multinomial(policy, 1).item()
+                idx = torch.multinomial(policy, 1).item()
             else:
-                action = torch.randint(0, self.network.num_actions, (1,)).item()
+                idx= torch.randint(0, self.network.num_actions, (1,)).item()
         else:
             # 測試時選擇訪問次數最多的動作 (greedy)
-            action = torch.argmax(visit_counts).item()
+            idx= torch.argmax(visit_counts).item()
         
-        # 確保動作在有效範圍內
-        action = min(action, num_actions - 1)
+        # 選擇 idx → 對應合法動作
+        idx = torch.multinomial(visit_counts, 1).item() if training else torch.argmax(visit_counts).item()
+        action = legal0[idx]
+
+        policy_full = torch.zeros(num_actions)
+        for i, a in enumerate(legal0):
+            policy_full[a] = visit_counts[i] / visit_counts.sum()
         
-        # 正規化訪問次數作為策略
-        policy = visit_counts / (visit_counts.sum() + 1e-8)
         
-        return action, policy
+        return action, policy_full
     
     def set_num_simulations(self, num_simulations: int):
         """設置 MCTS 模擬次數"""
