@@ -18,12 +18,18 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 import matplotlib.pyplot as plt
 import json
+from collections import Counter, defaultdict
 
 from RL import agent, buffer, environment, model
 from Structure import structure
 from Validation import check_design, design_space
 from Visualization import plot, visualize
 from NonlinearDynamicAnalysisSimulator import load_simulator
+from Visualization.plot import (
+    plot_MuZero_inference_figure, 
+    plot_MuZero_selfplay_figure, 
+    plot_MuZero_combined_figure
+)
 
 
 def parse_muzero_args() -> argparse.Namespace:
@@ -44,6 +50,7 @@ def parse_muzero_args() -> argparse.Namespace:
     parser.add_argument("--muzero_num_simulations", type=int, default=50)
     parser.add_argument("--muzero_unroll_steps", type=int, default=3)
     parser.add_argument("--muzero_temperature", type=float, default=1.0)
+    parser.add_argument("--muzero_temperature_decay", type=float, default=0.97)
     parser.add_argument("--muzero_discount", type=float, default=0.99)
     
     # 訓練參數
@@ -53,6 +60,7 @@ def parse_muzero_args() -> argparse.Namespace:
     parser.add_argument("--buffer_capacity", type=int, default=1000)
     parser.add_argument("--training_frequency", type=int, default=10)
     parser.add_argument("--evaluation_frequency", type=int, default=20)
+    parser.add_argument("--inference_num", type=int, default=1)
     parser.add_argument("--save_frequency", type=int, default=20)
     
     # 環境參數
@@ -154,8 +162,11 @@ def muzero_train_step(network: model.MuZeroNetwork, optimizer: torch.optim.Optim
                      replay_buffer: buffer.MuZeroReplayBuffer, batch_size: int, 
                      unroll_steps: int, discount: float, device: str, logger):
     """ 執行一步 MuZero 訓練 """
+
     if len(replay_buffer) < batch_size:
         return 0.0
+    
+    network.train()
     
     # 從緩衝區採樣遊戲
     games = replay_buffer.sample(batch_size)
@@ -212,6 +223,7 @@ def muzero_train_step(network: model.MuZeroNetwork, optimizer: torch.optim.Optim
             )
             
             loss = value_loss + policy_loss
+            logger.info(f"Value Loss: {value_loss.item()}, Policy Loss: {policy_loss.item()}, Total Loss: {loss.item()}")
             total_loss += loss
             
         except Exception as e:
@@ -232,6 +244,8 @@ def muzero_train_step(network: model.MuZeroNetwork, optimizer: torch.optim.Optim
 
 def muzero_self_play(env, muzero_agent: agent.MuZeroAgent, replay_buffer: buffer.MuZeroReplayBuffer, logger):
     """ 執行一場 MuZero 自我對弈 """
+    # muzero_agent.network.eval()
+
     current_game = buffer.MuZeroGame()
     structure = env.reset()  # 環境返回的是 structure 物件
     obs = structure.graph.clone()  # 提取 GraphData 物件並複製
@@ -268,6 +282,11 @@ def muzero_self_play(env, muzero_agent: agent.MuZeroAgent, replay_buffer: buffer
     
     done = False
     step_count = 0
+
+    actions = []
+    total_reward = 0
+    fail_reason = None
+    fail_name = None
     
     logger.info("Starting self-play episode")
     
@@ -292,9 +311,12 @@ def muzero_self_play(env, muzero_agent: agent.MuZeroAgent, replay_buffer: buffer
                 _, value_pred = muzero_agent.network.predict(hidden_state)
             
             # 執行動作
-            next_structure, reward, done, _, _ = env.step(structure, actual_action)
+            next_structure, reward, done, fail_name, fail_reason = env.step(structure, actual_action)
             next_obs = next_structure.graph.clone()  # 提取下一個狀態的 GraphData
             
+            actions.append(action)
+            total_reward += reward
+
             # 確保下一個觀察也包含必要的屬性
             if hasattr(next_structure, 'aux') and 'story_batch' in next_structure.aux:
                 next_obs.story_batch = next_structure.aux['story_batch'].clone()
@@ -334,14 +356,33 @@ def muzero_self_play(env, muzero_agent: agent.MuZeroAgent, replay_buffer: buffer
         except Exception as e:
             logger.warning(f"Error in self-play step {step_count}: {e}")
             break
+        
+        # 獲取最終設計的性能指標
+        final_performance = {
+            'max_stress_ratio': env.static_response_record[-1][0] if env.static_response_record else 0,
+            'max_drift_ratio': env.static_response_record[-1][2] if env.static_response_record else 0,
+            'min_SCWB_ratio': env.static_response_record[-1][3] if env.static_response_record else 0,
+            'material_usage': structure.calculate_material_usage() if hasattr(structure, 'calculate_material_usage') else 0
+        }
+        
+        # 記錄 episode 結果
+        episode_result = {
+            'total_reward': total_reward,
+            'episode_length': step_count,
+            'final_design': structure.story_level_sections.copy() if hasattr(structure, 'story_level_sections') else [],
+            'performance': final_performance,
+            'actions_taken': actions,
+            'fail_name': fail_name,
+            'fail_reason': fail_reason
+        }
+
     
     # 將遊戲加入緩衝區
     if len(current_game) > 0:
         replay_buffer.push(current_game)
         logger.info(f"Self-play episode finished with {len(current_game)} steps, total reward: {sum(current_game.rewards):.3f}")
     
-    return len(current_game), sum(current_game.rewards)
-
+    return step_count, total_reward, actions, fail_name, fail_reason, episode_result
 
 def muzero_inference(env, muzero_agent: agent.MuZeroAgent, num_episodes: int = 5, logger=None):
     """ 執行 MuZero inference 評估 """
@@ -350,14 +391,14 @@ def muzero_inference(env, muzero_agent: agent.MuZeroAgent, num_episodes: int = 5
         'total_rewards': [],
         'episode_lengths': [],
         'final_designs': [],
-        'material_savings': [],
         'performance_metrics': []
     }
-    
+
+    # muzero_agent.network.eval()
     logger.info(f"Starting MuZero inference evaluation with {num_episodes} episodes")
     
     for episode in range(num_episodes):
-        structure = env.reset()
+        structure = env.reset(testing=True)
         obs = structure.graph.clone()
         
         # 確保 GraphData 包含必要的屬性
@@ -394,6 +435,8 @@ def muzero_inference(env, muzero_agent: agent.MuZeroAgent, num_episodes: int = 5
         episode_rewards = []
         episode_actions = []
         episode_material_savings = []
+        last_fail_name = None
+        last_fail_reason = None
         
         while not done and step_count < 1000:
             # 獲取合法動作
@@ -408,7 +451,7 @@ def muzero_inference(env, muzero_agent: agent.MuZeroAgent, num_episodes: int = 5
             actual_action = legal_actions[action]
             
             # 執行動作
-            next_structure, reward, done, _, _ = env.step(structure, actual_action)
+            next_structure, reward, done, fail_name, fail_reason = env.step(structure, actual_action)
             next_obs = next_structure.graph.clone()
             
             # 確保下一個觀察也包含必要的屬性
@@ -442,6 +485,8 @@ def muzero_inference(env, muzero_agent: agent.MuZeroAgent, num_episodes: int = 5
             episode_rewards.append(reward)
             episode_actions.append(actual_action)
             episode_material_savings.append(env.saved_material_record[-1] if env.saved_material_record else 0)
+            last_fail_name = fail_name
+            last_fail_reason = fail_reason
             
             structure = next_structure
             obs = next_obs
@@ -449,7 +494,6 @@ def muzero_inference(env, muzero_agent: agent.MuZeroAgent, num_episodes: int = 5
         
         # 計算 episode 統計
         total_reward = sum(episode_rewards)
-        total_material_saved = sum(episode_material_savings)
         
         # 獲取最終設計的性能指標
         final_performance = {
@@ -464,397 +508,53 @@ def muzero_inference(env, muzero_agent: agent.MuZeroAgent, num_episodes: int = 5
             'episode': episode,
             'total_reward': total_reward,
             'episode_length': step_count,
-            'total_material_saved': total_material_saved,
             'final_design': structure.story_level_sections.copy() if hasattr(structure, 'story_level_sections') else [],
             'performance': final_performance,
-            'actions_taken': episode_actions
+            'actions_taken': episode_actions,
+            'fail_name': last_fail_name,
+            'fail_reason': last_fail_reason
         }
         
         inference_results['episodes'].append(episode_result)
         inference_results['total_rewards'].append(total_reward)
         inference_results['episode_lengths'].append(step_count)
         inference_results['final_designs'].append(structure.story_level_sections.copy() if hasattr(structure, 'story_level_sections') else [])
-        inference_results['material_savings'].append(total_material_saved)
         inference_results['performance_metrics'].append(final_performance)
         
-        logger.info(f"Inference Episode {episode}: Reward={total_reward:.3f}, Length={step_count}, Material Saved={total_material_saved:.3f}")
+        logger.info(f"Inference Episode {episode}: Reward={total_reward:.3f}, Length={step_count}")
     
     return inference_results
 
 
-def save_inference_results(results: Dict, save_dir: Path, episode_num: int):
-    """ 儲存 inference 結果 """
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    
-    # 儲存 JSON 結果
-    results_file = save_dir / f"inference_results_episode_{episode_num}_{timestamp}.json"
-    with open(results_file, 'w') as f:
-        json.dump(results, f, indent=2, default=str)
-    
-    # 儲存統計摘要
-    summary_file = save_dir / f"inference_summary_episode_{episode_num}_{timestamp}.txt"
-    with open(summary_file, 'w') as f:
-        f.write(f"MuZero Inference Results - Episode {episode_num}\n")
-        f.write(f"Timestamp: {timestamp}\n")
-        f.write(f"Number of episodes: {len(results['episodes'])}\n")
-        f.write(f"Average reward: {np.mean(results['total_rewards']):.3f} ± {np.std(results['total_rewards']):.3f}\n")
-        f.write(f"Average episode length: {np.mean(results['episode_lengths']):.1f} ± {np.std(results['episode_lengths']):.1f}\n")
-        f.write(f"Average material saved: {np.mean(results['material_savings']):.3f} ± {np.std(results['material_savings']):.3f}\n")
-        f.write(f"Best reward: {max(results['total_rewards']):.3f}\n")
-        f.write(f"Worst reward: {min(results['total_rewards']):.3f}\n")
-    
-    return results_file, summary_file
-
-
-def plot_inference_results(results: Dict, save_dir: Path, episode_num: int):
-    """ 繪製 inference 結果圖表 """
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    
-    # 創建圖表
-    fig, axes = plt.subplots(2, 3, figsize=(18, 12))
-    fig.suptitle(f'MuZero Inference Results - Episode {episode_num}', fontsize=16)
-    
-    # 1. 獎勵分佈
-    axes[0, 0].hist(results['total_rewards'], bins=10, alpha=0.7, color='blue')
-    axes[0, 0].set_title('Reward Distribution')
-    axes[0, 0].set_xlabel('Total Reward')
-    axes[0, 0].set_ylabel('Frequency')
-    axes[0, 0].axvline(np.mean(results['total_rewards']), color='red', linestyle='--', label=f'Mean: {np.mean(results["total_rewards"]):.3f}')
-    axes[0, 0].legend()
-    
-    # 2. Episode 長度分佈
-    axes[0, 1].hist(results['episode_lengths'], bins=10, alpha=0.7, color='green')
-    axes[0, 1].set_title('Episode Length Distribution')
-    axes[0, 1].set_xlabel('Episode Length')
-    axes[0, 1].set_ylabel('Frequency')
-    axes[0, 1].axvline(np.mean(results['episode_lengths']), color='red', linestyle='--', label=f'Mean: {np.mean(results["episode_lengths"]):.1f}')
-    axes[0, 1].legend()
-    
-    # 3. 材料節省分佈
-    axes[0, 2].hist(results['material_savings'], bins=10, alpha=0.7, color='orange')
-    axes[0, 2].set_title('Material Savings Distribution')
-    axes[0, 2].set_xlabel('Material Saved (m³)')
-    axes[0, 2].set_ylabel('Frequency')
-    axes[0, 2].axvline(np.mean(results['material_savings']), color='red', linestyle='--', label=f'Mean: {np.mean(results["material_savings"]):.3f}')
-    axes[0, 2].legend()
-    
-    # 4. 性能指標散點圖
-    stress_ratios = [p['max_stress_ratio'] for p in results['performance_metrics']]
-    drift_ratios = [p['max_drift_ratio'] for p in results['performance_metrics']]
-    axes[1, 0].scatter(stress_ratios, drift_ratios, alpha=0.6)
-    axes[1, 0].set_title('Stress vs Drift Ratio')
-    axes[1, 0].set_xlabel('Max Stress Ratio')
-    axes[1, 0].set_ylabel('Max Drift Ratio')
-    
-    # 5. 獎勵 vs 材料節省
-    axes[1, 1].scatter(results['material_savings'], results['total_rewards'], alpha=0.6)
-    axes[1, 1].set_title('Reward vs Material Savings')
-    axes[1, 1].set_xlabel('Material Saved (m³)')
-    axes[1, 1].set_ylabel('Total Reward')
-    
-    # 6. SCWB 比率分佈
-    scwb_ratios = [p['min_SCWB_ratio'] for p in results['performance_metrics']]
-    axes[1, 2].hist(scwb_ratios, bins=10, alpha=0.7, color='purple')
-    axes[1, 2].set_title('SCWB Ratio Distribution')
-    axes[1, 2].set_xlabel('Min SCWB Ratio')
-    axes[1, 2].set_ylabel('Frequency')
-    axes[1, 2].axvline(np.mean(scwb_ratios), color='red', linestyle='--', label=f'Mean: {np.mean(scwb_ratios):.3f}')
-    axes[1, 2].legend()
-    
-    plt.tight_layout()
-    
-    # 儲存圖表
-    plot_file = save_dir / f"inference_plots_episode_{episode_num}_{timestamp}.png"
-    plt.savefig(plot_file, dpi=300, bbox_inches='tight')
-    plt.close()
-    
-    return plot_file
-
-
-def plot_training_progress(episode_rewards: List[float], episode_lengths: List[int], save_dir: Path, episode_num: int):
-    """ 繪製訓練進度圖表 """
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    
-    # 創建圖表
-    fig, axes = plt.subplots(2, 2, figsize=(15, 10))
-    fig.suptitle(f'MuZero Training Progress - Episode {episode_num}', fontsize=16)
-    
-    # 1. Episode Rewards 趨勢
-    episodes = list(range(1, len(episode_rewards) + 1))
-    axes[0, 0].plot(episodes, episode_rewards, 'b-', alpha=0.7, linewidth=1)
-    axes[0, 0].set_title('Episode Rewards Over Time')
-    axes[0, 0].set_xlabel('Episode')
-    axes[0, 0].set_ylabel('Total Reward')
-    axes[0, 0].grid(True, alpha=0.3)
-    
-    # 添加移動平均線
-    if len(episode_rewards) > 10:
-        window_size = min(10, len(episode_rewards) // 10)
-        moving_avg = []
-        for i in range(len(episode_rewards)):
-            start = max(0, i - window_size + 1)
-            moving_avg.append(np.mean(episode_rewards[start:i+1]))
-        axes[0, 0].plot(episodes, moving_avg, 'r-', linewidth=2, label=f'Moving Average (window={window_size})')
-        axes[0, 0].legend()
-    
-    # 2. Episode Lengths 趨勢
-    axes[0, 1].plot(episodes, episode_lengths, 'g-', alpha=0.7, linewidth=1)
-    axes[0, 1].set_title('Episode Lengths Over Time')
-    axes[0, 1].set_xlabel('Episode')
-    axes[0, 1].set_ylabel('Episode Length')
-    axes[0, 1].grid(True, alpha=0.3)
-    
-    # 添加移動平均線
-    if len(episode_lengths) > 10:
-        window_size = min(10, len(episode_lengths) // 10)
-        moving_avg = []
-        for i in range(len(episode_lengths)):
-            start = max(0, i - window_size + 1)
-            moving_avg.append(np.mean(episode_lengths[start:i+1]))
-        axes[0, 1].plot(episodes, moving_avg, 'r-', linewidth=2, label=f'Moving Average (window={window_size})')
-        axes[0, 1].legend()
-    
-    # 3. Rewards 分佈直方圖
-    axes[1, 0].hist(episode_rewards, bins=20, alpha=0.7, color='blue', edgecolor='black')
-    axes[1, 0].set_title('Reward Distribution')
-    axes[1, 0].set_xlabel('Total Reward')
-    axes[1, 0].set_ylabel('Frequency')
-    axes[1, 0].axvline(np.mean(episode_rewards), color='red', linestyle='--', 
-                       label=f'Mean: {np.mean(episode_rewards):.3f}')
-    axes[1, 0].axvline(np.median(episode_rewards), color='orange', linestyle='--', 
-                       label=f'Median: {np.median(episode_rewards):.3f}')
-    axes[1, 0].legend()
-    
-    # 4. Episode Lengths 分佈直方圖
-    axes[1, 1].hist(episode_lengths, bins=20, alpha=0.7, color='green', edgecolor='black')
-    axes[1, 1].set_title('Episode Length Distribution')
-    axes[1, 1].set_xlabel('Episode Length')
-    axes[1, 1].set_ylabel('Frequency')
-    axes[1, 1].axvline(np.mean(episode_lengths), color='red', linestyle='--', 
-                       label=f'Mean: {np.mean(episode_lengths):.1f}')
-    axes[1, 1].axvline(np.median(episode_lengths), color='orange', linestyle='--', 
-                       label=f'Median: {np.median(episode_lengths):.1f}')
-    axes[1, 1].legend()
-    
-    plt.tight_layout()
-    
-    # 儲存圖表
-    plot_file = save_dir / f"training_progress_episode_{episode_num}_{timestamp}.png"
-    plt.savefig(plot_file, dpi=300, bbox_inches='tight')
-    plt.close()
-    
-    return plot_file
-
-
-def save_training_summary(episode_rewards: List[float], episode_lengths: List[int], save_dir: Path, episode_num: int):
-    """ 儲存訓練摘要 """
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    
-    summary_file = save_dir / f"training_summary_episode_{episode_num}_{timestamp}.txt"
-    with open(summary_file, 'w') as f:
-        f.write(f"MuZero Training Summary - Episode {episode_num}\n")
-        f.write(f"Timestamp: {timestamp}\n")
-        f.write(f"Total episodes: {len(episode_rewards)}\n")
-        f.write(f"Average reward: {np.mean(episode_rewards):.3f} ± {np.std(episode_rewards):.3f}\n")
-        f.write(f"Median reward: {np.median(episode_rewards):.3f}\n")
-        f.write(f"Best reward: {max(episode_rewards):.3f}\n")
-        f.write(f"Worst reward: {min(episode_rewards):.3f}\n")
-        f.write(f"Average episode length: {np.mean(episode_lengths):.1f} ± {np.std(episode_lengths):.1f}\n")
-        f.write(f"Median episode length: {np.median(episode_lengths):.1f}\n")
-        f.write(f"Longest episode: {max(episode_lengths)}\n")
-        f.write(f"Shortest episode: {min(episode_lengths)}\n")
-        
-        # 計算最近 10 個 episode 的統計
-        if len(episode_rewards) >= 10:
-            recent_rewards = episode_rewards[-10:]
-            recent_lengths = episode_lengths[-10:]
-            f.write(f"\nRecent 10 episodes:\n")
-            f.write(f"Average reward: {np.mean(recent_rewards):.3f} ± {np.std(recent_rewards):.3f}\n")
-            f.write(f"Average episode length: {np.mean(recent_lengths):.1f} ± {np.std(recent_lengths):.1f}\n")
-    
-    return summary_file
-
-
-def plot_combined_results(inference_results: Dict, episode_rewards: List[float], episode_lengths: List[int], 
-                         save_dir: Path, episode_num: int):
-    """ 繪製 inference 和 self-play 的綜合結果 """
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    
-    # 創建圖表
-    fig, axes = plt.subplots(2, 3, figsize=(18, 12))
-    fig.suptitle(f'MuZero Combined Results - Episode {episode_num}', fontsize=16)
-    
-    # 1. Self-play Episode Rewards 趨勢
-    episodes = list(range(1, len(episode_rewards) + 1))
-    axes[0, 0].plot(episodes, episode_rewards, 'b-', alpha=0.7, linewidth=1, label='Self-play Rewards')
-    axes[0, 0].set_title('Self-play Episode Rewards Over Time')
-    axes[0, 0].set_xlabel('Episode')
-    axes[0, 0].set_ylabel('Total Reward')
-    axes[0, 0].grid(True, alpha=0.3)
-    
-    # 添加移動平均線
-    if len(episode_rewards) > 10:
-        window_size = min(10, len(episode_rewards) // 10)
-        moving_avg = []
-        for i in range(len(episode_rewards)):
-            start = max(0, i - window_size + 1)
-            moving_avg.append(np.mean(episode_rewards[start:i+1]))
-        axes[0, 0].plot(episodes, moving_avg, 'r-', linewidth=2, label=f'Moving Average (window={window_size})')
-    axes[0, 0].legend()
-    
-    # 2. Inference vs Self-play 獎勵比較
-    if inference_results['total_rewards']:
-        # Self-play 最近的平均獎勵
-        recent_self_play_rewards = episode_rewards[-20:] if len(episode_rewards) >= 20 else episode_rewards
-        avg_self_play = np.mean(recent_self_play_rewards)
-        std_self_play = np.std(recent_self_play_rewards)
-        
-        # Inference 的獎勵
-        inference_rewards = inference_results['total_rewards']
-        avg_inference = np.mean(inference_rewards)
-        std_inference = np.std(inference_rewards)
-        
-        # 繪製比較圖
-        categories = ['Self-play (Recent 20)', 'Inference']
-        means = [avg_self_play, avg_inference]
-        stds = [std_self_play, std_inference]
-        
-        bars = axes[0, 1].bar(categories, means, yerr=stds, capsize=5, alpha=0.7, 
-                              color=['blue', 'orange'])
-        axes[0, 1].set_title('Reward Comparison: Self-play vs Inference')
-        axes[0, 1].set_ylabel('Average Reward')
-        axes[0, 1].grid(True, alpha=0.3)
-        
-        # 添加數值標籤
-        for bar, mean, std in zip(bars, means, stds):
-            height = bar.get_height()
-            axes[0, 1].text(bar.get_x() + bar.get_width()/2., height + std,
-                           f'{mean:.3f}±{std:.3f}', ha='center', va='bottom')
-    
-    # 3. Self-play Episode Lengths 趨勢
-    axes[0, 2].plot(episodes, episode_lengths, 'g-', alpha=0.7, linewidth=1)
-    axes[0, 2].set_title('Self-play Episode Lengths Over Time')
-    axes[0, 2].set_xlabel('Episode')
-    axes[0, 2].set_ylabel('Episode Length')
-    axes[0, 2].grid(True, alpha=0.3)
-    
-    # 添加移動平均線
-    if len(episode_lengths) > 10:
-        window_size = min(10, len(episode_lengths) // 10)
-        moving_avg = []
-        for i in range(len(episode_lengths)):
-            start = max(0, i - window_size + 1)
-            moving_avg.append(np.mean(episode_lengths[start:i+1]))
-        axes[0, 2].plot(episodes, moving_avg, 'r-', linewidth=2, label=f'Moving Average (window={window_size})')
-        axes[0, 2].legend()
-    
-    # 4. Inference 獎勵分佈
-    if inference_results['total_rewards']:
-        axes[1, 0].hist(inference_results['total_rewards'], bins=10, alpha=0.7, color='orange', edgecolor='black')
-        axes[1, 0].set_title('Inference Reward Distribution')
-        axes[1, 0].set_xlabel('Total Reward')
-        axes[1, 0].set_ylabel('Frequency')
-        axes[1, 0].axvline(np.mean(inference_results['total_rewards']), color='red', linestyle='--', 
-                           label=f'Mean: {np.mean(inference_results["total_rewards"]):.3f}')
-        axes[1, 0].legend()
-    
-    # 5. Self-play 獎勵分佈
-    axes[1, 1].hist(episode_rewards, bins=20, alpha=0.7, color='blue', edgecolor='black')
-    axes[1, 1].set_title('Self-play Reward Distribution')
-    axes[1, 1].set_xlabel('Total Reward')
-    axes[1, 1].set_ylabel('Frequency')
-    axes[1, 1].axvline(np.mean(episode_rewards), color='red', linestyle='--', 
-                       label=f'Mean: {np.mean(episode_rewards):.3f}')
-    axes[1, 1].axvline(np.median(episode_rewards), color='orange', linestyle='--', 
-                       label=f'Median: {np.median(episode_rewards):.3f}')
-    axes[1, 1].legend()
-    
-    # 6. 材料節省比較
-    if inference_results['material_savings']:
-        recent_self_play_material = [0] * len(recent_self_play_rewards)  # 簡化，實際應該從環境記錄中獲取
-        avg_self_play_material = np.mean(recent_self_play_material)
-        avg_inference_material = np.mean(inference_results['material_savings'])
-        
-        categories = ['Self-play (Recent 20)', 'Inference']
-        material_means = [avg_self_play_material, avg_inference_material]
-        
-        bars = axes[1, 2].bar(categories, material_means, alpha=0.7, color=['blue', 'orange'])
-        axes[1, 2].set_title('Material Savings Comparison')
-        axes[1, 2].set_ylabel('Average Material Saved (m³)')
-        axes[1, 2].grid(True, alpha=0.3)
-        
-        # 添加數值標籤
-        for bar, mean in zip(bars, material_means):
-            height = bar.get_height()
-            axes[1, 2].text(bar.get_x() + bar.get_width()/2., height,
-                           f'{mean:.3f}', ha='center', va='bottom')
-    
-    plt.tight_layout()
-    
-    # 儲存圖表
-    plot_file = save_dir / f"combined_results_episode_{episode_num}_{timestamp}.png"
-    plt.savefig(plot_file, dpi=300, bbox_inches='tight')
-    plt.close()
-    
-    return plot_file
-
-
-def save_combined_summary(inference_results: Dict, episode_rewards: List[float], episode_lengths: List[int], 
-                         save_dir: Path, episode_num: int):
-    """ 儲存綜合摘要 """
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    
-    summary_file = save_dir / f"combined_summary_episode_{episode_num}_{timestamp}.txt"
-    with open(summary_file, 'w') as f:
-        f.write(f"MuZero Combined Summary - Episode {episode_num}\n")
-        f.write(f"Timestamp: {timestamp}\n")
-        f.write(f"Total self-play episodes: {len(episode_rewards)}\n")
-        f.write(f"Inference episodes: {len(inference_results['episodes'])}\n")
-        
-        # Self-play 統計
-        f.write(f"\nSelf-play Statistics:\n")
-        f.write(f"Average reward: {np.mean(episode_rewards):.3f} ± {np.std(episode_rewards):.3f}\n")
-        f.write(f"Median reward: {np.median(episode_rewards):.3f}\n")
-        f.write(f"Best reward: {max(episode_rewards):.3f}\n")
-        f.write(f"Worst reward: {min(episode_rewards):.3f}\n")
-        f.write(f"Average episode length: {np.mean(episode_lengths):.1f} ± {np.std(episode_lengths):.1f}\n")
-        
-        # 最近 20 個 episode 的統計
-        if len(episode_rewards) >= 20:
-            recent_rewards = episode_rewards[-20:]
-            recent_lengths = episode_lengths[-20:]
-            f.write(f"\nRecent 20 self-play episodes:\n")
-            f.write(f"Average reward: {np.mean(recent_rewards):.3f} ± {np.std(recent_rewards):.3f}\n")
-            f.write(f"Average episode length: {np.mean(recent_lengths):.1f} ± {np.std(recent_lengths):.1f}\n")
-        
-        # Inference 統計
-        if inference_results['total_rewards']:
-            f.write(f"\nInference Statistics:\n")
-            f.write(f"Average reward: {np.mean(inference_results['total_rewards']):.3f} ± {np.std(inference_results['total_rewards']):.3f}\n")
-            f.write(f"Average episode length: {np.mean(inference_results['episode_lengths']):.1f} ± {np.std(inference_results['episode_lengths']):.1f}\n")
-            f.write(f"Average material saved: {np.mean(inference_results['material_savings']):.3f} ± {np.std(inference_results['material_savings']):.3f}\n")
-            f.write(f"Best inference reward: {max(inference_results['total_rewards']):.3f}\n")
-            f.write(f"Worst inference reward: {min(inference_results['total_rewards']):.3f}\n")
-    
-    return summary_file
-
-
 def main():
-    # 解析參數
+     # === 0. 解析 CLI & init ========================================================================
     args = parse_muzero_args()
-    
-    # 設定隨機種子
     set_random_seed(args.random_seed)
-    
-    # 創建檢查點目錄
-    args.ckpt_dir = args.ckpt_dir / f'muzero_{datetime.now().strftime("%Y_%m_%d__%H_%M_%S")}'
-    args.ckpt_dir.mkdir(parents=True, exist_ok=True)
-    
-    # 設定日誌
-    logger = setup_logging(args.ckpt_dir)
+
+    # 初始化檔案夾與 Logger
+    ts = datetime.now().strftime("%Y_%m_%d__%H_%M_%S")
+    ckpt_dir = args.ckpt_dir / f"muzero_{ts}"
+    ckpt_dir.mkdir(parents=True, exist_ok=True)
+
+
+    # 子資料夾：models / plots / action_seq
+    models_dir = ckpt_dir / 'models'
+    plots_dir = ckpt_dir / 'plots'
+    for d in [models_dir, plots_dir]:
+        d.mkdir(parents=True, exist_ok=True)
+
+    # plots 下進一步拆分
+    selfplay_plots = plots_dir / 'selfplay'
+    inference_plots = plots_dir / 'inference'
+    combined_plots  = plots_dir / 'combined'
+    for d in [selfplay_plots, inference_plots, combined_plots]:
+        d.mkdir(exist_ok=True)
+
+    logger = setup_logging(ckpt_dir)
     logger.info("Starting MuZero training")
-    logger.info(f"Arguments: {args}")
+    logger.info(args)
     
+    # === 1. 建立環境 & agent ========================================================================
     # 設定設備
     device = get_device(args.device)
     logger.info(f"Using device: {device}")
@@ -894,12 +594,16 @@ def main():
     # 根據不同 structure_shape 計算最大可能的動作數量
     if args.structure_shape == "fixed":
         max_num_actions = 16  # story_num = 4, 4 * 4 = 16
+        story_num = 4
     elif args.structure_shape == "small_random":
         max_num_actions = 16  # story_num = 2-4, 最大 4 * 4 = 16
+        story_num = 4
     elif args.structure_shape == "random":
         max_num_actions = 32  # story_num = 4-7, 最大 7 * 4 = 28，設為 32 保險
+        story_num = 7
     else:
         max_num_actions = 32  # 默認值
+        story_num = 7
     
     # 創建 MuZero 網路
     network = model.MuZeroNetwork(
@@ -927,123 +631,118 @@ def main():
     
     # 設置環境與 agent 的連接
     env.set_muzero_agent(muzero_agent)
-    
-    # 訓練迴圈
-    episode_rewards = []
-    episode_lengths = []
-    
-    # 在訓練循環中添加定期 inference
-    inference_frequency = 50  # 每 50 個 episode 進行一次 inference
-    plot_frequency = 20  # 每 20 個 episode 繪製一次訓練進度
-    
-    # 在訓練循環中添加定期 inference 和統計
-    evaluation_frequency = args.evaluation_frequency  # 每 50 個 episode 進行一次評估
-    
-    for episode in range(args.num_episodes):
-        # 階段一：自我對弈產生數據
-        episode_length, episode_reward = muzero_self_play(env, muzero_agent, replay_buffer, logger)
-        
-        # 記錄 episode 結果
-        episode_rewards.append(episode_reward)
-        episode_lengths.append(episode_length)
-        
-        # 定期繪製訓練進度
-        if (episode + 1) % plot_frequency == 0:
-            logger.info(f"Plotting training progress at episode {episode + 1}")
-            
-            # 繪製訓練進度圖表
-            plot_file = plot_training_progress(episode_rewards, episode_lengths, args.ckpt_dir, episode + 1)
-            logger.info(f"Training progress plots saved to {plot_file}")
-            
-            # 儲存訓練摘要
-            summary_file = save_training_summary(episode_rewards, episode_lengths, args.ckpt_dir, episode + 1)
-            logger.info(f"Training summary saved to {summary_file}")
-            
-            # 輸出當前統計
-            avg_reward = np.mean(episode_rewards[-plot_frequency:]) if len(episode_rewards) >= plot_frequency else np.mean(episode_rewards)
-            avg_length = np.mean(episode_lengths[-plot_frequency:]) if len(episode_lengths) >= plot_frequency else np.mean(episode_lengths)
-            logger.info(f"Recent {plot_frequency} episodes - Avg Reward: {avg_reward:.3f}, Avg Length: {avg_length:.1f}")
-        
-        # 階段二：訓練網路
-        if episode % args.training_frequency == 0 and len(replay_buffer) >= args.batch_size:
-            loss = muzero_train_step(
-                network=network,
-                optimizer=optimizer,
-                replay_buffer=replay_buffer,
-                batch_size=args.batch_size,
-                unroll_steps=args.muzero_unroll_steps,
-                discount=args.muzero_discount,
-                device=device,
-                logger=logger
-            )
-            
-            # 調整溫度參數（隨訓練進度降低）
-            new_temperature = max(0.1, args.muzero_temperature * (0.99 ** episode))
-            muzero_agent.set_temperature(new_temperature)
-            
-            logger.info(f"Episode {episode}: Loss={loss:.4f}, Temperature={new_temperature:.3f}")
-        
-        # 定期進行 inference 評估和統計
-        if (episode + 1) % evaluation_frequency == 0:
-            logger.info(f"Starting evaluation at episode {episode + 1}")
-            
-            # 執行 inference
-            inference_results = muzero_inference(env, muzero_agent, num_episodes=5, logger=logger)
-            
-            # 繪製綜合結果圖表
-            plot_file = plot_combined_results(inference_results, episode_rewards, episode_lengths, args.ckpt_dir, episode + 1)
-            logger.info(f"Combined results plots saved to {plot_file}")
-            
-            # 儲存綜合摘要
-            summary_file = save_combined_summary(inference_results, episode_rewards, episode_lengths, args.ckpt_dir, episode + 1)
-            logger.info(f"Combined summary saved to {summary_file}")
-            
-            # 儲存詳細的 inference 結果
-            results_file, inference_summary_file = save_inference_results(inference_results, args.ckpt_dir, episode + 1)
-            logger.info(f"Inference results saved to {results_file}")
-            
-            # 輸出統計摘要
-            recent_self_play_rewards = episode_rewards[-evaluation_frequency:] if len(episode_rewards) >= evaluation_frequency else episode_rewards
-            avg_self_play = np.mean(recent_self_play_rewards)
-            avg_inference = np.mean(inference_results['total_rewards'])
-            logger.info(f"Recent {len(recent_self_play_rewards)} self-play episodes - Avg Reward: {avg_self_play:.3f}")
-            logger.info(f"Inference episodes - Avg Reward: {avg_inference:.3f}")
-            logger.info(f"Performance gap (Inference - Self-play): {avg_inference - avg_self_play:.3f}")
-        
-        if episode % args.save_frequency == 0:
-            # 保存模型
-            save_path = args.ckpt_dir / f"muzero_model_episode_{episode}.pt"
-            torch.save({
-                'episode': episode,
-                'model_state_dict': network.state_dict(),
-                'optimizer_state_dict': optimizer.state_dict(),
-                'episode_rewards': episode_rewards,
-                'episode_lengths': episode_lengths,
-                'args': args
-            }, save_path)
-            logger.info(f"Model saved to {save_path}")
-    
-    # 訓練結束後繪製最終的綜合結果圖表
-    logger.info("Training completed. Generating final combined results plots...")
-    final_inference_results = muzero_inference(env, muzero_agent, num_episodes=10, logger=logger)
-    final_plot_file = plot_combined_results(final_inference_results, episode_rewards, episode_lengths, args.ckpt_dir, args.num_episodes)
-    final_summary_file = save_combined_summary(final_inference_results, episode_rewards, episode_lengths, args.ckpt_dir, args.num_episodes)
-    logger.info(f"Final combined results plots saved to {final_plot_file}")
-    logger.info(f"Final combined summary saved to {final_summary_file}")
-    
-    # 保存最終模型
-    final_save_path = args.ckpt_dir / "muzero_model_final.pt"
-    torch.save({
-        'episode': args.num_episodes,
-        'model_state_dict': network.state_dict(),
-        'optimizer_state_dict': optimizer.state_dict(),
-        'episode_rewards': episode_rewards,
-        'episode_lengths': episode_lengths,
-        'args': args
-    }, final_save_path)
-    logger.info(f"Final model saved to {final_save_path}")
-    logger.info("MuZero training completed!")
 
+    # === 2. 訓練 loop ==============================================================================
+    # 歷史記錄
+    sp_rewards, sp_lengths, sp_actions, sp_fails = [], [], [], []
+    inf_rewards, inf_lengths, inf_actions, inf_fails = [], [], [], []
+    selfplay_record = []
+    inference_record = []
+    loss_record = []
+
+    best_inf_score = -float('inf')
+    best_inf_ep    = None
+
+    for ep in range(args.num_episodes):
+        # --- Self-play ---
+        length, reward, actions_seq, fail_name, fail_reason, rec = muzero_self_play(env, muzero_agent, replay_buffer, logger)
+        sp_lengths.append(length)
+        sp_rewards.append(reward)
+        sp_actions.append(actions_seq)
+        sp_fails.append(fail_reason)
+        selfplay_record.append(rec)
+
+        # 2) Train step
+        if ep % args.training_frequency == 0 and len(replay_buffer) >= args.batch_size:
+            loss = muzero_train_step(network, optimizer, replay_buffer,
+                                     args.batch_size, args.muzero_unroll_steps,
+                                     args.muzero_discount, device, logger)
+            logger.info(f"Episode {ep}: train loss={loss:.4f}")
+
+        # 3) Evaluation & Plotting
+        if ep % args.evaluation_frequency == 0:
+            rnd = ep // args.evaluation_frequency
+            # 執行 Inference (同樣收集 actions & fail_reasons)
+            inf_res = muzero_inference(env, muzero_agent, num_episodes=args.inference_num, logger=logger)
+            # 假設 muzero_inference 返回 dict 含 'episodes' list，並可提取 actions & fail_reasons
+            batch_rewards = inf_res['total_rewards']
+            batch_lengths = inf_res['episode_lengths']
+            batch_actions = [ep['actions_taken'] for ep in inf_res['episodes']]
+            batch_fails   = [ep['fail_reason'] for ep in inf_res['episodes']]
+
+
+            inf_rewards.extend(batch_rewards)
+            inf_lengths.extend(batch_lengths)
+            inf_actions.extend(batch_actions)
+            inf_fails.extend(batch_fails)
+            inference_record.append(inf_res)
+
+            avg_inf_score = np.mean(batch_rewards)
+            if avg_inf_score > best_inf_score:
+                best_inf_score = avg_inf_score
+                best_inf_ep    = ep
+                best_path = models_dir / f"best_inference_ep{ep}.pt"
+                torch.save({
+                    'episode': ep,
+                    'model_state_dict': network.state_dict(),
+                    'optimizer_state_dict': optimizer.state_dict(),
+                    'best_inf_score': best_inf_score
+                }, best_path)
+                logger.info(f"New best inference: score={best_inf_score:.3f} at (global ep={ep}); model saved to {best_path}")
+
+            # 繪圖
+            # 紀錄 self-play action sequence 圖
+            plot_MuZero_selfplay_figure(
+                out_path = ckpt_dir / 'plots' / 'selfplay' / f"selfplay_ep_{ep}_rnd_{rnd}_{ts}.png",
+                reward_history = sp_rewards,
+                length_history = sp_lengths,
+                best_actions_history = sp_actions,
+                rewards_this_round = sp_rewards[-args.evaluation_frequency:],
+                fail_reasons_this_round = sp_fails[-args.evaluation_frequency:],
+                story_num = story_num
+            )
+            # 繪製 inference
+            plot_MuZero_inference_figure(
+                out_path = ckpt_dir / 'plots' / 'inference' / f"inference_ep_{ep}_rnd_{rnd}_{ts}.png",
+                reward_history = inf_rewards,
+                length_history = inf_lengths,
+                best_actions_history = inf_actions,
+                rewards_this_round = batch_rewards,
+                fail_reasons_this_round = batch_fails,
+                story_num = story_num
+            )
+
+            # 繪製 combined
+            plot_MuZero_combined_figure(
+                out_path = ckpt_dir / 'plots' / 'combined' / f"combined_ep_{ep}_rnd_{rnd}_{ts}.png",
+                selfplay_reward_hist = sp_rewards,
+                selfplay_length_hist = sp_lengths,
+                inference_reward_hist = inf_rewards,
+                inference_length_hist = inf_lengths,
+                frequency = args.evaluation_frequency
+            )
+
+        # 4) Save checkpoint
+        if ep % args.save_frequency == 0:
+            ckpt = models_dir / f"model_ep_{ep}.pt"
+            torch.save({'ep':ep, 'net':network.state_dict(), 'opt':optimizer.state_dict()}, ckpt)
+            logger.info(f"Saved checkpoint to {ckpt}")
+
+            # 記錄 selfplay 和 inference 的結果
+            rec = {
+                'selfplay': selfplay_record,
+                'inference': inference_record
+            }
+            with open(ckpt_dir / 'record.json', 'w') as f:
+                json.dump(rec, f)
+        
+        # 溫度 decay，每 10 個 episode 調整一次
+        if (ep + 1) % 10 == 0:
+            new_temp = max(0.1, muzero_agent.temperature * args.muzero_temperature_decay)
+            muzero_agent.set_temperature(new_temp)
+            logger.info(f"Decay temperature to {new_temp:.3f}")
+
+    logger.info("Training finished.")
 
 if __name__ == "__main__":
-    main() 
+    main()
