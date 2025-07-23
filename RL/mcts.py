@@ -241,7 +241,7 @@ class MuZeroNode:
         self.visit_count = 0
         self.value_sum = 0.0
         self.prior = prior
-        self.children: Dict[int, MuZeroNode] = {}
+        self.children = {}
         self.hidden_state = hidden_state   # 從 network.represent 或 dynamics 回傳
         self.reward = 0.0
         self.structure = structure         # 真實 env state
@@ -347,6 +347,102 @@ def muzero_ucb_score(parent: MuZeroNode, child: MuZeroNode,
 #     return visit_counts  
 
 
+# def run_muzero_mcts(
+#     root_hidden_state: torch.Tensor,
+#     network,
+#     env,
+#     root_structure,
+#     num_simulations: int,
+#     discount: float = 0.99
+# ) -> torch.Tensor:
+#     """
+#     MCTS on a dynamic action space, using the real env to get legal_actions at each node.
+#     Args:
+#       env: the real environment, so we can call env.get_legal_actions(structure) and env.step(...)
+#       root_structure: the environment state at the root
+#     Returns:
+#       visit_counts: Tensor shape [len(legal_actions_at_root)]
+#     """
+
+#     # --- 1) 建立根節點，存初始 hidden & structure ---
+#     root = MuZeroNode(
+#         prior=0.0,
+#         hidden_state=root_hidden_state,
+#         structure=root_structure
+#     )
+
+#     # --- 2) 根節點 priors & children ---
+#     legal0 = env.get_legal_actions(root.structure)
+#     with torch.no_grad():
+#         full_logits, _ = network.predict(root.hidden_state, None)
+#         full_probs = torch.softmax(full_logits.squeeze(0), dim=-1)
+#     for idx, a in enumerate(legal0):
+#         root.children[idx] = MuZeroNode(
+#             prior=full_probs[a].item(),
+#             hidden_state=None,
+#             structure=None
+#         )
+
+#     # MCTS 模擬
+#     for _ in range(num_simulations):
+#         node = root
+#         path = [node]
+
+#         # a) Selection: 沿著展開過的節點往下
+#         while node.expanded():
+#             best_idx, next_node = max(
+#                 node.children.items(),
+#                 key=lambda it: muzero_ucb_score(node, it[1])
+#             )
+#             node = next_node
+#             path.append(node)
+
+#         # b) Expansion: 在葉節點做一次「想像」
+#         parent = path[-2]
+#         # 找到 action_idx → 真實 action
+#         action_idx = next(i for i,ch in parent.children.items() if ch is node)
+#         action = env.get_legal_actions(parent.structure)[action_idx]
+
+#         # -- 用真實 env 推結構狀態 --
+#         new_structure, _, _, _, _ = env.step(parent.structure, action)
+
+#         # -- 用 network.dynamics 推 hidden state & reward --
+#         with torch.no_grad():
+#             a_tensor = torch.tensor([[action]], device=root_hidden_state.device)
+#             reward, next_hidden = network.dynamics(parent.hidden_state, a_tensor, None)
+#             logits, value = network.predict(next_hidden, None)
+#             probs = torch.softmax(logits.squeeze(0), dim=-1)
+
+#         # 把得到的狀態存到 node
+#         node.hidden_state = next_hidden
+#         node.reward = reward.item()
+#         node.structure = new_structure
+
+#         # b2) 在新節點上擴展它的 children
+#         legal = env.get_legal_actions(new_structure)
+#         node.children.clear()
+#         for idx, a in enumerate(legal):
+#             node.children[idx] = MuZeroNode(
+#                 prior=probs[a].item(),
+#                 hidden_state=None,
+#                 structure=None
+#             )
+
+#         # c) Backpropagation
+#         bootstrap = value.item()
+#         for n in reversed(path):
+#             n.value_sum += bootstrap
+#             n.visit_count += 1
+#             bootstrap = n.reward + discount * bootstrap
+
+#     # 最後收根節點 visit_counts
+#     # legal_final = env.get_legal_actions(root.structure)
+#     visit_counts = torch.zeros(len(legal0), device=root_hidden_state.device)
+#     for idx, child in root.children.items():
+#         visit_counts[idx] = child.visit_count
+
+#     return visit_counts
+
 def run_muzero_mcts(
     root_hidden_state: torch.Tensor,
     network,
@@ -355,90 +451,66 @@ def run_muzero_mcts(
     num_simulations: int,
     discount: float = 0.99
 ) -> torch.Tensor:
-    """
-    MCTS on a dynamic action space, using the real env to get legal_actions at each node.
-    Args:
-      env: the real environment, so we can call env.get_legal_actions(structure) and env.step(...)
-      root_structure: the environment state at the root
-    Returns:
-      visit_counts: Tensor shape [len(legal_actions_at_root)]
-    """
 
-    # --- 1) 建立根節點，存初始 hidden & structure ---
-    root = MuZeroNode(
-        prior=0.0,
-        hidden_state=root_hidden_state,
-        structure=root_structure
-    )
+    root = MuZeroNode(0.0, hidden_state=root_hidden_state, structure=root_structure)
 
-    # --- 2) 根節點 priors & children ---
+    # ---------- expand root ----------
     legal0 = env.get_legal_actions(root.structure)
     with torch.no_grad():
-        full_logits, _ = network.predict(root.hidden_state, None)
-        full_probs = torch.softmax(full_logits.squeeze(0), dim=-1)
+        logits, _ = network.predict(root.hidden_state, None)
+        probs = torch.softmax(logits.squeeze(), dim=-1)
+
     for idx, a in enumerate(legal0):
-        root.children[idx] = MuZeroNode(
-            prior=full_probs[a].item(),
-            hidden_state=None,
-            structure=None
-        )
+        root.children[idx] = MuZeroNode(prior=probs[a].item())   # child.structure 先留空
 
-    # MCTS 模擬
+    # ---------- simulations ----------
     for _ in range(num_simulations):
-        node = root
-        path = [node]
+        node  = root
+        path  = [node]
 
-        # a) Selection: 沿著展開過的節點往下
+        # a) selection
         while node.expanded():
-            best_idx, next_node = max(
-                node.children.items(),
-                key=lambda it: muzero_ucb_score(node, it[1])
-            )
-            node = next_node
+            key, node = max(node.children.items(),
+                             key=lambda kv: muzero_ucb_score(path[-1], kv[1]))
             path.append(node)
 
-        # b) Expansion: 在葉節點做一次「想像」
-        parent = path[-2]
-        # 找到 action_idx → 真實 action
-        action_idx = next(i for i,ch in parent.children.items() if ch is node)
-        action = env.get_legal_actions(parent.structure)[action_idx]
+        # 若 root 沒合法動作直接 break
+        if len(path) == 1:
+            break
 
-        # -- 用真實 env 推結構狀態 --
+        parent = path[-2]
+        child_idx = next(i for i,ch in parent.children.items() if ch is node)
+        action    = env.get_legal_actions(parent.structure)[child_idx]
+
+        # b) env.step & model rollout
         new_structure, _, _, _, _ = env.step(parent.structure, action)
 
-        # -- 用 network.dynamics 推 hidden state & reward --
         with torch.no_grad():
-            a_tensor = torch.tensor([[action]], device=root_hidden_state.device)
-            reward, next_hidden = network.dynamics(parent.hidden_state, a_tensor, None)
+            a_tensor = torch.tensor([[action]], dtype=torch.long, device=root_hidden_state.device)
+            reward_pred, next_hidden = network.dynamics(parent.hidden_state, a_tensor, None)
             logits, value = network.predict(next_hidden, None)
-            probs = torch.softmax(logits.squeeze(0), dim=-1)
+            probs = torch.softmax(logits.squeeze(), dim=-1)
 
-        # 把得到的狀態存到 node
+        # 更新目前 node
         node.hidden_state = next_hidden
-        node.reward = reward.item()
-        node.structure = new_structure
+        node.reward       = reward_pred.item()
+        node.structure    = new_structure
 
-        # b2) 在新節點上擴展它的 children
+        # expand children with *its* legal actions
         legal = env.get_legal_actions(new_structure)
         node.children.clear()
         for idx, a in enumerate(legal):
-            node.children[idx] = MuZeroNode(
-                prior=probs[a].item(),
-                hidden_state=None,
-                structure=None
-            )
+            node.children[idx] = MuZeroNode(prior=probs[a].item())
 
-        # c) Backpropagation
+        # c) back-prop
         bootstrap = value.item()
         for n in reversed(path):
-            n.value_sum += bootstrap
+            n.value_sum  += bootstrap
             n.visit_count += 1
             bootstrap = n.reward + discount * bootstrap
 
-    # 最後收根節點 visit_counts
-    # legal_final = env.get_legal_actions(root.structure)
+    # ---------- collect visit counts ----------
     visit_counts = torch.zeros(len(legal0), device=root_hidden_state.device)
-    for idx, child in root.children.items():
-        visit_counts[idx] = child.visit_count
-
+    for idx, ch in root.children.items():
+        visit_counts[idx] = ch.visit_count
     return visit_counts
