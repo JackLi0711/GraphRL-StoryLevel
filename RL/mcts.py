@@ -452,6 +452,14 @@ def run_muzero_mcts(
     discount: float = 0.99
 ) -> torch.Tensor:
 
+    logger = getattr(env, 'logger', None)
+    if logger is None:
+        import logging
+        logger = logging.getLogger("muzero_mcts_debug")
+        if not logger.hasHandlers():
+            logger.addHandler(logging.StreamHandler())
+        logger.setLevel(logging.DEBUG)
+
     root = MuZeroNode(0.0, hidden_state=root_hidden_state, structure=root_structure)
 
     # ---------- expand root ----------
@@ -460,27 +468,35 @@ def run_muzero_mcts(
         logits, _ = network.predict(root.hidden_state, None)
         probs = torch.softmax(logits.squeeze(), dim=-1)
 
-    for idx, a in enumerate(legal0):
-        root.children[idx] = MuZeroNode(prior=probs[a].item())   # child.structure 先留空
+    for a in legal0:
+        root.children[a] = MuZeroNode(prior=probs[a].item())
+    logger.debug(f"[ROOT EXPAND] legal0: {legal0}")
+    logger.debug(f"[ROOT EXPAND] root.children.keys(): {list(root.children.keys())}")
 
     # ---------- simulations ----------
-    for _ in range(num_simulations):
+    for sim in range(num_simulations):
         node  = root
         path  = [node]
+        actions_taken = []
 
         # a) selection
         while node.expanded():
-            key, node = max(node.children.items(),
-                             key=lambda kv: muzero_ucb_score(path[-1], kv[1]))
+            action, node = max(node.children.items(),
+                               key=lambda kv: muzero_ucb_score(path[-1], kv[1]))
             path.append(node)
+            actions_taken.append(action)
+        logger.debug(f"[SIM {sim}] Selection path actions: {actions_taken}")
 
         # 若 root 沒合法動作直接 break
         if len(path) == 1:
+            logger.debug(f"[SIM {sim}] No legal actions at root, break.")
             break
 
         parent = path[-2]
-        child_idx = next(i for i,ch in parent.children.items() if ch is node)
-        action    = env.get_legal_actions(parent.structure)[child_idx]
+        action = actions_taken[-1]
+        logger.debug(f"[SIM {sim}] Parent.children.keys(): {list(parent.children.keys())}")
+        logger.debug(f"[SIM {sim}] Parent legal_actions: {env.get_legal_actions(parent.structure)}")
+        logger.debug(f"[SIM {sim}] Action taken: {action}")
 
         # b) env.step & model rollout
         new_structure, _, _, _, _ = env.step(parent.structure, action)
@@ -499,8 +515,10 @@ def run_muzero_mcts(
         # expand children with *its* legal actions
         legal = env.get_legal_actions(new_structure)
         node.children.clear()
-        for idx, a in enumerate(legal):
-            node.children[idx] = MuZeroNode(prior=probs[a].item())
+        for a in legal:
+            node.children[a] = MuZeroNode(prior=probs[a].item())
+        logger.debug(f"[SIM {sim}] Node expand legal: {legal}")
+        logger.debug(f"[SIM {sim}] Node.children.keys(): {list(node.children.keys())}")
 
         # c) back-prop
         bootstrap = value.item()
@@ -511,6 +529,9 @@ def run_muzero_mcts(
 
     # ---------- collect visit counts ----------
     visit_counts = torch.zeros(len(legal0), device=root_hidden_state.device)
-    for idx, ch in root.children.items():
-        visit_counts[idx] = ch.visit_count
+    for idx, a in enumerate(legal0):
+        visit_counts[idx] = root.children[a].visit_count if a in root.children else 0
+    logger.debug(f"[FINAL] legal0: {legal0}")
+    logger.debug(f"[FINAL] root.children.keys(): {list(root.children.keys())}")
+    logger.debug(f"[FINAL] visit_counts: {visit_counts.tolist()}")
     return visit_counts
