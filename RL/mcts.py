@@ -473,9 +473,10 @@ def run_muzero_mcts(
     logger.debug(f"[ROOT EXPAND] legal0: {legal0}")
     logger.debug(f"[ROOT EXPAND] root.children.keys(): {list(root.children.keys())}")
 
+    root_temp = deepcopy(root)
     # ---------- simulations ----------
     for sim in range(num_simulations):
-        node  = root
+        node  = root_temp
         path  = [node]
         actions_taken = []
 
@@ -485,7 +486,9 @@ def run_muzero_mcts(
                                key=lambda kv: muzero_ucb_score(path[-1], kv[1]))
             path.append(node)
             actions_taken.append(action)
-        logger.debug(f"[SIM {sim}] Selection path actions: {actions_taken}")
+            logger.debug(f"[SIM {sim}] Selection {len(actions_taken)}:  path actions: {actions_taken}")
+            logger.debug(f"[SIM {sim}] Selection {len(actions_taken)}:  path node.children.keys(): {list(node.children.keys())}")
+        logger.debug(f"[SIM {sim}] Selection {len(actions_taken)}:  path actions: {actions_taken}")
 
         # 若 root 沒合法動作直接 break
         if len(path) == 1:
@@ -499,7 +502,10 @@ def run_muzero_mcts(
         logger.debug(f"[SIM {sim}] Action taken: {action}")
 
         # b) env.step & model rollout
-        new_structure, _, _, _, _ = env.step(parent.structure, action)
+        before = deepcopy(parent.structure)
+        new_structure, _, done, _, _ = env.step(deepcopy(parent.structure), action)
+        logger.debug(f"[SIM {sim}] Expansion done: {done}")
+        # assert parent.structure == before, "env.step() mutated the input!"
 
         with torch.no_grad():
             a_tensor = torch.tensor([[action]], dtype=torch.long, device=root_hidden_state.device)
@@ -510,15 +516,20 @@ def run_muzero_mcts(
         # 更新目前 node
         node.hidden_state = next_hidden
         node.reward       = reward_pred.item()
-        node.structure    = new_structure
+        node.structure    = deepcopy(new_structure)
 
-        # expand children with *its* legal actions
-        legal = env.get_legal_actions(new_structure)
+        # expand children with *its* legal actions, only if not done
         node.children.clear()
-        for a in legal:
-            node.children[a] = MuZeroNode(prior=probs[a].item())
-        logger.debug(f"[SIM {sim}] Node expand legal: {legal}")
-        logger.debug(f"[SIM {sim}] Node.children.keys(): {list(node.children.keys())}")
+        legal = env.get_legal_actions(new_structure)
+        is_terminal = done or (not legal)
+        if is_terminal:
+            node.children.clear()
+            logger.debug(f"[SIM {sim}] Node is terminal (done or no legal actions), no children expanded.")
+        else:
+            for a in legal:
+                node.children[a] = MuZeroNode(prior=probs[a].item())
+            logger.debug(f"[SIM {sim}] Node expand legal: {legal}")
+            logger.debug(f"[SIM {sim}] Node.children.keys(): {list(node.children.keys())}")
 
         # c) back-prop
         bootstrap = value.item()

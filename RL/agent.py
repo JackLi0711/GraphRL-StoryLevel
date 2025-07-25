@@ -961,13 +961,16 @@ class MuZeroAgent:
             if policy.sum() > 0:
                 idx = torch.multinomial(policy, 1).item()
             else:
-                idx= torch.randint(0, self.network.num_actions, (1,)).item()
+                idx= torch.randint(0, num_actions, (1,)).item()
         else:
             # 測試時選擇訪問次數最多的動作 (greedy)
             idx= torch.argmax(visit_counts).item()
         
         # 選擇 idx → 對應合法動作
-        idx = torch.multinomial(visit_counts, 1).item() if training else torch.argmax(visit_counts).item()
+        idx = torch.multinomial(visit_counts, 1).item() if visit_counts.sum() > 0 else torch.randint(0, len(legal0), (1,)).item()
+        print(f'legal0: {legal0}')
+        print(f'visit_counts: {visit_counts}')
+        print(f'idx: {idx}')
         action = legal0[idx]
 
         policy_full = torch.zeros(num_actions)

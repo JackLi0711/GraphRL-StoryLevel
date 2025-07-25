@@ -48,21 +48,21 @@ def parse_muzero_args() -> argparse.Namespace:
     parser.add_argument("--num_layers", type=int, default=3)
     
     # MuZero 參數
-    parser.add_argument("--muzero_num_simulations", type=int, default=150)
+    parser.add_argument("--muzero_num_simulations", type=int, default=50)
     parser.add_argument("--muzero_unroll_steps", type=int, default=3)
     parser.add_argument("--muzero_temperature", type=float, default=1.0)
     parser.add_argument("--muzero_temperature_decay", type=float, default=0.97)
     parser.add_argument("--muzero_discount", type=float, default=0.99)
     
     # 訓練參數
-    parser.add_argument("--num_episodes", type=int, default=1000)
+    parser.add_argument("--num_episodes", type=int, default=100)
     parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--buffer_capacity", type=int, default=1000)
-    parser.add_argument("--training_frequency", type=int, default=20)
-    parser.add_argument("--evaluation_frequency", type=int, default=20)
+    parser.add_argument("--training_frequency", type=int, default=5)
+    parser.add_argument("--evaluation_frequency", type=int, default=5)
     parser.add_argument("--inference_num", type=int, default=1)
-    parser.add_argument("--save_frequency", type=int, default=20)
+    parser.add_argument("--save_frequency", type=int, default=5)
     
     # 環境參數
     parser.add_argument("--structure_shape", type=str, default="fixed")
@@ -106,7 +106,7 @@ def get_device(device_arg: str) -> str:
 def setup_logging(ckpt_dir: Path):
     """設定日誌"""
     logger = logging.getLogger('MuZero-RL')
-    logger.setLevel(logging.INFO)
+    logger.setLevel(logging.DEBUG)
     
     # 設定格式化器
     formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
