@@ -48,21 +48,21 @@ def parse_muzero_args() -> argparse.Namespace:
     parser.add_argument("--num_layers", type=int, default=3)
     
     # MuZero 參數
-    parser.add_argument("--muzero_num_simulations", type=int, default=50)
+    parser.add_argument("--muzero_num_simulations", type=int, default=2)
     parser.add_argument("--muzero_unroll_steps", type=int, default=3)
     parser.add_argument("--muzero_temperature", type=float, default=1.0)
     parser.add_argument("--muzero_temperature_decay", type=float, default=0.97)
     parser.add_argument("--muzero_discount", type=float, default=0.99)
     
     # 訓練參數
-    parser.add_argument("--num_episodes", type=int, default=100)
+    parser.add_argument("--num_episodes", type=int, default=10)
     parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--buffer_capacity", type=int, default=1000)
-    parser.add_argument("--training_frequency", type=int, default=5)
-    parser.add_argument("--evaluation_frequency", type=int, default=5)
+    parser.add_argument("--training_frequency", type=int, default=2)
+    parser.add_argument("--evaluation_frequency", type=int, default=2)
     parser.add_argument("--inference_num", type=int, default=1)
-    parser.add_argument("--save_frequency", type=int, default=5)
+    parser.add_argument("--save_frequency", type=int, default=2)
     
     # 環境參數
     parser.add_argument("--structure_shape", type=str, default="fixed")
@@ -162,83 +162,78 @@ def calculate_n_step_return(game: buffer.MuZeroGame, start_index: int,
 def muzero_train_step(network: model.MuZeroNetwork, optimizer: torch.optim.Optimizer,
                      replay_buffer: buffer.MuZeroReplayBuffer, batch_size: int, 
                      unroll_steps: int, discount: float, device: str, logger):
-    """ 執行一步 MuZero 訓練 """
+    """ 執行一步 MuZero 訓練 - 完整 unroll 版本 """
 
     if len(replay_buffer) < batch_size:
         return 0.0
-    
+
     network.train()
-    
-    # 從緩衝區採樣遊戲
+
     games = replay_buffer.sample(batch_size)
-    
     total_loss = torch.tensor(0.0, device=device)
-    
+
     for game in games:
         try:
-            # 隨機選擇起始時間步
-            if len(game) <= unroll_steps:
+            # -------- 1. 決定起點 --------
+            if len(game) <= unroll_steps + 1:
                 start_index = 0
             else:
-                start_index = torch.randint(0, len(game) - unroll_steps, (1,)).item()
-            
-            # 獲取初始觀察
-            initial_obs = game.observations[start_index]
-            
-            # 確保 GraphData 包含必要的屬性
-            if not hasattr(initial_obs, 'story_batch'):
-                num_edges = initial_obs.edge_attr.size(0) // 2
-                initial_obs.story_batch = torch.zeros(num_edges, dtype=torch.long)
-            
-            # 計算 structure_story_ptr（這裡需要從遊戲數據中重建）
-            # 由於我們沒有完整的 structure 物件，我們使用預設值
-            if not hasattr(initial_obs, 'structure_story_ptr'):
-                initial_obs.structure_story_ptr = None
-            
-            # 確保觀察在正確的設備上
-            initial_obs = initial_obs.to(device)
-            
-            hidden_state = network.represent(initial_obs)
-            
-            # 計算當前遊戲的動作數量
-            current_num_actions = len(game.policies[start_index])
-            logger.info(f"current_num_actions: {current_num_actions}")
+                start_index = torch.randint(0, len(game) - unroll_steps - 1, (1,)).item()
 
-            policy_logits, value_pred = network.predict(hidden_state, current_num_actions)
-            
-            # 計算真實的 N-step return
-            true_value = calculate_n_step_return(game, start_index, unroll_steps, discount)
-            
-            # 計算損失
-            value_loss = torch.nn.functional.mse_loss(
-                value_pred.squeeze(), 
-                torch.tensor([true_value], dtype=torch.float32, device=device)
-            )
-            
-            # 策略損失 - 使用 KL 散度
-            target_policy = game.policies[start_index].to(device)
-            policy_probs = torch.softmax(policy_logits.squeeze(), dim=-1)
-            policy_loss = torch.nn.functional.kl_div(
-                torch.log(policy_probs + 1e-8), 
-                target_policy + 1e-8, 
-                reduction='batchmean'
-            )
-            
-            loss = value_loss + policy_loss
-            logger.info(f"Value Loss: {value_loss.item()}, Policy Loss: {policy_loss.item()}, Total Loss: {loss.item()}")
+            # -------- 2. 初始 observation & hidden --------
+            obs = game.observations[start_index].to(device)
+            hidden = network.represent(obs)
+
+            # -------- 3. 多步 unroll --------
+            value_losses  = []
+            policy_losses = []
+            reward_losses = []
+
+            bootstrap_discount = 1.0
+            for k in range(unroll_steps + 1):
+                # 3.1 取當前步驟的合法動作數
+                current_num_actions = len(game.policies[start_index + k])
+
+                # 3.2 預測 policy & value
+                policy_logits, value_pred = network.predict(hidden, current_num_actions)
+
+                # ----- value loss (使用 N-step return 以反映 bootstrapping) -----
+                target_value = calculate_n_step_return(game, start_index + k, unroll_steps, discount)
+                target_value_tensor = torch.tensor([target_value], dtype=torch.float32, device=device)
+                value_losses.append(torch.nn.functional.mse_loss(value_pred.squeeze(), target_value_tensor))
+
+                # ----- policy loss (KL divergence) -----
+                target_policy = game.policies[start_index + k].to(device)
+                pred_policy   = torch.softmax(policy_logits.squeeze(), dim=-1)
+                policy_losses.append(torch.nn.functional.kl_div(torch.log(pred_policy + 1e-8), target_policy + 1e-8, reduction='batchmean'))
+
+                # ----- reward loss (k==0 沒有 reward_pred，因為 represent 不預測 reward) -----
+                if k < unroll_steps:
+                    action_k = torch.tensor([game.actions[start_index + k]], dtype=torch.long, device=device)
+                    next_num_actions = len(game.policies[start_index + k + 1]) if (start_index + k + 1) < len(game.policies) else current_num_actions
+                    reward_pred, hidden_next = network.dynamics(hidden, action_k, next_num_actions)
+
+                    # 真實 reward
+                    true_reward = torch.tensor([game.rewards[start_index + k]], dtype=torch.float32, device=device)
+                    reward_losses.append(torch.nn.functional.mse_loss(reward_pred.squeeze(), true_reward))
+
+                    # 前進 hidden
+                    hidden = hidden_next.detach()  # 避免時間步之間梯度重複計算
+                # k == unroll_steps 不需 dynamics
+
+            # -------- 4. 匯總損失 --------
+            loss  = sum(value_losses)  + sum(policy_losses)  + sum(reward_losses)
             total_loss += loss
-            
+
         except Exception as e:
-            logger.warning(f"Error in training step: {e}")
+            logger.warning(f"Error in MuZero train step (unroll): {e}")
             continue
-    
-    if total_loss > 0:
-        # 更新網路
+
+    if total_loss.item() > 0:
         optimizer.zero_grad()
         total_loss.backward()
-        torch.nn.utils.clip_grad_norm_(network.parameters(), max_norm=1.0)  # 梯度裁剪
+        torch.nn.utils.clip_grad_norm_(network.parameters(), max_norm=1.0)
         optimizer.step()
-        
         return total_loss.item() / len(games)
     else:
         return 0.0
