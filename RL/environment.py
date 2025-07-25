@@ -14,6 +14,7 @@ from Structure import structure, check, check_nda
 class Environment:
     def __init__(self, 
                  structure_shape: str,
+                 restrict_action: bool,
                  add_structure_geometry: bool,
                  add_response_features: bool,
                  reward_type: str,
@@ -30,6 +31,7 @@ class Environment:
                  device: torch.device) -> None:
         
         self.structure_shape = structure_shape
+        self.restrict_action = restrict_action
         self.add_structure_geometry = add_structure_geometry
         self.add_response_features = add_response_features
         self.reward_type = reward_type
@@ -402,7 +404,7 @@ class Environment:
         illegal_min_section = structure_obj.already_minimum_section_story_indexes
 
         # 規則二: 結構層級規則
-        illegal_hierarchy = structure_obj.restrict_action_space()
+        illegal_hierarchy = structure_obj.restrict_action_space() if self.restrict_action else []
 
         # 合併兩種非法動作列表
         illegal_actions = set(illegal_min_section + illegal_hierarchy)

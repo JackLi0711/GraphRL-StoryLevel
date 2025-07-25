@@ -36,13 +36,14 @@ def parse_args() -> Namespace:
     parser.add_argument("--dqn_checkpoint_dir", type=Path, default='./models/DQN/20250605_RSA_model_HighestScore.pt', help="Required for HybridMCTS. Path to a pretrained DQN agent checkpoint.")
 
     # MCTS Hyperparameters
-    parser.add_argument("--n_simulations", type=int, default=160, help="Number of simulations per MCTS search.")
+    parser.add_argument("--n_simulations", type=int, default=10, help="Number of simulations per MCTS search.")
     parser.add_argument("--c_puct", type=float, default=3.0, help="Exploration constant for UCT in MCTS.")
     parser.add_argument("--rollout_depth", type=int, default=3, help="For HybridMCTS, number of random steps in rollout before using DQN.")
     parser.add_argument("--gamma", type=float, default=0.99, help="Discount factor for MCTS.")
 
     # Environment Arguments (copied from train.py for consistency)
     parser.add_argument("--structure_shape", type=str, default="fixed", help="fixed, small_random, random")
+    parser.add_argument("--restrict_action", action="store_true", default=False)
     parser.add_argument("--add_structure_geometry", action="store_true", default=True)
     parser.add_argument("--add_response_features", action="store_true", default=True)
     parser.add_argument("--reward_type", type=str, default="material", help="material, acceleration, displacement, normalized, total, combined")
@@ -145,6 +146,7 @@ def main(args):
     # Environment
     _env_kwargs = {
         "structure_shape": args.structure_shape,
+        "restrict_action": args.restrict_action,
         "add_structure_geometry": args.add_structure_geometry,
         "add_response_features": args.add_response_features,
         "reward_type": args.reward_type,

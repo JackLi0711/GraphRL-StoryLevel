@@ -186,6 +186,7 @@ def main(args):
 	# Environment
 	_env_kwargs = {
 		"structure_shape": args.structure_shape,
+		"restrict_action": args.restrict_action,
 		"add_structure_geometry": args.add_structure_geometry,
 		"add_response_features": args.add_response_features,
 		"reward_type": args.reward_type,
