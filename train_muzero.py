@@ -48,21 +48,21 @@ def parse_muzero_args() -> argparse.Namespace:
     parser.add_argument("--num_layers", type=int, default=3)
     
     # MuZero 參數
-    parser.add_argument("--muzero_num_simulations", type=int, default=20)
+    parser.add_argument("--muzero_num_simulations", type=int, default=30)
     parser.add_argument("--muzero_unroll_steps", type=int, default=3)
     parser.add_argument("--muzero_temperature", type=float, default=1.0)
-    parser.add_argument("--muzero_temperature_decay", type=float, default=0.97)
+    parser.add_argument("--muzero_temperature_decay", type=float, default=0.92)
     parser.add_argument("--muzero_discount", type=float, default=0.99)
     
     # 訓練參數
-    parser.add_argument("--num_episodes", type=int, default=10)
+    parser.add_argument("--num_episodes", type=int, default=100)
     parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--buffer_capacity", type=int, default=1000)
-    parser.add_argument("--training_frequency", type=int, default=2)
-    parser.add_argument("--evaluation_frequency", type=int, default=2)
+    parser.add_argument("--training_frequency", type=int, default=5)
+    parser.add_argument("--evaluation_frequency", type=int, default=5)
     parser.add_argument("--inference_num", type=int, default=1)
-    parser.add_argument("--save_frequency", type=int, default=2)
+    parser.add_argument("--save_frequency", type=int, default=5)
     
     # 環境參數
     parser.add_argument("--structure_shape", type=str, default="fixed")
@@ -165,11 +165,14 @@ def muzero_train_step(network: model.MuZeroNetwork, optimizer: torch.optim.Optim
     """ 執行一步 MuZero 訓練 - 完整 unroll 版本 """
 
     if len(replay_buffer) < batch_size:
-        return 0.0
+        return 0.0, 0.0, 0.0, 0.0  # value, policy, reward, total losses
 
     network.train()
 
     games = replay_buffer.sample(batch_size)
+    total_value_loss = torch.tensor(0.0, device=device)
+    total_policy_loss = torch.tensor(0.0, device=device)
+    total_reward_loss = torch.tensor(0.0, device=device)
     total_loss = torch.tensor(0.0, device=device)
 
     for game in games:
@@ -222,8 +225,18 @@ def muzero_train_step(network: model.MuZeroNetwork, optimizer: torch.optim.Optim
                 # k == unroll_steps 不需 dynamics
 
             # -------- 4. 匯總損失 --------
-            loss  = sum(value_losses)  + sum(policy_losses)  + sum(reward_losses)
+            value_loss  = sum(value_losses)
+            policy_loss = sum(policy_losses)
+            reward_loss = sum(reward_losses) if reward_losses else torch.tensor(0.0, device=device)
+            loss = value_loss + policy_loss + reward_loss
+
+            total_value_loss  += value_loss
+            total_policy_loss += policy_loss
+            total_reward_loss += reward_loss
             total_loss += loss
+
+            logger.debug(f"Game losses - Value: {value_loss.item():.4f}, Policy: {policy_loss.item():.4f}, " + 
+                        f"Reward: {reward_loss.item():.4f}, Total: {loss.item():.4f}")
 
         except Exception as e:
             logger.warning(f"Error in MuZero train step (unroll): {e}")
@@ -234,9 +247,14 @@ def muzero_train_step(network: model.MuZeroNetwork, optimizer: torch.optim.Optim
         total_loss.backward()
         torch.nn.utils.clip_grad_norm_(network.parameters(), max_norm=1.0)
         optimizer.step()
-        return total_loss.item() / len(games)
+
+        # 回傳平均 loss
+        return (total_value_loss.item() / len(games),
+                total_policy_loss.item() / len(games),
+                total_reward_loss.item() / len(games),
+                total_loss.item() / len(games))
     else:
-        return 0.0
+        return 0.0, 0.0, 0.0, 0.0
 
 
 def muzero_self_play(env, muzero_agent: agent.MuZeroAgent, replay_buffer: buffer.MuZeroReplayBuffer, logger):
@@ -659,10 +677,11 @@ def main():
 
         # 2) Train step
         if ep % args.training_frequency == 0 and len(replay_buffer) >= args.batch_size:
-            loss = muzero_train_step(network, optimizer, replay_buffer,
+            value_loss, policy_loss, reward_loss, total_loss = muzero_train_step(network, optimizer, replay_buffer,
                                      args.batch_size, args.muzero_unroll_steps,
                                      args.muzero_discount, device, logger)
-            logger.info(f"Episode {ep}: train loss={loss:.4f}")
+            logger.info(f"Episode {ep}: train loss={total_loss:.4f}")
+            loss_record.append({'episode': ep, 'value_loss': value_loss, 'policy_loss': policy_loss, 'reward_loss': reward_loss, 'total_loss': total_loss})
 
         # 3) Evaluation & Plotting
         if ep % args.evaluation_frequency == 0:

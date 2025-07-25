@@ -545,5 +545,5 @@ def run_muzero_mcts(
     logger.debug(f"[FINAL] legal0: {legal0}")
     logger.debug(f"[FINAL] root.children.keys(): {list(root.children.keys())}")
     logger.debug(f"[FINAL] visit_counts: {visit_counts.tolist()}")
-    assert False
+    
     return visit_counts
