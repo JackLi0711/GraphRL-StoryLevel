@@ -48,7 +48,7 @@ def parse_muzero_args() -> argparse.Namespace:
     parser.add_argument("--num_layers", type=int, default=3)
     
     # MuZero 參數
-    parser.add_argument("--muzero_num_simulations", type=int, default=2)
+    parser.add_argument("--muzero_num_simulations", type=int, default=20)
     parser.add_argument("--muzero_unroll_steps", type=int, default=3)
     parser.add_argument("--muzero_temperature", type=float, default=1.0)
     parser.add_argument("--muzero_temperature_decay", type=float, default=0.97)
@@ -577,6 +577,7 @@ def main():
     
     env_kwargs = {
         "structure_shape": args.structure_shape,
+        "restrict_action": args.restrict_action,
         "add_structure_geometry": args.add_structure_geometry,
         "add_response_features": args.add_response_features,
         "reward_type": args.reward_type,

@@ -473,10 +473,9 @@ def run_muzero_mcts(
     logger.debug(f"[ROOT EXPAND] legal0: {legal0}")
     logger.debug(f"[ROOT EXPAND] root.children.keys(): {list(root.children.keys())}")
 
-    root_temp = deepcopy(root)
     # ---------- simulations ----------
     for sim in range(num_simulations):
-        node  = root_temp
+        node  = root
         path  = [node]
         actions_taken = []
 
@@ -541,8 +540,10 @@ def run_muzero_mcts(
     # ---------- collect visit counts ----------
     visit_counts = torch.zeros(len(legal0), device=root_hidden_state.device)
     for idx, a in enumerate(legal0):
+        print(f'root.children[{a}]: {root.children[a].visit_count}')
         visit_counts[idx] = root.children[a].visit_count if a in root.children else 0
     logger.debug(f"[FINAL] legal0: {legal0}")
     logger.debug(f"[FINAL] root.children.keys(): {list(root.children.keys())}")
     logger.debug(f"[FINAL] visit_counts: {visit_counts.tolist()}")
+    assert False
     return visit_counts
