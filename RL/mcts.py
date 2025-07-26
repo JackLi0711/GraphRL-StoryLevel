@@ -470,6 +470,14 @@ def run_muzero_mcts(
 
     for a in legal0:
         root.children[a] = MuZeroNode(prior=probs[a].item())
+
+    # -------- Dirichlet exploration noise (MuZero) --------
+    if len(legal0) > 0:
+        epsilon = 0.25
+        alpha   = 0.3
+        dirichlet_noise = np.random.dirichlet([alpha] * len(legal0)).astype(float)
+        for i, a in enumerate(legal0):
+            root.children[a].prior = (1 - epsilon) * root.children[a].prior + epsilon * dirichlet_noise[i]
     logger.debug(f"[ROOT EXPAND] legal0: {legal0}")
     logger.debug(f"[ROOT EXPAND] root.children.keys(): {list(root.children.keys())}")
 

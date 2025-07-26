@@ -1,9 +1,9 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from typing import List
+import json
+from typing import List, Dict, Sequence
 from pathlib import Path
 from collections import Counter
-from typing import Sequence
 
 from RL.record import Record
 from RL.environment import Environment
@@ -394,6 +394,74 @@ def plot_MuZero_combined_figure(
     fig.savefig(out_path, dpi=1000, bbox_inches="tight")
     plt.close(fig)
 
+
+def plot_muzero_losses(loss_record: List[Dict], save_dir: Path, save_json: bool = True):
+    """
+    繪製並儲存 MuZero 訓練過程中的各項 loss 曲線。
+
+    Args:
+        loss_record: List of dicts, 每個 dict 包含 'episode', 'value_loss', 'policy_loss', 'reward_loss', 'total_loss'
+        save_dir: 儲存圖片和 JSON 的目錄路徑
+        save_json: 是否同時儲存 JSON 檔案
+    """
+    if not loss_record:  # 確保有數據再畫
+        return
+    
+    # 1. 儲存 JSON
+    if save_json:
+        with open(save_dir / 'loss_history.json', 'w') as f:
+            json.dump(loss_record, f)
+    
+    # 2. 準備數據
+    episodes = [d['episode'] for d in loss_record]
+    v_losses = [d['value_loss'] for d in loss_record]
+    p_losses = [d['policy_loss'] for d in loss_record]
+    r_losses = [d['reward_loss'] for d in loss_record]
+    t_losses = [d['total_loss'] for d in loss_record]
+    
+    # 3. 畫圖
+    plt.figure(figsize=(12, 8))
+    
+    # 主圖：所有 loss
+    plt.subplot(2, 1, 1)
+    plt.plot(episodes, v_losses, label='Value Loss', marker='o', markersize=3)
+    plt.plot(episodes, p_losses, label='Policy Loss', marker='s', markersize=3)
+    plt.plot(episodes, r_losses, label='Reward Loss', marker='^', markersize=3)
+    plt.plot(episodes, t_losses, label='Total Loss', marker='*', markersize=4, linewidth=2)
+    plt.xlabel('Episode')
+    plt.ylabel('Loss Value')
+    plt.title('MuZero Training Losses')
+    plt.legend()
+    plt.grid(True)
+    
+    # 子圖：三個主要 loss（不含 total）的細節
+    plt.subplot(2, 1, 2)
+    plt.plot(episodes, v_losses, label='Value Loss', marker='o', markersize=3)
+    plt.plot(episodes, p_losses, label='Policy Loss', marker='s', markersize=3)
+    plt.plot(episodes, r_losses, label='Reward Loss', marker='^', markersize=3)
+    plt.xlabel('Episode')
+    plt.ylabel('Loss Value')
+    plt.title('Individual Losses (Detail View)')
+    plt.legend()
+    plt.grid(True)
+    
+    # 調整子圖間距
+    plt.tight_layout()
+    
+    # 4. 儲存圖片
+    plt.savefig(save_dir / 'loss_history.png', dpi=300, bbox_inches='tight')
+    plt.close()
+
+def plot_muzero_metrics(metrics: Dict[str, List], save_dir: Path):
+    """
+    繪製 MuZero 訓練過程中的其他指標（如 reward、episode length 等）。
+
+    Args:
+        metrics: Dict of lists, 包含各種指標的歷史記錄
+        save_dir: 儲存圖片的目錄路徑
+    """
+    # TODO: 實作其他指標的繪圖邏輯
+    pass
 
 
 if __name__ == "__main__":

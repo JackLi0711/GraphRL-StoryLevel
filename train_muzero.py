@@ -680,8 +680,12 @@ def main():
             value_loss, policy_loss, reward_loss, total_loss = muzero_train_step(network, optimizer, replay_buffer,
                                      args.batch_size, args.muzero_unroll_steps,
                                      args.muzero_discount, device, logger)
-            logger.info(f"Episode {ep}: train loss={total_loss:.4f}")
+            logger.info(f"Episode {ep}: train loss={total_loss:.4f}, value_loss={value_loss:.4f}, policy_loss={policy_loss:.4f}, reward_loss={reward_loss:.4f}")
             loss_record.append({'episode': ep, 'value_loss': value_loss, 'policy_loss': policy_loss, 'reward_loss': reward_loss, 'total_loss': total_loss})
+            
+            # 使用 plot.py 中的函數繪製 loss history
+            from Visualization.plot import plot_muzero_losses
+            plot_muzero_losses(loss_record, plots_dir)
 
         # 3) Evaluation & Plotting
         if ep % args.evaluation_frequency == 0:
