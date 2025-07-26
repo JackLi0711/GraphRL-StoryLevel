@@ -56,7 +56,7 @@ def parse_muzero_args() -> argparse.Namespace:
     
     # 訓練參數
     parser.add_argument("--num_episodes", type=int, default=100)
-    parser.add_argument("--batch_size", type=int, default=32)
+    parser.add_argument("--batch_size", type=int, default=16)
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--buffer_capacity", type=int, default=1000)
     parser.add_argument("--training_frequency", type=int, default=5)
