@@ -428,10 +428,10 @@ def visualize_design_process(agent: agent.DeepQAgent,
     # generate animation
     _frames_to_video(env.checkpoint_dir, save_dir, testing_structure, taller_structure, chances=original_chances)
 
-    print(f"action list: {action_list[:-1]}")
-    print(f"final design: {original_structure.story_level_sections}")
-    print(f"material usage: {env.material_usage_record[-1]:5.2f} m3")
-    print(f"reduced material: {np.sum(env.saved_material_record):5.2f} m3")  
+    logger.info(f"action list: {action_list[:-1]}")
+    logger.info(f"final design: {original_structure.story_level_sections}")
+    logger.info(f"material usage: {env.material_usage_record[-1]:5.2f} m3")
+    logger.info(f"reduced material: {np.sum(env.saved_material_record):5.2f} m3")  
 
     # ========================== plot the action sequence ==========================
     # added for better realization of action sequence

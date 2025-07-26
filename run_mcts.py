@@ -36,9 +36,9 @@ def parse_args() -> Namespace:
     parser.add_argument("--dqn_checkpoint_dir", type=Path, default='./models/DQN/20250605_RSA_model_HighestScore.pt', help="Required for HybridMCTS. Path to a pretrained DQN agent checkpoint.")
 
     # MCTS Hyperparameters
-    parser.add_argument("--n_simulations", type=int, default=10, help="Number of simulations per MCTS search.")
+    parser.add_argument("--n_simulations", type=int, default=80, help="Number of simulations per MCTS search.")
     parser.add_argument("--c_puct", type=float, default=3.0, help="Exploration constant for UCT in MCTS.")
-    parser.add_argument("--rollout_depth", type=int, default=3, help="For HybridMCTS, number of random steps in rollout before using DQN.")
+    parser.add_argument("--rollout_depth", type=int, default=1, help="For HybridMCTS, number of random steps in rollout before using DQN.")
     parser.add_argument("--gamma", type=float, default=0.99, help="Discount factor for MCTS.")
 
     # Environment Arguments (copied from train.py for consistency)
@@ -93,7 +93,7 @@ def run_mcts_episode(mcts_agent, env, rec, logger):
     state = env.reset()
     rec.testing_record['initial_design'].append(state.story_level_sections)
     logger.info(f"Initial Design: {state.story_level_sections}, Volume: {state.calculate_material_usage():.3f}")
-
+    initial_usage = state.calculate_material_usage()
     done = False
     total_reward = 0
     step_count = 0
@@ -118,7 +118,7 @@ def run_mcts_episode(mcts_agent, env, rec, logger):
     # Decide which state to record as the final one
     final_state_to_record = state 
     final_volume = final_state_to_record.calculate_material_usage()
-    score = total_reward
+    score = initial_usage - final_volume
     
     rec.testing_record["score"].append(score)
     rec.testing_record["final_volume"].append(final_volume)
@@ -207,6 +207,7 @@ def main(args):
     logger.critical("MCTS run finished.")
     logger.critical(f"Minimum Material Usage: {np.min(rec.testing_record['final_volume']):.3f} m3, Story Level Sections: {rec.testing_record['final_design'][np.argmin(rec.testing_record['final_volume'])]}")
     logger.critical(f"Highest Score: {np.max(rec.testing_record['score']):.3f}, Story Level Sections: {rec.testing_record['final_design'][np.argmax(rec.testing_record['score'])]}")
+    logger.critical(f'reduced material: {np.sum(env.saved_material_record):5.2f} m3')
 
     # Plotting (using a simplified reward plot for MCTS)
     plot.plot_reward([], rec.testing_record["score"], args.ckpt_dir, is_mcts=True)
