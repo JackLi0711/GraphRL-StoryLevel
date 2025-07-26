@@ -7,6 +7,38 @@ from torch_scatter import scatter_mean, scatter_add
 from torch_geometric.nn import global_mean_pool, global_add_pool
 
 
+# MuZero Value Transform Functions
+EPS = 0.001
+
+def scalar_to_support(x):
+    """
+    MuZero 的 scalar to support transform
+    將任意大小的 scalar 值轉換為較穩定的支撐表示
+    
+    Args:
+        x: tensor of scalars (reward/value)
+    Returns:
+        transformed tensor
+    """
+    s = torch.sign(x)
+    y = torch.sqrt(torch.abs(x) + 1) - 1
+    return s * (y + EPS * x)
+
+
+def support_to_scalar(z):
+    """
+    MuZero 的 support to scalar transform (inverse transform)
+    將支撐表示轉換回原始 scalar 值
+    
+    Args:
+        z: tensor of transformed values
+    Returns:
+        original scalar tensor
+    """
+    s = torch.sign(z)
+    return s * (((torch.sqrt(1 + 4 * EPS * (torch.abs(z) + 1 + EPS)) - 1) / (2 * EPS))**2 - 1)
+
+
 class StateGNN(nn.Module):
     def __init__(self, node_feature_dim, edge_feature_dim, hidden_dim, member_state_dim, num_layers):
         super().__init__()
@@ -462,7 +494,9 @@ class MuZeroNetwork(nn.Module):
         if num_actions is not None and num_actions < self.max_num_actions:
             policy_logits = policy_logits[:, :num_actions]
         
-        value = self.value_head(x)
+        # 網路輸出原始value，然後應用MuZero transform
+        raw_value = self.value_head(x)
+        value = scalar_to_support(raw_value)
         return policy_logits, value
     
     def dynamics(self, hidden_state, action, num_actions=None):
@@ -511,7 +545,9 @@ class MuZeroNetwork(nn.Module):
         stacked_input = torch.cat([hidden_state, action_one_hot], dim=-1)
         
         x = self.dynamics_network(stacked_input)
-        reward = self.reward_head(x)
+        # 網路輸出原始reward，然後應用MuZero transform
+        raw_reward = self.reward_head(x)
+        reward = scalar_to_support(raw_reward)
         next_hidden_state = self.next_state_head(x)
         
         # 正規化下一個隱藏狀態

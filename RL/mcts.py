@@ -6,6 +6,24 @@ from copy import deepcopy
 from typing import Sequence
 
 
+class MinMaxStats:
+    """追蹤搜尋樹中Q值的最小值和最大值，用於正規化"""
+    def __init__(self):
+        self.minimum = float('inf')
+        self.maximum = float('-inf')
+    
+    def update(self, value: float):
+        """更新統計值"""
+        self.minimum = min(self.minimum, value)
+        self.maximum = max(self.maximum, value)
+    
+    def normalize(self, value: float) -> float:
+        """將Q值正規化到[0,1]範圍"""
+        if self.maximum > self.minimum:
+            return (value - self.minimum) / (self.maximum - self.minimum)
+        return 0.0  # 如果min==max，返回0避免除零錯誤
+
+
 class MCTSNode:
     """A node in the Monte Carlo Search Tree."""
     def __init__(self, state, parent=None, action=None, is_terminal=False):
@@ -253,17 +271,37 @@ class MuZeroNode:
         return 0.0 if self.visit_count == 0 else self.value_sum / self.visit_count
 
 
-def muzero_ucb_score(parent: MuZeroNode, child: MuZeroNode, 
+def muzero_ucb_score(parent: MuZeroNode, child: MuZeroNode, min_max_stats: MinMaxStats,
                      c1: float = 1.25, c2: float = 19652) -> float:
     """ 
-    MuZero 的 UCB 分數計算 
+    MuZero 的 UCB 分數計算，包含Q值正規化
     基於論文中的 PUCT (Polynomial Upper Confidence Trees) 公式
+    
+    Args:
+        parent: 父節點
+        child: 子節點
+        min_max_stats: 用於Q值正規化的統計對象
+        c1: UCB常數項
+        c2: UCB常數項
+    
+    Returns:
+        ucb_score: UCB分數
+        prior_score: exploration項分數
+        normalized_value: 正規化後的Q值
     """
+    # 計算exploration項 (prior score)
     pb_c = math.log((parent.visit_count + c2 + 1) / c2) + c1
     pb_c *= math.sqrt(parent.visit_count) / (child.visit_count + 1)
     prior_score = pb_c * child.prior
-    value_score = child.value()
-    return prior_score + value_score, prior_score, value_score
+    
+    # 獲取原始Q值並進行正規化
+    raw_value = child.value()
+    normalized_value = min_max_stats.normalize(raw_value)
+    
+    # UCB = exploration + exploitation
+    ucb_score = prior_score + normalized_value
+    
+    return ucb_score, prior_score, normalized_value
 
 
 def run_muzero_mcts(
@@ -283,6 +321,9 @@ def run_muzero_mcts(
             logger.addHandler(logging.StreamHandler())
         logger.setLevel(logging.DEBUG)
 
+    # 初始化MinMaxStats用於Q值正規化
+    min_max_stats = MinMaxStats()
+    
     root = MuZeroNode(0.0, hidden_state=root_hidden_state, structure=root_structure)
 
     # ---------- expand root ----------
@@ -316,10 +357,10 @@ def run_muzero_mcts(
                 logger.debug(f"node.children[{a}].prior: {node.children[a].prior}")
                 logger.debug(f"node.children[{a}].visit_count: {node.children[a].visit_count}")
                 logger.debug(f"node.children[{a}].value(): {node.children[a].value()}")
-                uct_score, prior_score, value_score = muzero_ucb_score(path[-1], node.children[a])
-                logger.debug(f"node.children[{a}].uct_score: {uct_score}, prior_score: {prior_score}, value_score: {value_score}")
+                uct_score, prior_score, normalized_value = muzero_ucb_score(path[-1], node.children[a], min_max_stats)
+                logger.debug(f"node.children[{a}].uct_score: {uct_score}, prior_score: {prior_score}, normalized_value: {normalized_value}")
             action, node = max(node.children.items(),
-                               key=lambda kv: muzero_ucb_score(path[-1], kv[1])[0])
+                               key=lambda kv: muzero_ucb_score(path[-1], kv[1], min_max_stats)[0])
             path.append(node)
             actions_taken.append(action)
             logger.debug(f"[SIM {sim}] Selection {len(actions_taken)}:  path actions: {actions_taken}")
@@ -349,9 +390,14 @@ def run_muzero_mcts(
             logits, value = network.predict(next_hidden, None)
             probs = torch.softmax(logits.squeeze(), dim=-1)
 
+        # 將transformed values轉換回原始scale用於MCTS
+        from RL.model import support_to_scalar
+        original_reward = support_to_scalar(reward_pred).item()
+        original_value = support_to_scalar(value).item()
+
         # 更新目前 node
         node.hidden_state = next_hidden
-        node.reward       = reward_pred.item()
+        node.reward       = original_reward  # 使用轉換回原始scale的reward
         node.structure    = deepcopy(new_structure)
 
         # expand children with *its* legal actions, only if not done
@@ -368,10 +414,16 @@ def run_muzero_mcts(
             logger.debug(f"[SIM {sim}] Node.children.keys(): {list(node.children.keys())}")
 
         # c) back-prop
-        bootstrap = value.item()
+        bootstrap = original_value  # 使用轉換回原始scale的value
+        # 更新MinMaxStats
+        min_max_stats.update(bootstrap)
+        
         for n in reversed(path):
             n.value_sum  += bootstrap
             n.visit_count += 1
+            # 同時更新MinMaxStats以追蹤所有節點的Q值範圍
+            if n.visit_count > 0:
+                min_max_stats.update(n.value())
             bootstrap = n.reward + discount * bootstrap
 
     # ---------- collect visit counts ----------
@@ -382,5 +434,6 @@ def run_muzero_mcts(
     logger.debug(f"[FINAL] legal0: {legal0}")
     logger.debug(f"[FINAL] root.children.keys(): {list(root.children.keys())}")
     logger.debug(f"[FINAL] visit_counts: {visit_counts.tolist()}")
+    logger.debug(f"[FINAL] min_max_stats: min={min_max_stats.minimum:.4f}, max={min_max_stats.maximum:.4f}")
     
     return visit_counts

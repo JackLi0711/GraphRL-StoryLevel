@@ -202,8 +202,10 @@ def muzero_train_step(network: model.MuZeroNetwork, optimizer: torch.optim.Optim
 
                 # ----- value loss (使用 N-step return 以反映 bootstrapping) -----
                 target_value = calculate_n_step_return(game, start_index + k, unroll_steps, discount)
+                # 將目標value也轉換到support space進行比較
                 target_value_tensor = torch.tensor([target_value], dtype=torch.float32, device=device)
-                value_losses.append(torch.nn.functional.mse_loss(value_pred.squeeze(), target_value_tensor))
+                target_value_transformed = model.scalar_to_support(target_value_tensor)
+                value_losses.append(torch.nn.functional.mse_loss(value_pred.squeeze(), target_value_transformed.squeeze()))
 
                 # ----- policy loss (KL divergence) -----
                 target_policy = game.policies[start_index + k].to(device)
@@ -218,7 +220,9 @@ def muzero_train_step(network: model.MuZeroNetwork, optimizer: torch.optim.Optim
 
                     # 真實 reward
                     true_reward = torch.tensor([game.rewards[start_index + k]], dtype=torch.float32, device=device)
-                    reward_losses.append(torch.nn.functional.mse_loss(reward_pred.squeeze(), true_reward))
+                    # 將目標reward也轉換到support space進行比較
+                    true_reward_transformed = model.scalar_to_support(true_reward)
+                    reward_losses.append(torch.nn.functional.mse_loss(reward_pred.squeeze(), true_reward_transformed.squeeze()))
 
                     # 前進 hidden
                     hidden = hidden_next.detach()  # 避免時間步之間梯度重複計算
@@ -325,6 +329,8 @@ def muzero_self_play(env, muzero_agent: agent.MuZeroAgent, replay_buffer: buffer
             with torch.no_grad():
                 hidden_state = muzero_agent.network.represent(obs)
                 _, value_pred = muzero_agent.network.predict(hidden_state)
+                # 將transformed value轉換回原始scale
+                original_value = model.support_to_scalar(value_pred).item()
             
             # 執行動作
             next_structure, reward, done, fail_name, fail_reason = env.step(structure_temp, actual_action)
@@ -363,7 +369,7 @@ def muzero_self_play(env, muzero_agent: agent.MuZeroAgent, replay_buffer: buffer
             next_obs = next_obs.to(device)
             
             # 儲存步驟數據（轉回 CPU 以節省記憶體）
-            current_game.add_step(obs.to('cpu'), actual_action, reward, policy.to('cpu'), done, value_pred.item())
+            current_game.add_step(obs.to('cpu'), actual_action, reward, policy.to('cpu'), done, original_value)
             
             structure = next_structure
             obs = next_obs
