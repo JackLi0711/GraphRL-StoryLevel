@@ -81,7 +81,9 @@ class MCTSAgent:
             while not node.is_terminal:
                 if node.untried_actions is None:
                     # First time visiting this node, get its possible actions
-                    node.set_untried_actions(self.env.get_legal_actions(node.state))
+                    # Create a copy of the environment for getting legal actions to avoid affecting the original env
+                    temp_env = deepcopy(self.env)
+                    node.set_untried_actions(temp_env.get_legal_actions(node.state))
 
                 # If the node has untried actions, it's not fully expanded
                 if node.untried_actions:
@@ -102,19 +104,19 @@ class MCTSAgent:
             reward = self._simulate_and_evaluate(node)
             self._backpropagate(node, reward)
             
-        # DEBUGGING LOGS =======================================================
-        if root.children:
-            self.env.logger.info("--- MCTS Root Children Stats ---")
-            sorted_children = sorted(root.children, key=lambda c: c.action)
-            for child in sorted_children:
-                self.env.logger.info(
-                    f"Action: {child.action}, "
-                    f"Q-Value: {child.q_value:.4f}, "
-                    f"Visit Count: {child.visit_count}, "
-                    f"UCT Value: {child.uct_value(c_puct=self.c_puct):.4f}" # Use c_puct=0 to see pure Q-value
-                )
-            self.env.logger.info("------------------------------------")
-        # ======================================================================
+        # # DEBUGGING LOGS =======================================================
+        # if root.children:
+        #     self.env.logger.info("--- MCTS Root Children Stats ---")
+        #     sorted_children = sorted(root.children, key=lambda c: c.action)
+        #     for child in sorted_children:
+        #         self.env.logger.info(
+        #             f"Action: {child.action}, "
+        #             f"Q-Value: {child.q_value:.4f}, "
+        #             f"Visit Count: {child.visit_count}, "
+        #             f"UCT Value: {child.uct_value(c_puct=self.c_puct):.4f}" # Use c_puct=0 to see pure Q-value
+        #         )
+        #     self.env.logger.info("------------------------------------")
+        # # ======================================================================
 
         if not root.children:
             return None 
@@ -128,7 +130,9 @@ class MCTSAgent:
         action = node.untried_actions.pop()
         
         next_structure_state = deepcopy(node.state)
-        _, _, done, _, _ = self.env.step(next_structure_state, action)
+        # Create a copy of the environment for simulation to avoid affecting the original env
+        sim_env = deepcopy(self.env)
+        _, _, done, _, _ = sim_env.step(next_structure_state, action)
         
         child_node = MCTSNode(next_structure_state, parent=node, action=action, is_terminal=done)
         node.children.append(child_node)
@@ -149,20 +153,22 @@ class MCTSAgent:
         Performs a random rollout from the state until a terminal state is reached.
         """
         current_state = deepcopy(state)
+        # Create a copy of the environment for simulation to avoid affecting the original env
+        sim_env = deepcopy(self.env)
         
         while True:
             # Check if current state is terminal
-            if self.env.is_terminal(current_state):
-                 _, final_reward, _, _, _ = self.env.step(current_state, action=None) # Get terminal reward
+            if sim_env.is_terminal(current_state):
+                 _, final_reward, _, _, _ = sim_env.step(current_state, action=None) # Get terminal reward
                  return final_reward
 
-            legal_actions = self.env.get_legal_actions(current_state)
+            legal_actions = sim_env.get_legal_actions(current_state)
             if not legal_actions: # No more moves, terminal state
-                _, final_reward, _, _, _ = self.env.step(current_state, action=None) # Get terminal reward
+                _, final_reward, _, _, _ = sim_env.step(current_state, action=None) # Get terminal reward
                 return final_reward
             
             action = random.choice(legal_actions)
-            _, reward, done, _, _ = self.env.step(current_state, action)
+            _, reward, done, _, _ = sim_env.step(current_state, action)
             
             if done:
                 return reward
@@ -173,20 +179,23 @@ class MCTSAgent:
         Performs a short random rollout and then uses DQN to evaluate the final state.
         """
         current_state = deepcopy(state)
+        # Create a copy of the environment for simulation to avoid affecting the original env
+        sim_env = deepcopy(self.env)
         total_rollout_reward = 0.0
         actions_taken = []
+        
         for i in range(self.rollout_depth):
-            if self.env.is_terminal(current_state):
-                _, final_reward, _, _, _ = self.env.step(current_state, action=None)
+            if sim_env.is_terminal(current_state):
+                _, final_reward, _, _, _ = sim_env.step(current_state, action=None)
                 return final_reward
 
-            legal_actions = self.env.get_legal_actions(current_state)
+            legal_actions = sim_env.get_legal_actions(current_state)
             if not legal_actions:
-                _, final_reward, _, _, _ = self.env.step(current_state, action=None)
+                _, final_reward, _, _, _ = sim_env.step(current_state, action=None)
                 return final_reward
             
             action = random.choice(legal_actions)
-            _, reward, done, _, _ = self.env.step(current_state, action)
+            _, reward, done, _, _ = sim_env.step(current_state, action)
             actions_taken.append(action)
             total_rollout_reward += (self.gamma ** i) * reward
 
@@ -200,11 +209,11 @@ class MCTSAgent:
         from Structure import check
         try:
             # Run the full analysis process to get 'static_response_features'
-            load_cases, responses = check.get_response(graph_for_dqn, self.env.code_analysis_dir)
+            load_cases, responses = check.get_response(graph_for_dqn, sim_env.code_analysis_dir)
             _, static_features, _ = check.process_response(graph_for_dqn, load_cases, responses)
         except Exception as e:
             # If the analysis itself fails, it's a very bad state.
-            self.env.logger.error(f"Analysis failed during hybrid simulation: {e}")
+            sim_env.logger.error(f"Analysis failed during hybrid simulation: {e}")
             return -100.0  # Return a very low value for designs that cause errors.
 
         # Now, initialize the graph with the real features. Dynamic features are not needed for this evaluation.
@@ -215,10 +224,10 @@ class MCTSAgent:
 
         state_value_estimate = self.dqn_agent.get_state_value(graph_to_evaluate)
         final_value = total_rollout_reward + (self.gamma ** self.rollout_depth) * state_value_estimate
-        self.env.logger.info('='*100)
-        self.env.logger.info(f"Hybrid Sim: Rollout Reward={total_rollout_reward:.4f}, DQN Value={state_value_estimate:.4f}, Final Value={final_value:.4f}")
-        self.env.logger.info(f"Hybrid Sim: Actions Taken={actions_taken}")
-        self.env.logger.info('='*100)
+        sim_env.logger.info('='*100)
+        sim_env.logger.info(f"Hybrid Sim: Rollout Reward={total_rollout_reward:.4f}, DQN Value={state_value_estimate:.4f}, Final Value={final_value:.4f}")
+        sim_env.logger.info(f"Hybrid Sim: Actions Taken={actions_taken}")
+        sim_env.logger.info('='*100)
 
         return total_rollout_reward + (self.gamma ** self.rollout_depth) * state_value_estimate
 

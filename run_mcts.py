@@ -17,7 +17,7 @@ sys.path.append("Visualization")
 sys.path.append("NonlinearDynamicAnalysisSimulator/")
 
 from RL import agent, environment, record, mcts
-from Visualization import plot
+from Visualization import plot, visualize
 from NonlinearDynamicAnalysisSimulator import load_simulator
 
 
@@ -38,7 +38,7 @@ def parse_args() -> Namespace:
     # MCTS Hyperparameters
     parser.add_argument("--n_simulations", type=int, default=80, help="Number of simulations per MCTS search.")
     parser.add_argument("--c_puct", type=float, default=3.0, help="Exploration constant for UCT in MCTS.")
-    parser.add_argument("--rollout_depth", type=int, default=1, help="For HybridMCTS, number of random steps in rollout before using DQN.")
+    parser.add_argument("--rollout_depth", type=int, default=3, help="For HybridMCTS, number of random steps in rollout before using DQN.")
     parser.add_argument("--gamma", type=float, default=0.99, help="Discount factor for MCTS.")
 
     # Environment Arguments (copied from train.py for consistency)
@@ -108,6 +108,7 @@ def run_mcts_episode(mcts_agent, env, rec, logger):
             break
     
         next_state, reward, done, fail_name, fail_reason = env.step(state, action)
+        logger.info(f'material saved in this step: {env.saved_material_record[-1]:.2f} m3')
         total_reward += reward
         state = next_state
         step_count += 1
@@ -205,6 +206,7 @@ def main(args):
         run_mcts_episode(mcts_agent, env, rec, logger)
 
     logger.critical("MCTS run finished.")
+    logger.critical(f'material usage: {env.saved_material_record}')
     logger.critical(f"Minimum Material Usage: {np.min(rec.testing_record['final_volume']):.3f} m3, Story Level Sections: {rec.testing_record['final_design'][np.argmin(rec.testing_record['final_volume'])]}")
     logger.critical(f"Highest Score: {np.max(rec.testing_record['score']):.3f}, Story Level Sections: {rec.testing_record['final_design'][np.argmax(rec.testing_record['score'])]}")
     logger.critical(f'reduced material: {np.sum(env.saved_material_record):5.2f} m3')
@@ -214,6 +216,9 @@ def main(args):
     plot.plot_fail_names([], rec.testing_record["fail_name"], args.ckpt_dir, is_mcts=True)
     plot.plot_fail_reasons([], rec.testing_record["fail_reason"], args.ckpt_dir, is_mcts=True)
     plot.plot_test_behaviors(rec, env, args.ckpt_dir)
+
+    # visulize the final design 
+    visualize._visualize_one_iteration(rec.testing_record["final_design"][-1], 0, env, 0, 0, 0, args.ckpt_dir / "final_design.png")
 
 
 if __name__ == "__main__":

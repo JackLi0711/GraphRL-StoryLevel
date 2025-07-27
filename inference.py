@@ -42,7 +42,7 @@ def parse_args() -> Namespace:
 	parser.add_argument("--ground_motion_number", type=int, default=11, help="ASCE says 11 is better")
 
 	# structure
-	parser.add_argument("--structure_shape", type=str, default="random", help="fixed, small_random, random")
+	parser.add_argument("--structure_shape", type=str, default="fixed", help="fixed, small_random, random")
 	parser.add_argument("--add_structure_geometry", action="store_true", default=True)
 	parser.add_argument("--add_response_features", action="store_true", default=True)
 	parser.add_argument("--reward_type", type=str, default="material", help="material, acceleration, displacement, normalized, total, combined")

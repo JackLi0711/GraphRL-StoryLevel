@@ -338,6 +338,7 @@ def visualize_design_process(agent: agent.DeepQAgent,
     accumulated_reward = 0
     timestep = 0
     action_list = []
+    initial_material_usage = structure.calculate_material_usage()
     while not done:
         original_structure = deepcopy(structure)
         # go through gnn and get embedding before q-network
@@ -427,11 +428,15 @@ def visualize_design_process(agent: agent.DeepQAgent,
 
     # generate animation
     _frames_to_video(env.checkpoint_dir, save_dir, testing_structure, taller_structure, chances=original_chances)
-
+    
+    final_material_usage = structure.calculate_material_usage()
+    reduced_material = initial_material_usage - final_material_usage
     logger.info(f"action list: {action_list[:-1]}")
     logger.info(f"final design: {original_structure.story_level_sections}")
     logger.info(f"material usage: {env.material_usage_record[-1]:5.2f} m3")
-    logger.info(f"reduced material: {np.sum(env.saved_material_record):5.2f} m3")  
+    logger.info(f"initial material usage: {initial_material_usage:5.2f} m3")
+    logger.info(f"final material usage: {final_material_usage:5.2f} m3")
+    logger.info(f"reduced material: {reduced_material:5.2f} m3")  
 
     # ========================== plot the action sequence ==========================
     # added for better realization of action sequence
