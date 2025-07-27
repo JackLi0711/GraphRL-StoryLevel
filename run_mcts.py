@@ -37,8 +37,8 @@ def parse_args() -> Namespace:
 
     # MCTS Hyperparameters
     parser.add_argument("--n_simulations", type=int, default=80, help="Number of simulations per MCTS search.")
-    parser.add_argument("--c_puct", type=float, default=3.0, help="Exploration constant for UCT in MCTS.")
-    parser.add_argument("--rollout_depth", type=int, default=3, help="For HybridMCTS, number of random steps in rollout before using DQN.")
+    parser.add_argument("--c_puct", type=float, default=0.01, help="Exploration constant for UCT in MCTS.")
+    parser.add_argument("--rollout_depth", type=int, default=1, help="For HybridMCTS, number of random steps in rollout before using DQN.")
     parser.add_argument("--gamma", type=float, default=0.99, help="Discount factor for MCTS.")
 
     # Environment Arguments (copied from train.py for consistency)
@@ -88,7 +88,7 @@ def get_loggings(ckpt_dir):
     logger.addHandler(file_handler)
     return logger
 
-def run_mcts_episode(mcts_agent, env, rec, logger):
+def run_mcts_episode(mcts_agent, env, rec, logger, ckpt_dir):
     """Runs a single episode of MCTS-driven design."""
     state = env.reset()
     rec.testing_record['initial_design'].append(state.story_level_sections)
@@ -129,6 +129,14 @@ def run_mcts_episode(mcts_agent, env, rec, logger):
     rec.testing_record["fail_reason"].append(fail_reason)
 
     logger.info(f"Final Design: {final_state_to_record.story_level_sections}, Volume: {final_volume:.3f}, Score: {score:.3f}")
+
+    # visulize the final design 
+    device = mcts_agent.dqn_agent.device
+    graph = final_state_to_record.graph.clone().to(device)
+    state = mcts_agent.dqn_agent.gnn(graph.x, graph.edge_index, graph.edge_attr, None, final_state_to_record.aux["story_batch"].to(device), None)
+
+    q_values = mcts_agent.dqn_agent.online_q_network(state)
+    visualize._visualize_one_iteration(final_state_to_record, 0, env, 0, 0, q_values, ckpt_dir / "final_design.png")
 
 
 def main(args):
@@ -203,7 +211,7 @@ def main(args):
     logger.critical(f"Starting MCTS run for {args.num_epoch} episodes...")
     for i in range(args.num_epoch):
         logger.info(f"--- Starting Episode {i+1}/{args.num_epoch} ---")
-        run_mcts_episode(mcts_agent, env, rec, logger)
+        run_mcts_episode(mcts_agent, env, rec, logger, args.ckpt_dir)
 
     logger.critical("MCTS run finished.")
     logger.critical(f'material usage: {env.saved_material_record}')
@@ -216,9 +224,6 @@ def main(args):
     plot.plot_fail_names([], rec.testing_record["fail_name"], args.ckpt_dir, is_mcts=True)
     plot.plot_fail_reasons([], rec.testing_record["fail_reason"], args.ckpt_dir, is_mcts=True)
     plot.plot_test_behaviors(rec, env, args.ckpt_dir)
-
-    # visulize the final design 
-    visualize._visualize_one_iteration(rec.testing_record["final_design"][-1], 0, env, 0, 0, 0, args.ckpt_dir / "final_design.png")
 
 
 if __name__ == "__main__":
