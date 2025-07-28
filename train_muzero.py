@@ -44,14 +44,15 @@ def parse_muzero_args() -> argparse.Namespace:
     
     # 模型參數
     parser.add_argument("--model_type", type=str, default="Taiwan", help="Taiwan, Japan")
-    parser.add_argument("--hidden_dim", type=int, default=10)
+    parser.add_argument("--hidden_dim", type=int, default=100)
     parser.add_argument("--num_layers", type=int, default=3)
     
     # MuZero 參數
-    parser.add_argument("--muzero_num_simulations", type=int, default=30)
+    parser.add_argument("--muzero_num_simulations", type=int, default=50)
     parser.add_argument("--muzero_unroll_steps", type=int, default=3)
     parser.add_argument("--muzero_temperature", type=float, default=1.0)
     parser.add_argument("--muzero_temperature_decay", type=float, default=0.92)
+    parser.add_argument("--temperature_decay_frequency", type=int, default=4)
     parser.add_argument("--muzero_discount", type=float, default=0.99)
     
     # 訓練參數
@@ -60,7 +61,7 @@ def parse_muzero_args() -> argparse.Namespace:
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--buffer_capacity", type=int, default=1000)
     parser.add_argument("--training_frequency", type=int, default=5)
-    parser.add_argument("--evaluation_frequency", type=int, default=5)
+    parser.add_argument("--evaluation_frequency", type=int, default=10)
     parser.add_argument("--inference_num", type=int, default=1)
     parser.add_argument("--save_frequency", type=int, default=5)
     
@@ -388,8 +389,10 @@ def muzero_self_play(env, muzero_agent: agent.MuZeroAgent, replay_buffer: buffer
             }
             
             # 記錄 episode 結果
+            saved_material = np.sum(env.saved_material_record) if env.saved_material_record else 0
             episode_result = {
                 'total_reward': total_reward,
+                'saved_material': saved_material,
                 'episode_length': step_count,
                 'final_design': structure.story_level_sections.copy() if hasattr(structure, 'story_level_sections') else [],
                 'performance': final_performance,
@@ -531,9 +534,11 @@ def muzero_inference(env, muzero_agent: agent.MuZeroAgent, num_episodes: int = 5
         }
         
         # 記錄 episode 結果
+        saved_material = np.sum(env.saved_material_record) if env.saved_material_record else 0
         episode_result = {
             'episode': episode,
             'total_reward': total_reward,
+            'saved_material': saved_material,
             'episode_length': step_count,
             'final_design': structure.story_level_sections.copy() if hasattr(structure, 'story_level_sections') else [],
             'performance': final_performance,
@@ -643,6 +648,7 @@ def main():
         representation_network_type=args.model_type
     )
     network.to(device)
+    logger.info(f"Network: {network}")
     
     # 創建 MuZero Agent
     muzero_agent = agent.MuZeroAgent(
@@ -663,8 +669,8 @@ def main():
 
     # === 2. 訓練 loop ==============================================================================
     # 歷史記錄
-    sp_rewards, sp_lengths, sp_actions, sp_fails = [], [], [], []
-    inf_rewards, inf_lengths, inf_actions, inf_fails = [], [], [], []
+    sp_rewards, sp_lengths, sp_actions, sp_fails, sp_saved_materials = [], [], [], [], []
+    inf_rewards, inf_lengths, inf_actions, inf_fails, inf_saved_materials = [], [], [], [], []
     selfplay_record = []
     inference_record = []
     loss_record = []
@@ -679,6 +685,7 @@ def main():
         sp_rewards.append(reward)
         sp_actions.append(actions_seq)
         sp_fails.append(fail_reason)
+        sp_saved_materials.append(rec['saved_material'])
         selfplay_record.append(rec)
 
         # 2) Train step
@@ -701,12 +708,14 @@ def main():
             # 假設 muzero_inference 返回 dict 含 'episodes' list，並可提取 actions & fail_reasons
             batch_rewards = inf_res['total_rewards']
             batch_lengths = inf_res['episode_lengths']
+            batch_saved_materials = inf_res['saved_material']
             batch_actions = [ep['actions_taken'] for ep in inf_res['episodes']]
             batch_fails   = [ep['fail_reason'] for ep in inf_res['episodes']]
 
 
             inf_rewards.extend(batch_rewards)
             inf_lengths.extend(batch_lengths)
+            inf_saved_materials.extend(batch_saved_materials)
             inf_actions.extend(batch_actions)
             inf_fails.extend(batch_fails)
             inference_record.append(inf_res)
@@ -771,7 +780,7 @@ def main():
                 json.dump(rec, f)
         
         # 溫度 decay，每 10 個 episode 調整一次
-        if (ep + 1) % 10 == 0:
+        if (ep + 1) % args.temperature_decay_frequency == 0:
             new_temp = max(0.1, muzero_agent.temperature * args.muzero_temperature_decay)
             muzero_agent.set_temperature(new_temp)
             logger.info(f"Decay temperature to {new_temp:.3f}")

@@ -370,6 +370,11 @@ class MuZeroNetwork(nn.Module):
                  num_layers=3, representation_network_type="Taiwan"):
         super().__init__()
         self.hidden_dim = hidden_dim
+        # Representation network 輸出的維度 (Taiwan 版為 hidden_dim*2，Japan 或其他則為 hidden_dim)
+        if representation_network_type == "Taiwan":
+            self.state_dim = hidden_dim * 2
+        else:
+            self.state_dim = hidden_dim
         self.max_num_actions = max_num_actions  # 最大動作數量
         self.num_layers = num_layers
         
@@ -404,27 +409,27 @@ class MuZeroNetwork(nn.Module):
         
         # Prediction Network (f) - 從隱藏狀態預測策略和價值
         self.prediction_network = nn.Sequential(
-            nn.Linear(hidden_dim, hidden_dim // 2),
+            nn.Linear(self.state_dim, self.state_dim // 2),
             nn.ReLU(),
-            nn.Linear(hidden_dim // 2, hidden_dim // 4),
+            nn.Linear(self.state_dim // 2, self.state_dim // 4),
             nn.ReLU()
         )
-        self.policy_head = nn.Linear(hidden_dim // 4, max_num_actions)  # 使用最大動作數量
-        self.value_head = nn.Linear(hidden_dim // 4, 1)
+        self.policy_head = nn.Linear(self.state_dim // 4, max_num_actions)  # 使用最大動作數量
+        self.value_head = nn.Linear(self.state_dim // 4, 1)
         
         # Dynamics Network (g) - 在隱藏狀態空間中推演
         # 輸入：hidden_state + action_one_hot
         self.dynamics_network = nn.Sequential(
-            nn.Linear(hidden_dim + max_num_actions, hidden_dim // 2),  # 使用最大動作數量
+            nn.Linear(self.state_dim + max_num_actions, self.state_dim // 2),  # 使用最大動作數量
             nn.ReLU(),
-            nn.Linear(hidden_dim // 2, hidden_dim // 2),
+            nn.Linear(self.state_dim // 2, self.state_dim // 2),
             nn.ReLU()
         )
-        self.reward_head = nn.Linear(hidden_dim // 2, 1)
-        self.next_state_head = nn.Linear(hidden_dim // 2, hidden_dim)
+        self.reward_head = nn.Linear(self.state_dim // 2, 1)
+        self.next_state_head = nn.Linear(self.state_dim // 2, self.state_dim)
         
         # 正規化層
-        self.state_norm = nn.LayerNorm(hidden_dim)
+        self.state_norm = nn.LayerNorm(self.state_dim)
         
     def represent(self, observation):
         """ 
@@ -442,9 +447,7 @@ class MuZeroNetwork(nn.Module):
                     observation.story_batch, 
                     observation.structure_story_ptr
                 )
-                # StateGNN 輸出的是 [story_num, hidden_dim*2]，我們取前 hidden_dim
-                if hidden_state.dim() > 1 and hidden_state.size(-1) > self.hidden_dim:
-                    hidden_state = hidden_state[:, :self.hidden_dim]
+                # StateGNN 輸出 shape: [story_num, hidden_dim*2]，保留完整資訊
             else:
                 raise ValueError("Taiwan representation network requires GraphData object")
                 
