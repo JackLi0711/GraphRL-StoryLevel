@@ -48,7 +48,7 @@ def parse_muzero_args() -> argparse.Namespace:
     parser.add_argument("--num_layers", type=int, default=3)
     
     # MuZero 參數
-    parser.add_argument("--muzero_num_simulations", type=int, default=50)
+    parser.add_argument("--muzero_num_simulations", type=int, default=30)
     parser.add_argument("--muzero_unroll_steps", type=int, default=3)
     parser.add_argument("--muzero_temperature", type=float, default=1.0)
     parser.add_argument("--muzero_temperature_decay", type=float, default=0.92)
@@ -63,7 +63,7 @@ def parse_muzero_args() -> argparse.Namespace:
     parser.add_argument("--training_frequency", type=int, default=5)
     parser.add_argument("--evaluation_frequency", type=int, default=10)
     parser.add_argument("--inference_num", type=int, default=1)
-    parser.add_argument("--save_frequency", type=int, default=5)
+    parser.add_argument("--save_frequency", type=int, default=10)
     
     # 環境參數
     parser.add_argument("--structure_shape", type=str, default="fixed")
@@ -708,7 +708,7 @@ def main():
             # 假設 muzero_inference 返回 dict 含 'episodes' list，並可提取 actions & fail_reasons
             batch_rewards = inf_res['total_rewards']
             batch_lengths = inf_res['episode_lengths']
-            batch_saved_materials = inf_res['saved_material']
+            batch_saved_materials = [ep['saved_material'] for ep in inf_res['episodes']]
             batch_actions = [ep['actions_taken'] for ep in inf_res['episodes']]
             batch_fails   = [ep['fail_reason'] for ep in inf_res['episodes']]
 
@@ -742,6 +742,8 @@ def main():
                 best_actions_history = sp_actions,
                 rewards_this_round = sp_rewards[-args.evaluation_frequency:],
                 fail_reasons_this_round = sp_fails[-args.evaluation_frequency:],
+                saved_material_history = sp_saved_materials,
+                saved_materials_this_round = sp_saved_materials[-args.evaluation_frequency:],
                 story_num = story_num
             )
             # 繪製 inference
@@ -752,6 +754,8 @@ def main():
                 best_actions_history = inf_actions,
                 rewards_this_round = batch_rewards,
                 fail_reasons_this_round = batch_fails,
+                saved_material_history = inf_saved_materials,
+                saved_materials_this_round = batch_saved_materials,
                 story_num = story_num
             )
 
@@ -762,6 +766,8 @@ def main():
                 selfplay_length_hist = sp_lengths,
                 inference_reward_hist = inf_rewards,
                 inference_length_hist = inf_lengths,
+                selfplay_saved_material_hist = sp_saved_materials,
+                inference_saved_material_hist = inf_saved_materials,
                 frequency = args.evaluation_frequency
             )
 

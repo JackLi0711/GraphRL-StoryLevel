@@ -300,25 +300,40 @@ def plot_MuZero_inference_figure(
     rewards_this_round: Sequence[float],
     fail_reasons_this_round: Sequence[str],
     story_num: int,
+    saved_material_history: List[float] = None,
+    saved_materials_this_round: Sequence[float] = None,
 ):
-    """Produces and saves the *inference* plot (5 subplots)."""
+    """Produces and saves the *inference* plot (6 subplots)."""
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    fig, axes = plt.subplots(2, 2, figsize=(15, 10))
+    fig, axes = plt.subplots(2, 3, figsize=(20, 10))
     # a. reward history
     _plot_history(axes[0, 0], reward_history, "Total reward history", "Reward")
     # b. episode length history
     _plot_history(axes[0, 1], length_history, "Episode length history", "Length", color="C2")
-    # c. reward distribution (current round)
+    # c. saved material history
+    if saved_material_history is not None:
+        _plot_history(axes[0, 2], saved_material_history, "Saved material history", "Saved Material", color="C3")
+    else:
+        axes[0, 2].text(0.5, 0.5, 'No saved material data', ha='center', va='center', transform=axes[0, 2].transAxes)
+        axes[0, 2].set_title("Saved material history")
+    
+    # d. reward distribution (current round)
     _plot_distribution(axes[1, 0], rewards_this_round, "Reward distribution (this round)", "Reward")
-    # d. fail reason distribution (current round)
+    # e. fail reason distribution (current round)
     _plot_fail_reason_bar(axes[1, 1], fail_reasons_this_round, "Fail reason distribution (this round)")
+    # f. saved material distribution (current round)
+    if saved_materials_this_round is not None:
+        _plot_distribution(axes[1, 2], saved_materials_this_round, "Saved material distribution (this round)", "Saved Material")
+    else:
+        axes[1, 2].text(0.5, 0.5, 'No saved material data', ha='center', va='center', transform=axes[1, 2].transAxes)
+        axes[1, 2].set_title("Saved material distribution (this round)")
 
     plt.tight_layout()
     fig.savefig(out_path, dpi=1000, bbox_inches="tight")
     plt.close(fig)
 
-    # e. best action sequence history
+    # g. best action sequence history
     out_path = out_path.parent 
     _plot_action_sequence_history(reward_history, story_num, best_actions_history, out_path)
     
@@ -333,10 +348,14 @@ def plot_MuZero_selfplay_figure(
     rewards_this_round: Sequence[float],
     fail_reasons_this_round: Sequence[str],
     story_num: int,
+    saved_material_history: List[float] = None,
+    saved_materials_this_round: Sequence[float] = None,
 ):
     """Same signature as inference; kept separate for clarity (could reuse)."""
     plot_MuZero_inference_figure(
-        out_path, reward_history, length_history, best_actions_history, rewards_this_round, fail_reasons_this_round, story_num
+        out_path, reward_history, length_history, best_actions_history, 
+        rewards_this_round, fail_reasons_this_round, story_num,
+        saved_material_history, saved_materials_this_round
     )
 
 
@@ -347,21 +366,32 @@ def plot_MuZero_combined_figure(
     inference_reward_hist: List[float],
     inference_length_hist: List[int],
     frequency: int,
+    selfplay_saved_material_hist: List[float] = None,
+    inference_saved_material_hist: List[float] = None,
 ):
-    """Two‑subplot figure comparing self‑play vs inference history."""
+    """Four‑subplot figure comparing self‑play vs inference history."""
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+    fig, axes = plt.subplots(2, 2, figsize=(15, 10))
     # a. total reward history (two curves)
-    _plot_history(axes[0], selfplay_reward_hist, "Total reward history", "Reward")
-    axes[0].plot(np.arange(1, len(inference_reward_hist) + 1)*int(len(selfplay_reward_hist) / len(inference_reward_hist)), inference_reward_hist, color="C3", alpha=0.8, label="inference")
-    axes[0].legend()
+    _plot_history(axes[0, 0], selfplay_reward_hist, "Total reward history", "Reward")
+    axes[0, 0].plot(np.arange(1, len(inference_reward_hist) + 1)*frequency, inference_reward_hist, color="C3", alpha=0.8, label="inference")
+    axes[0, 0].legend()
     # b. episode length history
-    _plot_history(axes[1], selfplay_length_hist, "Episode length history", "Length", color="C2")
-    axes[1].plot(np.arange(1, len(inference_length_hist) + 1)*int(len(selfplay_length_hist) / len(inference_length_hist)), inference_length_hist, color="C4", alpha=0.8, label="inference")
-    axes[1].legend()
+    _plot_history(axes[0, 1], selfplay_length_hist, "Episode length history", "Length", color="C2")
+    axes[0, 1].plot(np.arange(1, len(inference_length_hist) + 1)*frequency, inference_length_hist, color="C4", alpha=0.8, label="inference")
+    axes[0, 1].legend()
 
-    # c. bar chart of current round reward comparsion
+    # c. saved material history (two curves)
+    if selfplay_saved_material_hist is not None and inference_saved_material_hist is not None:
+        _plot_history(axes[1, 0], selfplay_saved_material_hist, "Saved material history", "Saved Material", color="C3")
+        axes[1, 0].plot(np.arange(1, len(inference_saved_material_hist) + 1)*int(len(selfplay_saved_material_hist) / len(inference_saved_material_hist)), inference_saved_material_hist, color="C5", alpha=0.8, label="inference")
+        axes[1, 0].legend()
+    else:
+        axes[1, 0].text(0.5, 0.5, 'No saved material data', ha='center', va='center', transform=axes[1, 0].transAxes)
+        axes[1, 0].set_title("Saved material history")
+
+    # d. bar chart of current round reward comparison
     if len(selfplay_reward_hist) >= frequency:
         recent_self_play_rewards = selfplay_reward_hist[-frequency:]
         avg_self_play = np.mean(recent_self_play_rewards)
@@ -377,18 +407,20 @@ def plot_MuZero_combined_figure(
         means = [avg_self_play, avg_inference]
         stds = [std_self_play, std_inference]
         
-        bars = axes[2].bar(categories, means, yerr=stds, capsize=5, alpha=0.7, 
+        bars = axes[1, 1].bar(categories, means, yerr=stds, capsize=5, alpha=0.7, 
                               color=['blue', 'orange'])
-        axes[2].set_title('Reward Comparison: Self-play vs Inference')
-        axes[2].set_ylabel('Average Reward')
-        axes[2].grid(True, alpha=0.3)
+        axes[1, 1].set_title('Reward Comparison: Self-play vs Inference')
+        axes[1, 1].set_ylabel('Average Reward')
+        axes[1, 1].grid(True, alpha=0.3)
         
         # 添加數值標籤
         for bar, mean, std in zip(bars, means, stds):
             height = bar.get_height()
-            axes[2].text(bar.get_x() + bar.get_width()/2., height + std,
+            axes[1, 1].text(bar.get_x() + bar.get_width()/2., height + std,
                            f'{mean:.3f}±{std:.3f}', ha='center', va='bottom')
-    
+    else:
+        axes[1, 1].text(0.5, 0.5, 'Insufficient data for comparison', ha='center', va='center', transform=axes[1, 1].transAxes)
+        axes[1, 1].set_title('Reward Comparison: Self-play vs Inference')
 
     plt.tight_layout()
     fig.savefig(out_path, dpi=1000, bbox_inches="tight")
