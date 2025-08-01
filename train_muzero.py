@@ -48,7 +48,7 @@ def parse_muzero_args() -> argparse.Namespace:
     parser.add_argument("--num_layers", type=int, default=3)
     
     # MuZero 參數
-    parser.add_argument("--muzero_num_simulations", type=int, default=30)
+    parser.add_argument("--muzero_num_simulations", type=int, default=30) # 30
     parser.add_argument("--muzero_unroll_steps", type=int, default=3)
     parser.add_argument("--muzero_temperature", type=float, default=1.0)
     parser.add_argument("--muzero_temperature_decay", type=float, default=0.92)
@@ -56,17 +56,17 @@ def parse_muzero_args() -> argparse.Namespace:
     parser.add_argument("--muzero_discount", type=float, default=0.99)
     
     # 訓練參數
-    parser.add_argument("--num_episodes", type=int, default=100)
-    parser.add_argument("--batch_size", type=int, default=16)
+    parser.add_argument("--num_episodes", type=int, default=100) # 100
+    parser.add_argument("--batch_size", type=int, default=16) # 16
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--buffer_capacity", type=int, default=1000)
-    parser.add_argument("--training_frequency", type=int, default=5)
-    parser.add_argument("--evaluation_frequency", type=int, default=10)
+    parser.add_argument("--training_frequency", type=int, default=5) # 5
+    parser.add_argument("--evaluation_frequency", type=int, default=10) # 10
     parser.add_argument("--inference_num", type=int, default=1)
-    parser.add_argument("--save_frequency", type=int, default=10)
+    parser.add_argument("--save_frequency", type=int, default=10) # 10
     
     # 環境參數
-    parser.add_argument("--structure_shape", type=str, default="fixed")
+    parser.add_argument("--structure_shape", type=str, default="small_random")
     parser.add_argument("--add_structure_geometry", action="store_true", default=True)
     parser.add_argument("--add_response_features", action="store_true", default=True)
     parser.add_argument("--reward_type", type=str, default="material")
@@ -626,8 +626,9 @@ def main():
     
     # 根據不同 structure_shape 計算最大可能的動作數量
     if args.structure_shape == "fixed":
-        max_num_actions = 16  # story_num = 4, 4 * 4 = 16
-        story_num = 4
+        story_num = 5 
+        max_num_actions = 20  # story_num = 4, 4 * 4 = 16
+        
     elif args.structure_shape == "small_random":
         max_num_actions = 16  # story_num = 2-4, 最大 4 * 4 = 16
         story_num = 4
