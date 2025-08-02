@@ -680,8 +680,7 @@ def _train_an_episode(agent: DeepQAgent,
         action, q_val = agent.choose_action(state, 
                                             structure.already_minimum_section_story_indexes,
                                             dont_select_story_member_indexes)
-        member_category = structure.story_level_categories[action]
-        update_story = (action % structure.story_num) + 1
+        member_category, update_story = env.get_action_info(action, structure)
         print(f"\n-----episode: {agent._number_episodes+1:4d}, timestep: {agent._number_timesteps+1:3d}, story_level_sections: {structure.story_level_sections}, action: {action:3d} [{update_story}F {member_category}]")
         structure, reward, done, fail_name, fail_reason = env.step(structure, action)
 
@@ -746,8 +745,7 @@ def _testing(agent: DeepQAgent,
                                             structure.already_minimum_section_story_indexes,
                                             dont_select_story_member_indexes, 
                                             greedy=True)
-        member_category = structure.story_level_categories[action]
-        update_story = (action % structure.story_num) + 1
+        member_category, update_story = env.get_action_info(action, structure)
         print(f"\n*****Testing Episode, story_level_sections: {structure.story_level_sections}, action: {action:3d} [{update_story}F {member_category}]")
         structure, reward, done, fail_name, fail_reason = env.step(structure, action)
 

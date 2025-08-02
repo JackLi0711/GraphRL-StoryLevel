@@ -48,7 +48,7 @@ def parse_muzero_args() -> argparse.Namespace:
     parser.add_argument("--num_layers", type=int, default=3)
     
     # MuZero 參數
-    parser.add_argument("--muzero_num_simulations", type=int, default=30) # 30
+    parser.add_argument("--muzero_num_simulations", type=int, default=1) # 30
     parser.add_argument("--muzero_unroll_steps", type=int, default=3)
     parser.add_argument("--muzero_temperature", type=float, default=1.0)
     parser.add_argument("--muzero_temperature_decay", type=float, default=0.92)
@@ -56,14 +56,14 @@ def parse_muzero_args() -> argparse.Namespace:
     parser.add_argument("--muzero_discount", type=float, default=0.99)
     
     # 訓練參數
-    parser.add_argument("--num_episodes", type=int, default=100) # 100
-    parser.add_argument("--batch_size", type=int, default=16) # 16
+    parser.add_argument("--num_episodes", type=int, default=10) # 100
+    parser.add_argument("--batch_size", type=int, default=2) # 16
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--buffer_capacity", type=int, default=1000)
-    parser.add_argument("--training_frequency", type=int, default=5) # 5
-    parser.add_argument("--evaluation_frequency", type=int, default=10) # 10
+    parser.add_argument("--training_frequency", type=int, default=2) # 5
+    parser.add_argument("--evaluation_frequency", type=int, default=2) # 10
     parser.add_argument("--inference_num", type=int, default=1)
-    parser.add_argument("--save_frequency", type=int, default=10) # 10
+    parser.add_argument("--save_frequency", type=int, default=2) # 10
     
     # 環境參數
     parser.add_argument("--structure_shape", type=str, default="small_random")
@@ -624,20 +624,22 @@ def main():
     }
     env = environment.Environment(**env_kwargs)
     
-    # 根據不同 structure_shape 計算最大可能的動作數量
+    # 根據不同 structure_shape 計算最大可能的動作數量（與Environment._get_max_story_num()一致）
     if args.structure_shape == "fixed":
-        story_num = 5 
-        max_num_actions = 20  # story_num = 4, 4 * 4 = 16
+        max_story_num = 5
+        max_num_actions = 20  # 5 * 4 = 20
         
     elif args.structure_shape == "small_random":
-        max_num_actions = 16  # story_num = 2-4, 最大 4 * 4 = 16
-        story_num = 4
+        max_story_num = 4
+        max_num_actions = 16  # 4 * 4 = 16
+        
     elif args.structure_shape == "random":
-        max_num_actions = 32  # story_num = 4-7, 最大 7 * 4 = 28，設為 32 保險
-        story_num = 7
+        max_story_num = 7
+        max_num_actions = 28  # 7 * 4 = 28
+        
     else:
-        max_num_actions = 32  # 默認值
-        story_num = 7
+        max_story_num = 8  # 默認最大值，包含taller情況
+        max_num_actions = 32  # 8 * 4 = 32
     
     # 創建 MuZero 網路
     network = model.MuZeroNetwork(
@@ -745,7 +747,7 @@ def main():
                 fail_reasons_this_round = sp_fails[-args.evaluation_frequency:],
                 saved_material_history = sp_saved_materials,
                 saved_materials_this_round = sp_saved_materials[-args.evaluation_frequency:],
-                story_num = story_num
+                story_num = max_story_num
             )
             # 繪製 inference
             plot_MuZero_inference_figure(
@@ -757,7 +759,7 @@ def main():
                 fail_reasons_this_round = batch_fails,
                 saved_material_history = inf_saved_materials,
                 saved_materials_this_round = batch_saved_materials,
-                story_num = story_num
+                story_num = max_story_num
             )
 
             # 繪製 combined

@@ -330,8 +330,10 @@ class Environment:
             reward = self.calculate_reward(passed)
             return deepcopy(structure), reward, True, fail_name, fail_reason
 
-        # 1-1. update structure, graph and get saved material amount(m^3) (ORIGINAL)
-        material_saved = structure.update_action(action)
+        # 1-1. 將固定action space的action映射到結構實際的action index
+        mapped_action = self.map_action_to_structure_index(action, structure)
+        # update structure, graph and get saved material amount(m^3) (ORIGINAL)
+        material_saved = structure.update_action(mapped_action)
         before_SCWB_structure = deepcopy(structure)
         # 1-2. update structure, graph and get saved material amount(m^3) (STRONG-COLUMN-WEAK-BEAM)
         if self.scwb_driven_design:
@@ -433,35 +435,189 @@ class Environment:
         1. The member group is already at its minimum section size.
         2. The action would violate structural hierarchy (e.g., making a lower
            column weaker than an upper column).
+        3. The action corresponds to a story that doesn't exist in the current structure.
         """
-        # 步驟 1: 使用 story_num * 4 的完整 Action Space
-        num_actions = len(structure_obj.story_level_actions)
-        all_actions = list(range(num_actions))
+        # 步驟 1: 使用固定的最大 Action Space (設定最大樓層數)
+        max_story_num = self._get_max_story_num()
+        max_num_actions = max_story_num * 4  # 4種類型：xdir_beam, zdir_beam, outer_column, inner_column
+        all_actions = list(range(max_num_actions))
 
-        # 步驟 2: 整合兩種限制規則來計算所有不合法的 actions
-        # 規則一: 最小斷面規則
-        illegal_min_section = structure_obj.already_minimum_section_story_indexes
-
-        # 規則二: 結構層級規則
-        illegal_hierarchy = structure_obj.restrict_action_space() if self.restrict_action else []
-
-        # 合併兩種非法動作列表
-        illegal_actions = set(illegal_min_section + illegal_hierarchy)
+        # 步驟 2: 計算所有不合法的 actions
+        illegal_actions = set()
+        
+        # 規則一: 最小斷面規則 (需要映射到固定action space)
+        illegal_min_section_structure = structure_obj.already_minimum_section_story_indexes
+        illegal_min_section = [self.map_structure_index_to_action(idx, structure_obj) 
+                              for idx in illegal_min_section_structure]
+        illegal_actions.update(illegal_min_section)
+        
+        # 規則二: 結構層級規則 (需要映射到固定action space)
+        illegal_hierarchy_structure = structure_obj.restrict_action_space() if self.restrict_action else []
+        illegal_hierarchy = [self.map_structure_index_to_action(idx, structure_obj) 
+                           for idx in illegal_hierarchy_structure]
+        illegal_actions.update(illegal_hierarchy)
+        
+        # 規則三: 樓層不存在的規則 (新增)
+        current_story_num = structure_obj.story_num
+        illegal_story_actions = self._get_illegal_story_actions(current_story_num, max_story_num)
+        illegal_actions.update(illegal_story_actions)
         
         # 步驟 3: 從所有 actions 中排除不合法的，得到最終的合法 actions
         legal_actions = [a for a in all_actions if a not in illegal_actions]
         
         return legal_actions
     
+    def _get_max_story_num(self) -> int:
+        """
+        根據structure_shape決定最大樓層數
+        """
+        if self.structure_shape == "fixed":
+            return 5  # 根據_init_testing_structure中的設定
+        elif self.structure_shape == "small_random":
+            return 4  # 根據reset方法中的np.random.randint(2, 5)，最大是4
+        elif self.structure_shape == "random":
+            return 7  # 根據reset方法中的np.random.randint(4, 8)，最大是7
+        else:
+            return 8  # 默認最大值，包含taller情況
+    
+    def _get_illegal_story_actions(self, current_story_num: int, max_story_num: int) -> typing.List[int]:
+        """
+        計算不屬於當前樓層數的action indices
+        
+        Args:
+            current_story_num: 當前結構的樓層數
+            max_story_num: 最大可能的樓層數
+        
+        Returns:
+            illegal_actions: 不屬於當前樓層數的action indices列表
+        """
+        illegal_actions = []
+        
+        # 計算每種類型的action數量
+        actions_per_type = max_story_num  # 每種類型最多有max_story_num個action
+        
+        # 對於每種類型，將超出當前樓層數的action標記為illegal
+        for action_type in range(4):  # 0: xdir_beam, 1: zdir_beam, 2: outer_column, 3: inner_column
+            start_idx = action_type * actions_per_type
+            # 將超出當前樓層數的action加入illegal list
+            for story in range(current_story_num, max_story_num):
+                illegal_action_idx = start_idx + story
+                illegal_actions.append(illegal_action_idx)
+        
+        return illegal_actions
+    
+    def map_action_to_structure_index(self, action_idx: int, structure_obj) -> int:
+        """
+        將固定action space中的action index映射到結構的實際action index
+        
+        Args:
+            action_idx: 固定action space中的action index
+            structure_obj: 結構物件
+            
+        Returns:
+            mapped_idx: 結構中實際的action index
+        """
+        max_story_num = self._get_max_story_num()
+        current_story_num = structure_obj.story_num
+        
+        # 確定action類型和樓層
+        action_type = action_idx // max_story_num
+        story_in_type = action_idx % max_story_num
+        
+        # 檢查是否為有效的樓層
+        if story_in_type >= current_story_num:
+            raise ValueError(f"Action {action_idx} refers to story {story_in_type + 1} but structure only has {current_story_num} stories")
+        
+        # 映射到結構的實際index
+        if action_type == 0:  # xdir_beam
+            mapped_idx = story_in_type
+        elif action_type == 1:  # zdir_beam  
+            mapped_idx = current_story_num + story_in_type
+        elif action_type == 2:  # outer_column
+            mapped_idx = 2 * current_story_num + story_in_type
+        elif action_type == 3:  # inner_column
+            mapped_idx = 3 * current_story_num + story_in_type
+        else:
+            raise ValueError(f"Invalid action type {action_type}")
+            
+        return mapped_idx
+    
+    def get_action_info(self, action_idx: int, structure_obj) -> typing.Tuple[str, int]:
+        """
+        根據固定action space中的action index獲取action信息
+        
+        Args:
+            action_idx: 固定action space中的action index
+            structure_obj: 結構物件
+            
+        Returns:
+            tuple: (member_category, story_number)
+        """
+        max_story_num = self._get_max_story_num()
+        
+        # 確定action類型和樓層
+        action_type = action_idx // max_story_num
+        story_in_type = action_idx % max_story_num
+        
+        # 獲取類型名稱
+        type_names = ['xdir_beam', 'zdir_beam', 'outer_column', 'inner_column']
+        member_category = type_names[action_type]
+        
+        # 樓層編號（從1開始）
+        story_number = story_in_type + 1
+        
+        return member_category, story_number
+    
+    def map_structure_index_to_action(self, structure_idx: int, structure_obj) -> int:
+        """
+        將結構的實際action index映射到固定action space中的action index
+        
+        Args:
+            structure_idx: 結構中實際的action index
+            structure_obj: 結構物件
+            
+        Returns:
+            mapped_idx: 固定action space中的action index
+        """
+        current_story_num = structure_obj.story_num
+        max_story_num = self._get_max_story_num()
+        
+        # 確定在結構中的類型和樓層
+        if structure_idx < current_story_num:
+            # xdir_beam
+            action_type = 0
+            story_in_type = structure_idx
+        elif structure_idx < 2 * current_story_num:
+            # zdir_beam
+            action_type = 1
+            story_in_type = structure_idx - current_story_num
+        elif structure_idx < 3 * current_story_num:
+            # outer_column
+            action_type = 2
+            story_in_type = structure_idx - 2 * current_story_num
+        elif structure_idx < 4 * current_story_num:
+            # inner_column
+            action_type = 3
+            story_in_type = structure_idx - 3 * current_story_num
+        else:
+            raise ValueError(f"Invalid structure action index {structure_idx}")
+        
+        # 映射到固定action space
+        mapped_idx = action_type * max_story_num + story_in_type
+        
+        return mapped_idx
+    
     def _update_action_space(self, structure_obj):
         """更新動作空間資訊並通知 MuZero Agent"""
-        self.current_num_actions = len(structure_obj.story_level_actions)
+        # 使用固定的最大action數量，而不是依賴結構的實際action數量
+        max_story_num = self._get_max_story_num()
+        self.current_num_actions = max_story_num * 4  # 固定action space大小
         
         # 通知 MuZero Agent 動作空間變化
         if self.muzero_agent is not None:
             self.muzero_agent.set_action_space(self.current_num_actions)
         
-        self.logger.info(f"Action space updated: {self.current_num_actions} actions for structure_shape={self.structure_shape}")
+        self.logger.info(f"Action space updated: {self.current_num_actions} actions (max_story_num={max_story_num}) for structure_shape={self.structure_shape}, current_story_num={structure_obj.story_num}")
     
     def set_muzero_agent(self, agent):
         """設置 MuZero Agent 的引用"""
