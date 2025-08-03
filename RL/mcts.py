@@ -176,7 +176,9 @@ class MCTSAgent:
 
     def _hybrid_simulation(self, state):
         """
-        Performs a short random rollout and then uses DQN to evaluate the final state.
+        Performs a short random rollout and then uses DQN to evaluate the final action.
+        Accumulates immediate rewards up to the second-to-last action, then uses DQN 
+        to predict Q(s_{n-1}, a_{n-1}) for the final action.
         """
         current_state = deepcopy(state)
         # Create a copy of the environment for simulation to avoid affecting the original env
@@ -184,7 +186,8 @@ class MCTSAgent:
         total_rollout_reward = 0.0
         actions_taken = []
         
-        for i in range(self.rollout_depth):
+        # Execute rollout_depth-1 steps, accumulating immediate rewards
+        for i in range(self.rollout_depth - 1):
             if sim_env.is_terminal(current_state):
                 _, final_reward, _, _, _ = sim_env.step(current_state, action=None)
                 return final_reward
@@ -202,8 +205,35 @@ class MCTSAgent:
             if done:
                 return total_rollout_reward
         
-        # After rollout, estimate value with DQN
-        graph_for_dqn = deepcopy(current_state)
+        # Now we're at the second-to-last state
+        # Save this state for DQN evaluation
+        second_to_last_state = deepcopy(current_state)
+        
+        # Execute the final action but don't add its immediate reward to rollout
+        if not sim_env.is_terminal(current_state):
+            legal_actions = sim_env.get_legal_actions(current_state)
+            if legal_actions:
+                final_action = random.choice(legal_actions)
+                actions_taken.append(final_action)
+                
+                # Execute the final action to check if game ends
+                _, final_reward, done, _, _ = sim_env.step(current_state, final_action)
+                
+                if done:
+                    # If game ends, add the final reward and return
+                    return total_rollout_reward + (self.gamma ** (self.rollout_depth - 1)) * final_reward
+            else:
+                # No legal actions available
+                _, final_reward, _, _, _ = sim_env.step(current_state, action=None)
+                return total_rollout_reward + (self.gamma ** (self.rollout_depth - 1)) * final_reward
+        else:
+            # Already terminal
+            _, final_reward, _, _, _ = sim_env.step(current_state, action=None)
+            return total_rollout_reward + (self.gamma ** (self.rollout_depth - 1)) * final_reward
+
+        # Use DQN to evaluate Q(s_{n-1}, a_{n-1})
+        # Prepare the second-to-last state for DQN
+        graph_for_dqn = deepcopy(second_to_last_state)
 
         # To get the graph features required by the GNN, we need to run a static analysis.
         from Structure import check
@@ -222,14 +252,20 @@ class MCTSAgent:
         # Move the graph object's tensors to the same device as the DQN agent.
         graph_to_evaluate = graph_for_dqn.graph.to(self.dqn_agent.device)
 
-        state_value_estimate = self.dqn_agent.get_state_value(graph_to_evaluate)
-        final_value = total_rollout_reward + (self.gamma ** self.rollout_depth) * state_value_estimate
+        # Get Q value for the final action from the second-to-last state
+        final_action = actions_taken[-1]
+        print(f"length of actions_taken: {len(actions_taken)}")
+        q_value_estimate = self.dqn_agent.get_action_q_value(graph_to_evaluate, final_action)
+        
+        # Final value = rollout rewards + discounted Q value
+        final_value = total_rollout_reward + (self.gamma ** (self.rollout_depth - 1)) * q_value_estimate
+        
         sim_env.logger.info('='*100)
-        sim_env.logger.info(f"Hybrid Sim: Rollout Reward={total_rollout_reward:.4f}, DQN Value={state_value_estimate:.4f}, Final Value={final_value:.4f}")
+        sim_env.logger.info(f"Hybrid Sim: Rollout Reward={total_rollout_reward:.4f}, Q(s_{self.rollout_depth-1}, a_{self.rollout_depth-1})={q_value_estimate:.4f}, Final Value={final_value:.4f}")
         sim_env.logger.info(f"Hybrid Sim: Actions Taken={actions_taken}")
         sim_env.logger.info('='*100)
 
-        return total_rollout_reward + (self.gamma ** self.rollout_depth) * state_value_estimate
+        return final_value
 
 
     def _backpropagate(self, node, reward):

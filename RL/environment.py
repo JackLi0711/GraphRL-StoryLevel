@@ -65,13 +65,13 @@ class Environment:
     def _init_testing_structure(self, initial_design=None):
         """Initialize the prescribed structure."""
         if self.structure_shape in ["fixed", "small_random"]:
-            x_span_num = 3 # 4, 6
-            z_span_num = 3 # 4, 6
+            x_span_num = 4 # 4, 6
+            z_span_num = 4 # 4, 6
             x_span_len = 7000
             z_span_len = 7000
             x_span_lens = [x_span_len for i in range(x_span_num)]
             z_span_lens = [z_span_len for i in range(z_span_num)]
-            story_num = 3 # 4, 7 
+            story_num = 4 # 4, 7 
             story_height = 3200
         elif self.structure_shape == "random":
             # x_span_num = 4  # original: 3

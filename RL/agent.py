@@ -425,6 +425,32 @@ class DeepQAgent(Agent):
         state_value = torch.max(q_values).item()
         return state_value
 
+    @torch.no_grad()
+    def get_action_q_value(self, graph_state, action):
+        """
+        Gets the Q value for a specific action in a given state.
+        Used by Hybrid MCTS.
+        NOTE: The input 'graph_state' is a torch_geometric.data.Data object.
+        """
+        self.gnn.eval()
+        self.online_q_network.eval()
+        
+        # The state is a graph object, we first need to get the member embeddings
+        member_embeddings = self.gnn(
+            x=graph_state.x.to(self.device),
+            edge_index=graph_state.edge_index.to(self.device),
+            edge_attr=graph_state.edge_attr.to(self.device),
+            batch=getattr(graph_state, 'batch', None),
+            story_batch=getattr(graph_state, 'story_batch', torch.zeros(graph_state.edge_attr[::2].shape[0], dtype=torch.long, device=self.device)).to(self.device),
+            structure_story_ptr=getattr(graph_state, 'structure_story_ptr', None)
+        )
+        
+        # Get Q values for all actions
+        q_values = self.online_q_network(member_embeddings)
+        
+        # Return the Q value for the specific action
+        return q_values[action].item()
+
 
 class JapanDeepQAgent(DeepQAgent):
     def __init__(self, 
