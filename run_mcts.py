@@ -36,7 +36,7 @@ def parse_args() -> Namespace:
     parser.add_argument("--dqn_checkpoint_dir", type=Path, default='./models/DQN/20250605_RSA_model_HighestScore.pt', help="Required for HybridMCTS. Path to a pretrained DQN agent checkpoint.")
 
     # MCTS Hyperparameters
-    parser.add_argument("--n_simulations", type=int, default=80, help="Number of simulations per MCTS search.")
+    parser.add_argument("--n_simulations", type=int, default=64, help="Number of simulations per MCTS search.")
     parser.add_argument("--c_puct", type=float, default=1.1, help="Exploration constant for UCT in MCTS.")
     parser.add_argument("--rollout_depth", type=int, default=3, help="For HybridMCTS, number of random steps in rollout before using DQN.")
     parser.add_argument("--gamma", type=float, default=0.99, help="Discount factor for MCTS.")

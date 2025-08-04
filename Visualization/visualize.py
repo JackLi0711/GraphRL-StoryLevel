@@ -360,6 +360,7 @@ def visualize_design_process(agent: agent.DeepQAgent,
         # visualize
         vis_path = save_dir / f"{timestep}.png"
         q_values = agent.online_q_network(state)
+        logger.info(f"q_values shape: {q_values.shape}, action: {action}")
         _visualize_one_iteration(structure, timestep, env, accumulated_reward, action, q_values, vis_path)
 
         # update action

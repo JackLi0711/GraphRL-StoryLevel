@@ -233,29 +233,34 @@ class MCTSAgent:
 
         # Use DQN to evaluate Q(s_{n-1}, a_{n-1})
         # Prepare the second-to-last state for DQN
-        graph_for_dqn = deepcopy(second_to_last_state)
+        structure_for_dqn = deepcopy(second_to_last_state)
 
         # To get the graph features required by the GNN, we need to run a static analysis.
         from Structure import check
         try:
             # Run the full analysis process to get 'static_response_features'
-            load_cases, responses = check.get_response(graph_for_dqn, sim_env.code_analysis_dir)
-            _, static_features, _ = check.process_response(graph_for_dqn, load_cases, responses)
+            load_cases, responses = check.get_response(structure_for_dqn, sim_env.code_analysis_dir)
+            _, static_features, _ = check.process_response(structure_for_dqn, load_cases, responses)
         except Exception as e:
             # If the analysis itself fails, it's a very bad state.
             sim_env.logger.error(f"Analysis failed during hybrid simulation: {e}")
             return -100.0  # Return a very low value for designs that cause errors.
 
         # Now, initialize the graph with the real features. Dynamic features are not needed for this evaluation.
-        graph_for_dqn.init_graph_GraphRL(static_features, None)
-        
-        # Move the graph object's tensors to the same device as the DQN agent.
-        graph_to_evaluate = graph_for_dqn.graph.to(self.dqn_agent.device)
+        structure_for_dqn.init_graph_GraphRL(static_features, None)
 
         # Get Q value for the final action from the second-to-last state
         final_action = actions_taken[-1]
         print(f"length of actions_taken: {len(actions_taken)}")
-        q_value_estimate = self.dqn_agent.get_action_q_value(graph_to_evaluate, final_action)
+        print(f"final_action: {final_action}")
+        print(f"legal_actions: {legal_actions}")
+        
+        # Debug: Check if final_action is in legal_actions
+        if legal_actions and final_action not in legal_actions:
+            sim_env.logger.warning(f"Final action {final_action} not in legal actions {legal_actions}")
+        
+        # Use the structure directly with the updated methods
+        q_value_estimate = self.dqn_agent.get_action_q_value(structure_for_dqn, final_action)
         
         # Final value = rollout rewards + discounted Q value
         final_value = total_rollout_reward + (self.gamma ** (self.rollout_depth - 1)) * q_value_estimate

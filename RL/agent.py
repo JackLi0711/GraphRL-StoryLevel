@@ -397,58 +397,76 @@ class DeepQAgent(Agent):
 
     
     @torch.no_grad()
-    def get_state_value(self, graph_state):
+    def get_state_value(self, structure):
         """
         Estimates the value of a given state by computing max_a Q(s, a).
         Used by Hybrid MCTS.
-        NOTE: The input 'graph_state' is a torch_geometric.data.Data object.
+        NOTE: The input 'structure' is a Structure object.
         """
         self.gnn.eval()
         self.online_q_network.eval()
         
-        # The state is a graph object, we first need to get the member embeddings
-        # We must unpack the graph object into the arguments expected by the StateGNN.forward method.
-        member_embeddings = self.gnn(
-            x=graph_state.x.to(self.device),
-            edge_index=graph_state.edge_index.to(self.device),
-            edge_attr=graph_state.edge_attr.to(self.device),
-            batch=getattr(graph_state, 'batch', None),  # batch is usually None for single graph inference
-            story_batch=getattr(graph_state, 'story_batch', torch.zeros(graph_state.edge_attr[::2].shape[0], dtype=torch.long, device=self.device)).to(self.device),
-            structure_story_ptr=getattr(graph_state, 'structure_story_ptr', None)
+        # Get the graph from structure
+        graph = structure.graph
+        
+        # Get the member embeddings using the correct approach from visualize.py
+        state = self.gnn(
+            graph.x.to(self.device), 
+            graph.edge_index.to(self.device), 
+            graph.edge_attr.to(self.device), 
+            None, 
+            structure.aux["story_batch"].to(self.device), 
+            None
         )
         
-        # Then, get the Q values from the Q-network
-        q_values = self.online_q_network(member_embeddings)
+        # Get Q values for all actions (story members)
+        q_values = self.online_q_network(state)
+        
+        # Debug information
+        if self.logger:
+            self.logger.info(f"get_state_value - Q values shape: {q_values.shape}")
         
         # The state value is the maximum Q-value among all possible actions
-        # We assume no actions are infeasible here, as MCTS should handle legal moves.
         state_value = torch.max(q_values).item()
         return state_value
 
     @torch.no_grad()
-    def get_action_q_value(self, graph_state, action):
+    def get_action_q_value(self, structure, action):
         """
         Gets the Q value for a specific action in a given state.
         Used by Hybrid MCTS.
-        NOTE: The input 'graph_state' is a torch_geometric.data.Data object.
+        NOTE: The input 'structure' is a Structure object.
         """
         self.gnn.eval()
         self.online_q_network.eval()
         
-        # The state is a graph object, we first need to get the member embeddings
-        member_embeddings = self.gnn(
-            x=graph_state.x.to(self.device),
-            edge_index=graph_state.edge_index.to(self.device),
-            edge_attr=graph_state.edge_attr.to(self.device),
-            batch=getattr(graph_state, 'batch', None),
-            story_batch=getattr(graph_state, 'story_batch', torch.zeros(graph_state.edge_attr[::2].shape[0], dtype=torch.long, device=self.device)).to(self.device),
-            structure_story_ptr=getattr(graph_state, 'structure_story_ptr', None)
+        # Get the graph from structure
+        graph = structure.graph
+        
+        # Get the member embeddings using the correct approach from visualize.py
+        state = self.gnn(
+            graph.x.to(self.device), 
+            graph.edge_index.to(self.device), 
+            graph.edge_attr.to(self.device), 
+            None, 
+            structure.aux["story_batch"].to(self.device), 
+            None
         )
         
-        # Get Q values for all actions
-        q_values = self.online_q_network(member_embeddings)
+        # Get Q values for all actions (story members)
+        q_values = self.online_q_network(state)
+        print(f"q_values shape after online_q_network: {q_values.shape}")
+        # Debug information
+        if self.logger:
+            self.logger.info(f"get_action_q_value - Q values shape: {q_values.shape}, Action: {action}")
         
-        # Return the Q value for the specific action
+        # Check if action index is valid
+        if action >= q_values.shape[0]:
+            if self.logger:
+                self.logger.error(f"Action index {action} is out of bounds for Q values with shape {q_values.shape}")
+            return -1000.0  # Return a very low value for invalid actions
+        
+        # Return the Q value for the specific action (story member)
         return q_values[action].item()
 
 
