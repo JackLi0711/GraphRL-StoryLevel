@@ -65,12 +65,13 @@ class Environment:
         if self.structure_shape in ["fixed", "small_random"]:
             x_span_num = 3
             z_span_num = 3
-            x_span_lens = [7000, 11000, 14000]
-            z_span_lens = [12000, 8000, 10000]
-            x_span_len = sum(x_span_lens) / len(x_span_lens)
-            z_span_len = sum(z_span_lens) / len(z_span_lens)
-            story_num = 3
-            story_height = 3500
+            
+            x_span_len = 6000
+            z_span_len = 8000
+            x_span_lens = [x_span_len for i in range(x_span_num)]
+            z_span_lens = [z_span_len for i in range(z_span_num)]
+            story_num = 6
+            story_height = 3200
         elif self.structure_shape == "random":
             x_span_num = 4  # original: 3
             z_span_num = 4  # original: 3
