@@ -211,16 +211,16 @@ class Environment:
                             "analysis_dir": self.modal_analysis_dir}
         random_structure = structure.Structure(**structure_kwargs)
 
-        if list(structure_kwargs.values())[:6] == list(self._testing_structure_kwargs.values())[:6]:
-            random_structure = self.reset(testing=testing, taller=taller)
-        else:    
-            self.logger.info(random_structure)
-            # update beam sections based on strong-column-weak-beam principle
-            self.logger.info(f"before_SCWB_update, story_level_sections: {random_structure.story_level_sections}")
-            if self.scwb_driven_design:
-                new_strategy.strong_column_weak_beam_driven_update(random_structure, self.code_analysis_dir)
-            self.logger.info(f"after_SCWB_update, story_level_sections: {random_structure.story_level_sections}")
-            self.init_records(random_structure)
+        # if list(structure_kwargs.values())[:6] == list(self._testing_structure_kwargs.values())[:6]:
+        #     random_structure = self.reset(testing=testing, taller=taller)
+        # else:    
+        self.logger.info(random_structure)
+        # update beam sections based on strong-column-weak-beam principle
+        self.logger.info(f"before_SCWB_update, story_level_sections: {random_structure.story_level_sections}")
+        if self.scwb_driven_design:
+            new_strategy.strong_column_weak_beam_driven_update(random_structure, self.code_analysis_dir)
+        self.logger.info(f"after_SCWB_update, story_level_sections: {random_structure.story_level_sections}")
+        self.init_records(random_structure)
 
         return random_structure
     
