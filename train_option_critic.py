@@ -1,4 +1,5 @@
 import argparse
+import datetime
 import logging
 from pathlib import Path
 import json
@@ -349,6 +350,114 @@ def rollout_option(structure, base_env, device, max_option_len, current_option: 
     return structure, next_state, option_reward, option_done, episode_done, stats, step_transitions, termination_reason
 
 
+def evaluate_model(base_env, oc_model, device, num_episodes, max_option_len, logger=None, seed=42):
+    """
+    Evaluate the model performance over multiple test episodes.
+    
+    Args:
+        base_env: Base environment
+        oc_model: Option-Critic model
+        device: torch device
+        num_episodes: Number of evaluation episodes
+        max_option_len: Maximum option length
+        logger: Logger instance
+        seed: Random seed for reproducibility
+    
+    Returns:
+        avg_score: average testing score
+        avg_episodes_length: average number of options per episode
+        success_rate: percentage of episodes that reached minimum section
+    """
+    logger.info(f"Starting evaluation for {num_episodes} episodes with seed {seed}")
+    
+    # Set random seeds for reproducibility
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+    
+    episode_scores = []
+    episode_lengths = []
+    successful_episodes = 0
+    
+    # Store original testing mode and set to testing mode
+    original_testing = oc_model.testing
+    oc_model.testing = True
+    
+    try:
+        for ep in range(num_episodes):
+            logger.info(f"Evaluation episode {ep+1}/{num_episodes}")
+            
+            try:
+                structure = base_env.reset(testing=True)
+                done = False
+                option_termination = True
+                curr_option = 0
+                greedy_option = 0
+                episode_score = 0.0
+                episode_option_count = 0
+                
+                while not done :
+                    if option_termination:
+                        # Always use greedy option selection during evaluation
+                        curr_option = greedy_option
+                    
+                    try:
+                        structure, next_state, option_reward, option_done, episode_done, o_stats, step_transitions, termination_reason = rollout_option(
+                            structure, base_env, device, max_option_len, curr_option, oc_model, None, logger
+                        )
+                        
+                        # Accumulate score only from successful options
+                        if bool(o_stats.get("passed", False)):
+                            episode_score += float(option_reward)
+                        
+                        episode_option_count += 1
+                        
+                        # Check if episode completed successfully
+                        if termination_reason == "minimum_section":
+                            successful_episodes += 1
+                            logger.info(f"Episode {ep+1} reached minimum section successfully")
+                        
+                        done = episode_done
+                        
+                        # Update option termination for next iteration
+                        if not done:
+                            try:
+                                current_graph_data = get_graph_data(structure, device)
+                                state = oc_model.get_state(*current_graph_data)
+                                option_termination, greedy_option = oc_model.predict_option_termination(state, curr_option)
+                            except Exception as e:
+                                logger.error(f"Error in option termination prediction during eval: {e}")
+                                option_termination = True
+                                greedy_option = 0
+                        
+                    except Exception as e:
+                        logger.error(f"Error in rollout_option during evaluation: {e}")
+                        break
+                
+                episode_scores.append(episode_score)
+                episode_lengths.append(episode_option_count)
+                logger.info(f"Episode {ep+1} completed: score={episode_score:.2f}, length={episode_option_count}")
+                
+            except Exception as e:
+                logger.error(f"Error in evaluation episode {ep+1}: {e}")
+                continue
+    
+    finally:
+        # Restore original testing mode
+        oc_model.testing = original_testing
+    
+    # Calculate metrics
+    avg_score = float(np.mean(episode_scores)) if episode_scores else 0.0
+    avg_episode_length = float(np.mean(episode_lengths)) if episode_lengths else 0.0
+    success_rate = (successful_episodes / num_episodes) * 100.0 if num_episodes > 0 else 0.0
+    
+    logger.info(f"Evaluation completed:")
+    logger.info(f"  Average score: {avg_score:.2f}")
+    logger.info(f"  Average episode length: {avg_episode_length:.2f}")
+    logger.info(f"  Success rate: {success_rate:.1f}% ({successful_episodes}/{num_episodes})")
+    
+    return avg_score, avg_episode_length, success_rate
+
+
 def parse_args():
     parser = argparse.ArgumentParser()
     # env
@@ -377,11 +486,13 @@ def parse_args():
     parser.add_argument("--critic_lr", type=float, default=3e-4)
     parser.add_argument("--grad_clip", type=float, default=10.0)
     parser.add_argument("--device", type=str, default="cuda")
-    parser.add_argument("--epochs", type=int, default=100)
+    parser.add_argument("--epochs", type=int, default=2)
     parser.add_argument("--hidden_dim", type=int, default=128)
     parser.add_argument("--num_layers", type=int, default=3)
     parser.add_argument("--termination_reg", type=float, default=0.01)
     parser.add_argument("--entropy_reg", type=float, default=0.01)
+    parser.add_argument("--eval_frequency", type=int, default=1, help="Evaluate model every N training episodes")
+    parser.add_argument("--eval_episodes", type=int, default=1, help="Number of episodes for evaluation")
     return parser.parse_args()
 
 
@@ -522,7 +633,15 @@ def main(args):
         "episode_score": [],
         "last_pass_sections": [],
         "last_pass_saved_material": [],
+        "eval_scores": [],
+        "eval_success_rates": [],
+        "eval_episode_lengths": [],
     }
+
+    # Best model tracking
+    best_model_score = float('-inf')
+    best_model_path = ckpt_dir / "best_model.pt"
+    best_model_info_path = ckpt_dir / "best_model_info.json"
 
     for ep in range(args.epochs):
         logger.info(f"Starting episode {ep+1}/{args.epochs}")
@@ -681,6 +800,51 @@ def main(args):
         except Exception as e:
             logger.error(f"Failed to update episode {ep+1} stats: {e}")
 
+        # Periodic evaluation
+        if (ep + 1) % args.eval_frequency == 0:
+            logger.info(f"Starting evaluation after episode {ep+1}")
+            try:
+                avg_score, avg_episode_length, success_rate = evaluate_model(
+                    base_env, oc, device, args.eval_episodes, args.max_option_len, logger, seed=42
+                )
+                
+                # Store evaluation results
+                all_stats["eval_scores"].append(float(avg_score))
+                all_stats["eval_success_rates"].append(float(success_rate))
+                all_stats["eval_episode_lengths"].append(float(avg_episode_length))
+                
+                logger.info(f"Episode {ep+1} evaluation: score={avg_score:.2f}, success_rate={success_rate:.1f}%")
+                
+                # Check if this is the best model so far
+                if avg_score > best_model_score:
+                    best_model_score = avg_score
+                    logger.info(f"New best model found! Score: {avg_score:.2f} (previous best: {best_model_score:.2f})")
+                    
+                    # Save best model
+                    try:
+                        torch.save(oc.state_dict(), best_model_path)
+                        
+                        # Save best model info
+                        best_model_info = {
+                            "episode": ep + 1,
+                            "score": float(avg_score),
+                            "success_rate": float(success_rate),
+                            "avg_episode_length": float(avg_episode_length),
+                            "timestamp": str(datetime.datetime.now()),
+                            "hyperparameters": vars(args)
+                        }
+                        
+                        with open(best_model_info_path, "w", encoding="utf-8") as f:
+                            json.dump(best_model_info, f, ensure_ascii=False, indent=2)
+                            
+                        logger.info(f"Best model saved to {best_model_path}")
+                        
+                    except Exception as e:
+                        logger.error(f"Failed to save best model: {e}")
+                
+            except Exception as e:
+                logger.error(f"Evaluation failed at episode {ep+1}: {e}")
+
         # persist stats every episode
         try:
             with open(stats_path, "w", encoding="utf-8") as f:
@@ -727,8 +891,111 @@ def main(args):
             plt.tight_layout()
             plt.savefig(ckpt_dir / 'last_pass_saved_material.png', dpi=200)
             plt.close()
+
+        # Evaluation metrics
+        eval_scores = all_stats.get("eval_scores", [])
+        if len(eval_scores) > 0:
+            eval_episodes = [i * args.eval_frequency for i in range(1, len(eval_scores) + 1)]
+            
+            plt.figure(figsize=(15, 5))
+            
+            # Evaluation scores
+            plt.subplot(1, 3, 1)
+            plt.plot(eval_episodes, eval_scores, 'o-', label='Evaluation Score', color='#d62728')
+            plt.xlabel('Training Episode')
+            plt.ylabel('Average Score')
+            plt.title('Evaluation Score History')
+            plt.grid(True, alpha=0.3)
+            plt.legend()
+            
+            # Success rates
+            eval_success_rates = all_stats.get("eval_success_rates", [])
+            if len(eval_success_rates) > 0:
+                plt.subplot(1, 3, 2)
+                plt.plot(eval_episodes, eval_success_rates, 'o-', label='Success Rate', color='#ff7f0e')
+                plt.xlabel('Training Episode')
+                plt.ylabel('Success Rate (%)')
+                plt.title('Evaluation Success Rate History')
+                plt.grid(True, alpha=0.3)
+                plt.legend()
+            
+            # Episode lengths
+            eval_episode_lengths = all_stats.get("eval_episode_lengths", [])
+            if len(eval_episode_lengths) > 0:
+                plt.subplot(1, 3, 3)
+                plt.plot(eval_episodes, eval_episode_lengths, 'o-', label='Avg Episode Length', color='#9467bd')
+                plt.xlabel('Training Episode')
+                plt.ylabel('Average Episode Length')
+                plt.title('Evaluation Episode Length History')
+                plt.grid(True, alpha=0.3)
+                plt.legend()
+            
+            plt.tight_layout()
+            plt.savefig(ckpt_dir / 'evaluation_metrics.png', dpi=200)
+            plt.close()
+
     except Exception as e:
         logger.warning(f"Failed plotting episode histories: {e}")
+
+    # Final summary with best model information
+    try:
+        logger.info("Training completed!")
+        if best_model_path.exists():
+            logger.info(f"Best model saved at: {best_model_path}")
+            logger.info(f"Best model score: {best_model_score:.2f}")
+            logger.info(f"Best model info saved at: {best_model_info_path}")
+            logger.info(f"To run inference with the best model, use: python inference_best_model.py --checkpoint_dir {ckpt_dir}")
+        else:
+            logger.info("No best model was saved (no evaluations performed)")
+    except Exception as e:
+        logger.error(f"Error in final summary: {e}")
+
+
+def load_best_model(checkpoint_dir, model_args=None):
+    """
+    Load the best performing model from checkpoint directory.
+    
+    Args:
+        checkpoint_dir: Path to checkpoint directory
+        model_args: Optional arguments for model initialization
+        
+    Returns:
+        tuple: (model, best_model_info) or (None, None) if not found
+    """
+    ckpt_dir = Path(checkpoint_dir)
+    best_model_path = ckpt_dir / "best_model.pt"
+    best_model_info_path = ckpt_dir / "best_model_info.json"
+    
+    if not best_model_path.exists() or not best_model_info_path.exists():
+        print(f"Best model not found in {checkpoint_dir}")
+        return None, None
+    
+    try:
+        # Load model info
+        with open(best_model_info_path, "r", encoding="utf-8") as f:
+            best_model_info = json.load(f)
+        
+        print(f"Loading best model from episode {best_model_info['episode']}")
+        print(f"  Score: {best_model_info['score']:.2f}")
+        print(f"  Success Rate: {best_model_info['success_rate']:.1f}%")
+        print(f"  Saved at: {best_model_info['timestamp']}")
+        
+        # Use provided args or get from saved hyperparameters
+        if model_args is None:
+            model_args = argparse.Namespace(**best_model_info['hyperparameters'])
+        
+        # Create model with same architecture
+        device = torch.device(model_args.device if hasattr(model_args, 'device') else 'cuda')
+        
+        # You would need to reconstruct the model here with proper parameters
+        # This is a template - you'd need to adapt based on your model creation code
+        # For now, returning info only as model reconstruction needs environment setup
+        
+        return best_model_path, best_model_info
+        
+    except Exception as e:
+        print(f"Error loading best model: {e}")
+        return None, None
 
 if __name__ == "__main__":
     args = parse_args()

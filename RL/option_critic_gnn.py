@@ -208,8 +208,13 @@ class OptionCriticGNN(nn.Module):
             # Single state
             termination_prob = termination_probs[current_option]
         
-        # Sample termination decision
-        option_termination = Bernoulli(termination_prob).sample()
+        # Sample termination decision (deterministic in testing mode)
+        if self.testing:
+            # Use threshold-based deterministic decision during testing
+            option_termination = termination_prob > 0.5
+        else:
+            # Use probabilistic sampling during training
+            option_termination = Bernoulli(termination_prob).sample()
         
         # Select next option greedily based on Q-values
         Q = self.get_Q(state)
@@ -266,8 +271,14 @@ class OptionCriticGNN(nn.Module):
         action_dist = (logits / self.temperature).softmax(dim=-1)
         action_dist = Categorical(action_dist)
         
-        # Sample action
-        action = action_dist.sample()
+        # Sample action (deterministic in testing mode)
+        if self.testing:
+            # Use argmax for deterministic action selection during testing
+            action = torch.argmax(action_dist.probs, dim=-1)
+        else:
+            # Use sampling during training
+            action = action_dist.sample()
+            
         logp = action_dist.log_prob(action)
         entropy = action_dist.entropy()
         
