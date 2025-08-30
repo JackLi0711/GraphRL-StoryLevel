@@ -77,7 +77,7 @@ def check_constraints_without_update(structure, base_env):
     return whether_pass, fail_reason
 
 
-def rollout_option(structure, base_env, device, max_option_len, current_option: int, oc_model, epsilon: float = None):
+def rollout_option(structure, base_env, device, max_option_len, current_option: int, oc_model, epsilon: float = None, logger=None):
     """
     Execute a single option composed of a sequence of primitive actions.
 
@@ -116,94 +116,215 @@ def rollout_option(structure, base_env, device, max_option_len, current_option: 
 
     step_transitions = []  # list of dicts: {obs_z, action, logp, entropy, reward, done, next_obs_z}
 
+    if logger:
+        logger.debug(f"Starting rollout_option for option {current_option}, max_len={max_option_len}")
+    else:
+        print(f"DEBUG: Starting rollout_option for option {current_option}, max_len={max_option_len}")
+        
+    safety_counter = 0
+    max_safety_iterations = max_option_len + 10  # Extra safety margin
     while length < max_option_len:
-        # intra-option action
-        action, logp, entropy = oc_model.get_action(state, current_option)
-        entropies.append(float(entropy.detach().cpu().numpy()))
+        safety_counter += 1
+        if logger:
+            logger.debug(f"rollout_option loop iteration {length+1}/{max_option_len}, safety_counter={safety_counter}")
+        else:
+            print(f"DEBUG: rollout_option loop iteration {length+1}/{max_option_len}, safety_counter={safety_counter}")
+        
+        # Safety check to prevent infinite loops
+        if safety_counter > max_safety_iterations:
+            if logger:
+                logger.error(f"rollout_option exceeded safety counter ({max_safety_iterations}), forcing termination")
+            else:
+                print(f"ERROR: rollout_option exceeded safety counter ({max_safety_iterations}), forcing termination")
+            termination_reason = "safety_timeout"
+            break
+        
+        # Create valid actions mask
+        try:
+            # Get all restricted actions
+            already_minimum = set(getattr(structure, 'already_minimum_section_story_indexes', []) or [])
+            restricted_actions = set()
+            if hasattr(structure, 'restrict_action_space'):
+                restricted = structure.restrict_action_space()
+                if restricted is not None:
+                    restricted_actions.update(restricted)
+            
+            # Combine all invalid actions
+            invalid_actions = already_minimum | restricted_actions
+            log_msg = f"Already minimum: {already_minimum}, Restricted: {restricted_actions}"
+            if logger:
+                logger.debug(log_msg)
+            else:
+                print(f"DEBUG: {log_msg}")
+                
+            log_msg = f"Total invalid actions: {invalid_actions}"
+            if logger:
+                logger.debug(log_msg)
+            else:
+                print(f"DEBUG: {log_msg}")
+            
+            # Create mask tensor (True = valid action)
+            num_actions = len(structure.story_level_actions)
+            valid_mask = torch.ones(num_actions, dtype=torch.bool, device=device)
+            for invalid_action in invalid_actions:
+                if 0 <= invalid_action < num_actions:
+                    valid_mask[invalid_action] = False
+            
+            log_msg = f"Valid actions mask: {valid_mask.sum().item()}/{num_actions} actions available"
+            if logger:
+                logger.debug(log_msg)
+            else:
+                print(f"DEBUG: {log_msg}")
+        except Exception as e:
+            if logger:
+                logger.error(f"Failed to create valid actions mask: {e}")
+            else:
+                print(f"ERROR: Failed to create valid actions mask: {e}")
+            valid_mask = None
 
-        # Pre-check: if this action targets a minimum section, force terminate option & episode
-        infeasible = set(getattr(structure, 'already_minimum_section_story_indexes', []) or [])
-        if hasattr(structure, 'restrict_action_space'):
-            try:
-                ra = structure.restrict_action_space()
-                infeasible |= set(ra if ra is not None else [])
-            except Exception:
-                pass
-        if action in infeasible:
-            termination_reason = "minimum_section"
-            whether_pass, fail_reason = check_constraints_without_update(structure, base_env)
-            # finalize option according to rules
-            option_done = True
-            episode_done = True
-            # reward policy handled after loop using option_reward_sum & whether_pass
-            step_pass = whether_pass
+        # intra-option action with valid actions mask
+        try:
+            log_msg = f"Getting action for option {current_option}"
+            if logger:
+                logger.debug(log_msg)
+            else:
+                print(f"DEBUG: {log_msg}")
+                
+            action, logp, entropy = oc_model.get_action(state, current_option, valid_mask)
+            entropies.append(float(entropy.detach().cpu().numpy()))
+            
+            log_msg = f"Got action {action}, entropy: {entropy.item()}"
+            if logger:
+                logger.debug(log_msg)
+            else:
+                print(f"DEBUG: {log_msg}")
+        except Exception as e:
+            if logger:
+                logger.error(f"Failed to get action: {e}")
+            else:
+                print(f"ERROR: Failed to get action: {e}")
+            termination_reason = "action_error"
             break
 
-        structure, step_reward, step_pass, is_min_section, fail_reason = apply_primitive_action(base_env, structure, action)
+        log_msg = f"Applying primitive action {action}"
+        if logger:
+            logger.debug(log_msg)
+        else:
+            print(f"DEBUG: {log_msg}")
+            
+        try:
+            structure, step_reward, step_pass, is_min_section, fail_reason = apply_primitive_action(base_env, structure, action)
+            log_msg = f"Action applied - reward: {step_reward}, pass: {step_pass}, min_section: {is_min_section}, fail_reason: {fail_reason}"
+            if logger:
+                logger.debug(log_msg)
+            else:
+                print(f"DEBUG: {log_msg}")
+        except Exception as e:
+            print(f"ERROR: Failed to apply primitive action: {e}")
+            termination_reason = "action_apply_error"
+            step_reward = -1000.0
+            step_pass = False
+            is_min_section = False
+            fail_reason = "action_apply_error"
         option_reward_sum += step_reward
         length += 1
+        print(f"DEBUG: Updated length to {length}, option_reward_sum to {option_reward_sum}")
 
         # minimum section: force terminate option and episode
         if is_min_section:
+            print(f"DEBUG: Minimum section reached, terminating option and episode")
             termination_reason = "minimum_section"
             episode_done = True
+            try:
+                next_graph_data = get_graph_data(structure, device)
+                step_transitions.append({
+                    "graph_data": graph_data,
+                    "action": action,
+                    "logp": logp.detach().clone(),
+                    "entropy": entropy.detach().clone(),
+                    "reward": float(step_reward),
+                    "done": True,
+                    "next_graph_data": next_graph_data,
+                })
+                print(f"DEBUG: Added final step transition, breaking from loop")
+            except Exception as e:
+                print(f"ERROR: Failed to create step transition: {e}")
+            break
+
+        # compute next state for termination prediction
+        print(f"DEBUG: Computing next state for termination prediction")
+        try:
             next_graph_data = get_graph_data(structure, device)
+            next_state = oc_model.get_state(*next_graph_data)
+            print(f"DEBUG: Successfully computed next state")
+        except Exception as e:
+            print(f"ERROR: Failed to compute next state: {e}")
+            termination_reason = "state_error"
+            break
+
+        # record step transition
+        print(f"DEBUG: Recording step transition")
+        try:
             step_transitions.append({
                 "graph_data": graph_data,
                 "action": action,
                 "logp": logp.detach().clone(),
                 "entropy": entropy.detach().clone(),
                 "reward": float(step_reward),
-                "done": True,
+                "done": False,
                 "next_graph_data": next_graph_data,
             })
-            break
-
-        # compute next state for termination prediction
-        next_graph_data = get_graph_data(structure, device)
-        next_state = oc_model.get_state(*next_graph_data)
-
-        # record step transition
-        step_transitions.append({
-            "graph_data": graph_data,
-            "action": action,
-            "logp": logp.detach().clone(),
-            "entropy": entropy.detach().clone(),
-            "reward": float(step_reward),
-            "done": False,
-            "next_graph_data": next_graph_data,
-        })
+            print(f"DEBUG: Step transition recorded, total transitions: {len(step_transitions)}")
+        except Exception as e:
+            print(f"ERROR: Failed to record step transition: {e}")
 
         # option termination by beta
-        option_termination, _ = oc_model.predict_option_termination(next_state, current_option)
-        if option_termination:
-            termination_reason = "beta"
-            state = next_state
-            graph_data = next_graph_data
+        print(f"DEBUG: Checking option termination by beta")
+        try:
+            option_termination, _ = oc_model.predict_option_termination(next_state, current_option)
+            print(f"DEBUG: Beta termination check result: {option_termination}")
+            if option_termination:
+                print(f"DEBUG: Option terminated by beta, breaking from loop")
+                termination_reason = "beta"
+                state = next_state
+                graph_data = next_graph_data
+                break
+        except Exception as e:
+            print(f"ERROR: Failed option termination prediction: {e}")
+            termination_reason = "beta_error"
             break
 
         # continue the option
+        print(f"DEBUG: Continuing option, updating state")
         state = next_state
         graph_data = next_graph_data
+        print(f"DEBUG: State updated, continuing to next iteration")
 
     # if not terminated by beta/minimum_section, it hits max length
+    print(f"DEBUG: Exited rollout loop with length={length}, max_len={max_option_len}, termination_reason={termination_reason}")
     option_done = True
     if termination_reason is None:
         termination_reason = "max_len"
+        print(f"DEBUG: Set termination reason to max_len")
 
     # finalize reward per rules
     # Pass if not failed at last step (i.e., not an immediate constraint failure)
     # Note: step_pass refers to the last evaluated step
     passed = step_pass if length > 0 else True
+    print(f"DEBUG: Final step_pass check: step_pass={step_pass}, length={length}, passed={passed}")
+    
     if not passed:
+        print(f"DEBUG: Option failed, applying penalty reward")
         option_reward = -1000.0
         episode_done = True
         # ensure the last step gets the terminal penalty and marks episode done
         if len(step_transitions) > 0:
             step_transitions[-1]["reward"] = -1000.0
             step_transitions[-1]["done"] = True
+            print(f"DEBUG: Updated last step transition with penalty")
     else:
         option_reward = float(option_reward_sum)
+        print(f"DEBUG: Option passed, final reward: {option_reward}")
 
     # Compute option-level saved material (before vs after this option)
     try:
@@ -224,6 +345,7 @@ def rollout_option(structure, base_env, device, max_option_len, current_option: 
     }
 
     next_state = state  # latest state
+    print(f"DEBUG: rollout_option returning - option_reward: {option_reward}, option_done: {option_done}, episode_done: {episode_done}, termination_reason: {termination_reason}, num_transitions: {len(step_transitions)}")
     return structure, next_state, option_reward, option_done, episode_done, stats, step_transitions, termination_reason
 
 
@@ -255,7 +377,7 @@ def parse_args():
     parser.add_argument("--critic_lr", type=float, default=3e-4)
     parser.add_argument("--grad_clip", type=float, default=10.0)
     parser.add_argument("--device", type=str, default="cuda")
-    parser.add_argument("--epochs", type=int, default=10)
+    parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--hidden_dim", type=int, default=128)
     parser.add_argument("--num_layers", type=int, default=3)
     parser.add_argument("--termination_reg", type=float, default=0.01)
@@ -267,7 +389,28 @@ def main(args):
     device = torch.device(args.device)
     logger = logging.getLogger("OC_Train")
     if not logger.handlers:
-        logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(levelname)s %(message)s")
+        # Create formatter
+        formatter = logging.Formatter("[%(asctime)s] %(levelname)s %(message)s")
+        
+        # Console handler
+        console_handler = logging.StreamHandler()
+        console_handler.setLevel(logging.DEBUG)
+        console_handler.setFormatter(formatter)
+        logger.addHandler(console_handler)
+        
+        # File handler - save to checkpoint directory
+        ckpt_dir = Path(__file__).resolve().parent / "checkpoints" / "option_oc"
+        ckpt_dir.mkdir(parents=True, exist_ok=True)
+        log_file = ckpt_dir / "training.log"
+        file_handler = logging.FileHandler(log_file, mode='w', encoding='utf-8')
+        file_handler.setLevel(logging.DEBUG)
+        file_handler.setFormatter(formatter)
+        logger.addHandler(file_handler)
+        
+        # Set logger level
+        logger.setLevel(logging.DEBUG)
+        logger.info(f"Debug logging enabled - logs saved to {log_file}")
+        logger.info("Use INFO level to reduce verbosity")
 
     # Build base env (NDA/SCWB disabled per spec)
     nda_simulator = None
@@ -382,26 +525,58 @@ def main(args):
     }
 
     for ep in range(args.epochs):
-        structure = base_env.reset(testing=False)
-        done = False
-        option_termination = True
-        curr_option = 0
-        greedy_option = 0
-        steps = 0
+        logger.info(f"Starting episode {ep+1}/{args.epochs}")
+        try:
+            structure = base_env.reset(testing=False)
+            logger.debug(f"Environment reset successful for episode {ep+1}")
+            
+            done = False
+            option_termination = True
+            curr_option = 0
+            greedy_option = 0
+            steps = 0
 
-        episode_opt_lengths = []
-        episode_termination_counter = {"beta": 0, "max_len": 0, "minimum_section": 0}
-        episode_entropies = []
-        episode_score = 0.0
-        last_pass_sections = None
-        last_pass_saved_material = None
+            episode_opt_lengths = []
+            episode_termination_counter = {"beta": 0, "max_len": 0, "minimum_section": 0}
+            episode_entropies = []
+            episode_score = 0.0
+            last_pass_sections = None
+            last_pass_saved_material = None
+            
+        except Exception as e:
+            logger.error(f"Failed to initialize episode {ep+1}: {e}")
+            logger.error(f"Exception details:", exc_info=True)
+            continue
 
+        logger.info(f"Starting episode {ep+1} main loop")
+        loop_iteration = 0
+        max_loop_iterations = 1000  # Safety check to prevent infinite loops
         while not done:
+            loop_iteration += 1
+            logger.debug(f"Episode {ep+1}, Loop iteration {loop_iteration}, done={done}, option_termination={option_termination}")
+            
+            # Safety check for infinite loops
+            if loop_iteration > max_loop_iterations:
+                logger.error(f"Episode {ep+1} exceeded maximum loop iterations ({max_loop_iterations}), forcing termination")
+                done = True
+                break
+            
             epsilon = oc.epsilon
+            logger.debug(f"Current epsilon: {epsilon}")
+            
             if option_termination:
+                logger.debug(f"Option terminated, selecting new option")
                 curr_option = np.random.choice(args.num_options) if np.random.rand() < epsilon else greedy_option
+                logger.debug(f"Selected option: {curr_option} (greedy_option: {greedy_option})")
 
-            structure, next_state, option_reward, option_done, episode_done, o_stats, step_transitions = rollout_option(structure, base_env, device, args.max_option_len, curr_option, oc, epsilon)
+            logger.debug(f"Calling rollout_option with curr_option={curr_option}")
+            try:
+                structure, next_state, option_reward, option_done, episode_done, o_stats, step_transitions, termination_reason = rollout_option(structure, base_env, device, args.max_option_len, curr_option, oc, epsilon, logger)
+                logger.debug(f"rollout_option returned: option_done={option_done}, episode_done={episode_done}, option_reward={option_reward}, termination_reason={termination_reason}")
+            except Exception as e:
+                logger.error(f"Error in rollout_option: {e}")
+                logger.error(f"Exception details:", exc_info=True)
+                break
 
             # logging stats
             all_stats["option_lengths"].append(o_stats["option_length"])
@@ -423,56 +598,94 @@ def main(args):
                 last_pass_saved_material = o_stats.get("option_saved_material", last_pass_saved_material)
 
             # push option transition to buffer (store current state for replay)
-            current_graph_data = get_graph_data(structure, device)
-            buffer.push(current_graph_data, curr_option, option_reward, current_graph_data, episode_done)  # Note: using current state for both obs and next_obs in option-level buffer
+            logger.debug(f"Pushing transition to buffer, buffer size before: {len(buffer)}")
+            try:
+                current_graph_data = get_graph_data(structure, device)
+                buffer.push(current_graph_data, curr_option, option_reward, current_graph_data, episode_done)  # Note: using current state for both obs and next_obs in option-level buffer
+                logger.debug(f"Buffer size after push: {len(buffer)}")
+            except Exception as e:
+                logger.error(f"Error pushing to buffer: {e}")
 
             # Per-step updates (mean-style as in original): for each intra-option step do one actor update
+            logger.debug(f"Number of step transitions: {len(step_transitions)}")
             if len(step_transitions) > 0:
-                for tr in step_transitions:
-                    a_loss = actor_loss(
-                        tr["graph_data"], curr_option, tr["logp"], tr["entropy"], tr["reward"], tr["done"], tr["next_graph_data"], 
-                        oc, oc_prime, args.gamma, args.termination_reg, args.entropy_reg
-                    )
-                    actor_optimizer.zero_grad()
-                    a_loss.backward()
-                    if args.grad_clip is not None and args.grad_clip > 0:
-                        torch.nn.utils.clip_grad_norm_(oc.parameters(), max_norm=args.grad_clip)
-                    actor_optimizer.step()
+                try:
+                    for i, tr in enumerate(step_transitions):
+                        logger.debug(f"Processing step transition {i+1}/{len(step_transitions)}")
+                        a_loss = actor_loss(
+                            tr["graph_data"], curr_option, tr["logp"], tr["entropy"], tr["reward"], tr["done"], tr["next_graph_data"], 
+                            oc, oc_prime, args.gamma, args.termination_reg, args.entropy_reg
+                        )
+                        actor_optimizer.zero_grad()
+                        a_loss.backward()
+                        if args.grad_clip is not None and args.grad_clip > 0:
+                            torch.nn.utils.clip_grad_norm_(oc.parameters(), max_norm=args.grad_clip)
+                        actor_optimizer.step()
+                        logger.debug(f"Actor update {i+1} completed, loss: {a_loss.item()}")
+                except Exception as e:
+                    logger.error(f"Error in actor updates: {e}")
 
             # Critic updates on schedule (option-level replay)
-            if len(buffer) > args.batch_size and (steps % args.update_frequency == 0):
-                data_batch = buffer.sample(args.batch_size)
-                c_loss = critic_loss(oc, oc_prime, data_batch, args.gamma)
-                critic_optimizer.zero_grad()
-                c_loss.backward()
-                if args.grad_clip is not None and args.grad_clip > 0:
-                    torch.nn.utils.clip_grad_norm_(oc.parameters(), max_norm=args.grad_clip)
-                critic_optimizer.step()
+            should_update_critic = len(buffer) > args.batch_size and (steps % args.update_frequency == 0)
+            logger.debug(f"Critic update check: buffer_size={len(buffer)}, batch_size={args.batch_size}, steps={steps}, should_update={should_update_critic}")
+            if should_update_critic:
+                try:
+                    logger.debug(f"Performing critic update")
+                    data_batch = buffer.sample(args.batch_size)
+                    logger.debug(f"Sampled batch, obs type: {type(data_batch[0])}, options: {len(data_batch[1])}")
+                    c_loss = critic_loss(oc, oc_prime, data_batch, args.gamma)
+                    critic_optimizer.zero_grad()
+                    c_loss.backward()
+                    if args.grad_clip is not None and args.grad_clip > 0:
+                        torch.nn.utils.clip_grad_norm_(oc.parameters(), max_norm=args.grad_clip)
+                    critic_optimizer.step()
+                    logger.debug(f"Critic update completed, loss: {c_loss.item()}")
 
-                if steps % args.freeze_interval == 0:
-                    oc_prime.load_state_dict(oc.state_dict())
+                    if steps % args.freeze_interval == 0:
+                        logger.debug(f"Updating target network at step {steps}")
+                        oc_prime.load_state_dict(oc.state_dict())
+                except Exception as e:
+                    logger.error(f"Error in critic update: {e}")
+                    import traceback
+                    logger.error(f"Traceback: {traceback.format_exc()}")
 
-            current_graph_data = get_graph_data(structure, device)
-            state = oc.get_state(*current_graph_data)
-            option_termination, greedy_option = oc.predict_option_termination(state, curr_option)
+            logger.debug(f"Getting next state and option termination prediction")
+            try:
+                current_graph_data = get_graph_data(structure, device)
+                state = oc.get_state(*current_graph_data)
+                option_termination, greedy_option = oc.predict_option_termination(state, curr_option)
+                logger.debug(f"Option termination prediction: {option_termination}, greedy_option: {greedy_option}")
+            except Exception as e:
+                logger.error(f"Error in option termination prediction: {e}")
+                option_termination = True  # Force termination on error
+                greedy_option = 0
+            
             done = episode_done
             steps += 1
+            logger.debug(f"End of loop iteration {loop_iteration}, done={done}, steps={steps}")
 
+        logger.info(f"Episode {ep+1} completed with {loop_iteration} iterations, {steps} steps")
+        
         # episode-level aggregates
-        all_stats["episode_rewards"].append(float(np.sum([t[2] if isinstance(t, (list, tuple)) and len(t) > 2 else 0.0 for t in []])))  # placeholder, kept for compatibility
-        # use the last option reward as proxy; if需要更精準可在 roll 過程累加
-        all_stats["episode_rewards"][-1] = float(option_reward) if len(all_stats["episode_rewards"]) > 0 else float(option_reward)
-        all_stats["episode_score"].append(float(episode_score))
-        all_stats["last_pass_sections"].append(last_pass_sections)
-        all_stats["last_pass_saved_material"].append(float(last_pass_saved_material) if last_pass_saved_material is not None else None)
-        all_stats["episode_option_lengths_mean"].append(float(np.mean(episode_opt_lengths)) if len(episode_opt_lengths) > 0 else 0.0)
-        all_stats["episode_termination_counts"].append(episode_termination_counter)
-        all_stats["episode_entropy_mean"].append(float(np.mean(episode_entropies)) if len(episode_entropies) > 0 else float("nan"))
+        try:
+            all_stats["episode_rewards"].append(float(np.sum([t[2] if isinstance(t, (list, tuple)) and len(t) > 2 else 0.0 for t in []])))  # placeholder, kept for compatibility
+            # use the last option reward as proxy; if需要更精準可在 roll 過程累加
+            all_stats["episode_rewards"][-1] = float(option_reward) if len(all_stats["episode_rewards"]) > 0 else float(option_reward)
+            all_stats["episode_score"].append(float(episode_score))
+            all_stats["last_pass_sections"].append(last_pass_sections)
+            all_stats["last_pass_saved_material"].append(float(last_pass_saved_material) if last_pass_saved_material is not None else None)
+            all_stats["episode_option_lengths_mean"].append(float(np.mean(episode_opt_lengths)) if len(episode_opt_lengths) > 0 else 0.0)
+            all_stats["episode_termination_counts"].append(episode_termination_counter)
+            all_stats["episode_entropy_mean"].append(float(np.mean(episode_entropies)) if len(episode_entropies) > 0 else float("nan"))
+            logger.debug(f"Episode {ep+1} stats updated successfully")
+        except Exception as e:
+            logger.error(f"Failed to update episode {ep+1} stats: {e}")
 
         # persist stats every episode
         try:
             with open(stats_path, "w", encoding="utf-8") as f:
                 json.dump(all_stats, f, ensure_ascii=False, indent=2)
+            logger.debug(f"Stats saved to {stats_path}")
         except Exception as e:
             logger.warning(f"Failed saving stats: {e}")
 

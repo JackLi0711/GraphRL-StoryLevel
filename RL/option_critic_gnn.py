@@ -222,13 +222,15 @@ class OptionCriticGNN(nn.Module):
     
     def get_action(self, 
                    state: torch.Tensor, 
-                   option: int) -> Tuple[int, torch.Tensor, torch.Tensor]:
+                   option: int,
+                   valid_actions_mask: torch.Tensor = None) -> Tuple[int, torch.Tensor, torch.Tensor]:
         """
         Select action within an option using intra-option policy.
         
         Args:
             state: State features
             option: Current option index
+            valid_actions_mask: Boolean tensor indicating valid actions (True = valid)
             
         Returns:
             (action, log_probability, entropy)
@@ -250,6 +252,15 @@ class OptionCriticGNN(nn.Module):
         
         # Compute action logits for the given option
         logits = state_for_action @ self.options_W[option] + self.options_b[option]
+        
+        # Apply action masking if provided
+        if valid_actions_mask is not None:
+            # Ensure mask is on the same device
+            if valid_actions_mask.device != logits.device:
+                valid_actions_mask = valid_actions_mask.to(logits.device)
+            # Set invalid actions to very negative logits
+            logits = logits.clone()
+            logits[~valid_actions_mask] = -1e8
         
         # Apply temperature and get action distribution
         action_dist = (logits / self.temperature).softmax(dim=-1)
@@ -330,6 +341,23 @@ def critic_loss(model: OptionCriticGNN,
     if isinstance(obs, (tuple, list)) and len(obs) >= 4:
         graph_x, graph_edge_index, graph_edge_attr, story_batch = obs[:4]
         next_graph_x, next_graph_edge_index, next_graph_edge_attr, next_story_batch = next_obs[:4]
+        
+        # Move to model device if needed
+        graph_x = graph_x.to(model.device)
+        if graph_edge_index is not None:
+            graph_edge_index = graph_edge_index.to(model.device)
+        if graph_edge_attr is not None:
+            graph_edge_attr = graph_edge_attr.to(model.device)
+        if story_batch is not None:
+            story_batch = story_batch.to(model.device)
+        
+        next_graph_x = next_graph_x.to(model.device)
+        if next_graph_edge_index is not None:
+            next_graph_edge_index = next_graph_edge_index.to(model.device)
+        if next_graph_edge_attr is not None:
+            next_graph_edge_attr = next_graph_edge_attr.to(model.device)
+        if next_story_batch is not None:
+            next_story_batch = next_story_batch.to(model.device)
     else:
         # Handle tensor observations
         if isinstance(obs, (tuple, list)):
@@ -340,51 +368,105 @@ def critic_loss(model: OptionCriticGNN,
             next_graph_x = next_obs[0] if len(next_obs) == 1 else torch.stack(list(next_obs))
         else:
             next_graph_x = next_obs
+        
+        # Move to device
+        graph_x = graph_x.to(model.device)
+        next_graph_x = next_graph_x.to(model.device)
+        
         graph_edge_index = graph_edge_attr = story_batch = None
         next_graph_edge_index = next_graph_edge_attr = next_story_batch = None
     
-    # Get current state and Q-values
-    if graph_edge_index is not None:
-        states = model.get_state(graph_x, graph_edge_index, graph_edge_attr, story_batch)
-    else:
-        states = model.feature_processor(graph_x)
-    Q = model.get_Q(states)
+    # Process each sample individually due to graph structure
+    Q_list = []
+    next_Q_prime_list = []
+    next_termination_probs_list = []
     
-    # Get next state Q-values using target network
-    if next_graph_edge_index is not None:
-        next_states_prime = model_prime.get_state(next_graph_x, next_graph_edge_index, 
-                                                next_graph_edge_attr, next_story_batch)
-        next_states = model.get_state(next_graph_x, next_graph_edge_index, 
-                                    next_graph_edge_attr, next_story_batch)
-    else:
-        next_states_prime = model_prime.feature_processor(next_graph_x)
-        next_states = model.feature_processor(next_graph_x)
+    for i in range(batch_size):
+        # Current state processing
+        if graph_edge_index is not None:
+            # Extract single graph from batch
+            single_graph_x = graph_x[i:i+1]
+            single_edge_index = graph_edge_index[i:i+1] if graph_edge_index.dim() > 2 else graph_edge_index
+            single_edge_attr = graph_edge_attr[i:i+1] if graph_edge_attr.dim() > 2 else graph_edge_attr
+            single_story_batch = story_batch[i:i+1] if story_batch.dim() > 1 else story_batch
+            
+            state = model.get_state(single_graph_x.squeeze(0), single_edge_index.squeeze(0), 
+                                   single_edge_attr.squeeze(0), single_story_batch.squeeze(0))
+        else:
+            state = model.feature_processor(graph_x[i:i+1])
+        
+        Q_single = model.get_Q(state)
+        # Ensure Q_single is 1D with num_options elements
+        if Q_single.dim() == 0:
+            Q_single = Q_single.unsqueeze(0)
+        if Q_single.dim() > 1:
+            Q_single = Q_single.view(-1)
+        Q_list.append(Q_single)
+        
+        # Next state processing
+        if next_graph_edge_index is not None:
+            next_single_graph_x = next_graph_x[i:i+1]
+            next_single_edge_index = next_graph_edge_index[i:i+1] if next_graph_edge_index.dim() > 2 else next_graph_edge_index
+            next_single_edge_attr = next_graph_edge_attr[i:i+1] if next_graph_edge_attr.dim() > 2 else next_graph_edge_attr
+            next_single_story_batch = next_story_batch[i:i+1] if next_story_batch.dim() > 1 else next_story_batch
+            
+            next_state_prime = model_prime.get_state(next_single_graph_x.squeeze(0), next_single_edge_index.squeeze(0),
+                                                    next_single_edge_attr.squeeze(0), next_single_story_batch.squeeze(0))
+            next_state = model.get_state(next_single_graph_x.squeeze(0), next_single_edge_index.squeeze(0),
+                                        next_single_edge_attr.squeeze(0), next_single_story_batch.squeeze(0))
+        else:
+            next_state_prime = model_prime.feature_processor(next_graph_x[i:i+1])
+            next_state = model.feature_processor(next_graph_x[i:i+1])
+        
+        next_Q_prime_single = model_prime.get_Q(next_state_prime)
+        next_termination_single = model.get_terminations(next_state)
+        
+        # Ensure consistent dimensions
+        if next_Q_prime_single.dim() == 0:
+            next_Q_prime_single = next_Q_prime_single.unsqueeze(0)
+        if next_Q_prime_single.dim() > 1:
+            next_Q_prime_single = next_Q_prime_single.view(-1)
+            
+        if next_termination_single.dim() == 0:
+            next_termination_single = next_termination_single.unsqueeze(0)
+        if next_termination_single.dim() > 1:
+            next_termination_single = next_termination_single.view(-1)
+        
+        next_Q_prime_list.append(next_Q_prime_single)
+        next_termination_probs_list.append(next_termination_single)
     
-    next_Q_prime = model_prime.get_Q(next_states_prime)
-    next_termination_probs = model.get_terminations(next_states).detach()
+    # Stack results
+    Q = torch.stack(Q_list, dim=0)  # Shape: [batch_size, num_options]
+    next_Q_prime = torch.stack(next_Q_prime_list, dim=0)  # Shape: [batch_size, num_options]  
+    next_termination_probs = torch.stack(next_termination_probs_list, dim=0).detach()  # Shape: [batch_size, num_options]
     
-    # Handle batch dimension for termination probabilities
-    if next_termination_probs.dim() > 1 and len(options) == next_termination_probs.shape[0]:
-        next_options_term_prob = next_termination_probs[batch_idx, options]
-    else:
-        # Average over batch dimension if needed
-        next_options_term_prob = next_termination_probs.mean(dim=0)[options] if next_termination_probs.dim() > 1 else next_termination_probs[options]
+    # Debug: print shapes
+    print(f"DEBUG critic_loss: Q shape: {Q.shape}, next_Q_prime shape: {next_Q_prime.shape}, next_termination_probs shape: {next_termination_probs.shape}")
+    print(f"DEBUG critic_loss: options: {options}, batch_size: {batch_size}, rewards shape: {rewards.shape}")
     
-    # Compute target
-    if next_Q_prime.dim() > 1 and len(options) == next_Q_prime.shape[0]:
-        next_Q_option = next_Q_prime[batch_idx, options]
-        next_Q_max = next_Q_prime.max(dim=-1)[0]
-    else:
-        next_Q_option = next_Q_prime.mean(dim=0)[options] if next_Q_prime.dim() > 1 else next_Q_prime[options]
-        next_Q_max = next_Q_prime.max(dim=-1)[0] if next_Q_prime.dim() > 1 else next_Q_prime.max()
+    # Ensure all have correct batch dimension
+    if Q.dim() == 1:
+        Q = Q.unsqueeze(0).expand(batch_size, -1)
+    if next_Q_prime.dim() == 1:
+        next_Q_prime = next_Q_prime.unsqueeze(0).expand(batch_size, -1)
+    if next_termination_probs.dim() == 1:
+        next_termination_probs = next_termination_probs.unsqueeze(0).expand(batch_size, -1)
+    
+    # Select Q-values for chosen options
+    next_options_term_prob = next_termination_probs[batch_idx, options]
+    next_Q_option = next_Q_prime[batch_idx, options]
+    next_Q_max = next_Q_prime.max(dim=-1)[0]
+    Q_option = Q[batch_idx, options]
+    
+    # Compute target - ensure all tensors have same shape
+    next_options_term_prob = next_options_term_prob.view(-1)
+    next_Q_option = next_Q_option.view(-1)  
+    next_Q_max = next_Q_max.view(-1)
+    Q_option = Q_option.view(-1)
+    rewards = rewards.view(-1)
+    masks = masks.view(-1)
     
     gt = rewards + masks * gamma * ((1 - next_options_term_prob) * next_Q_option + next_options_term_prob * next_Q_max)
-    
-    # Compute TD error
-    if Q.dim() > 1 and len(options) == Q.shape[0]:
-        Q_option = Q[batch_idx, options]
-    else:
-        Q_option = Q.mean(dim=0)[options] if Q.dim() > 1 else Q[options]
     
     td_err = (Q_option - gt.detach()).pow(2).mul(0.5).mean()
     return td_err

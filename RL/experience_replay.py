@@ -28,18 +28,24 @@ class ReplayBuffer(object):
         Add a transition to the buffer.
         
         Args:
-            obs: Current observation (graph state tensor)
+            obs: Current observation (graph data tuple or tensor)
             option: Selected option index
             reward: Reward received
-            next_obs: Next observation (graph state tensor)
+            next_obs: Next observation (graph data tuple or tensor)
             done: Whether episode terminated
         """
-        # Store tensors on CPU to save GPU memory
-        if torch.is_tensor(obs):
-            obs = obs.detach().cpu()
-        if torch.is_tensor(next_obs):
-            next_obs = next_obs.detach().cpu()
-            
+        # Handle graph data tuples
+        def move_to_cpu(data):
+            if isinstance(data, (tuple, list)):
+                return tuple(t.detach().cpu() if torch.is_tensor(t) else t for t in data)
+            elif torch.is_tensor(data):
+                return data.detach().cpu()
+            else:
+                return data
+        
+        obs = move_to_cpu(obs)
+        next_obs = move_to_cpu(next_obs)
+        
         self.buffer.append((obs, option, reward, next_obs, done))
 
     def sample(self, batch_size: int) -> Tuple:
@@ -58,15 +64,31 @@ class ReplayBuffer(object):
         batch = self.rng.sample(self.buffer, batch_size)
         obs, option, reward, next_obs, done = zip(*batch)
         
-        # Stack graph observations
-        if torch.is_tensor(obs[0]):
-            obs = torch.stack(obs)
-            next_obs = torch.stack(next_obs)
-        else:
-            obs = np.stack(obs)
-            next_obs = np.stack(next_obs)
+        # Handle graph data tuples or single tensors
+        def stack_observations(obs_list):
+            if isinstance(obs_list[0], (tuple, list)):
+                # Graph data tuples - stack each component
+                stacked = []
+                for i in range(len(obs_list[0])):
+                    components = [obs[i] for obs in obs_list]
+                    if torch.is_tensor(components[0]):
+                        stacked.append(torch.stack(components))
+                    elif components[0] is not None:
+                        stacked.append(torch.stack([torch.tensor(c) if not torch.is_tensor(c) else c for c in components]))
+                    else:
+                        stacked.append(None)
+                return tuple(stacked)
+            else:
+                # Single tensor observations
+                if torch.is_tensor(obs_list[0]):
+                    return torch.stack(obs_list)
+                else:
+                    return np.stack(obs_list)
         
-        return obs, option, reward, next_obs, done
+        obs_stacked = stack_observations(obs)
+        next_obs_stacked = stack_observations(next_obs)
+        
+        return obs_stacked, option, reward, next_obs_stacked, done
 
     def __len__(self) -> int:
         """Return current buffer size."""
