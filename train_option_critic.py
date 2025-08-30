@@ -1,8 +1,6 @@
 import argparse
 import logging
 from pathlib import Path
-import importlib.util
-import sys
 import json
 import matplotlib.pyplot as plt
 import numpy as np
@@ -10,9 +8,223 @@ import torch
 import torch.optim as optim
 
 from RL.environment import Environment
-from RL.option_environment import OptionDesignEnv
-from RL.oc_policy_adapter import GraphStateAdapter
+from RL.option_critic_gnn import OptionCriticGNN, critic_loss, actor_loss
+from RL.experience_replay import ReplayBuffer
 from Validation import normalization as nda_norm
+from Structure import check, check_nda
+
+
+def get_graph_data(structure, device):
+    """
+    Extract graph data for OptionCriticGNN.
+    Returns tuple of graph inputs for the neural network.
+    """
+    graph = structure.graph
+    story_batch = structure.aux["story_batch"].to(device)
+    return (
+        graph.x.to(device),
+        graph.edge_index.to(device),
+        graph.edge_attr.to(device),
+        story_batch,
+        None  # structure_story_ptr
+    )
+
+
+def num_actions(structure) -> int:
+    return len(structure.story_level_actions)
+
+
+def apply_primitive_action(base_env, structure, action: int):
+    """
+    Apply a primitive action using the base environment.
+
+    Returns:
+        step_reward: float, reward from base env for this step
+        step_pass: bool, whether constraints pass after this step
+        is_minimum_section: bool, whether minimum section is reached
+        fail_reason: str, fail reason string from base env
+    """
+    structure, step_reward, done, fail_name, fail_reason = base_env.step(structure, action)
+
+    # Derive per-step pass/minimum-section states from base env outputs
+    is_minimum_section = bool(done and (fail_reason == "minimum_section"))
+    step_pass = not (done and (fail_reason != "minimum_section"))
+    return structure, float(step_reward), step_pass, is_minimum_section, fail_reason
+
+
+def check_constraints_without_update(structure, base_env):
+    """
+    Run code checks on current structure WITHOUT applying any action.
+    Returns:
+        whether_pass (bool), fail_reason (str)
+    """
+    # static analysis
+    load_cases, static_responses = check.get_response(structure, base_env.code_analysis_dir)
+    static_constraint_condition, static_response_features, _ = check.process_response(structure, load_cases, static_responses)
+    whether_pass, fail_name, fail_reason = check.check_pass(load_cases, static_constraint_condition, base_env.check_displacement)
+
+    # dynamic analysis if enabled and statically passed
+    dynamic_response_features = None
+    if base_env.do_nonlinear_dynamic_analysis and whether_pass:
+        structure.update_graph_GraphLSTM()
+        dynamic_responses = check_nda.get_response(structure, base_env.nda_simulator, base_env.MCE_ground_motion_set, base_env.device)
+        dynamic_constraint_condition, dynamic_response_features, _ = check_nda.process_response(structure, dynamic_responses, base_env.nda_norm_dict)
+        whether_pass, fail_name, fail_reason = check_nda.check_pass(dynamic_constraint_condition, base_env.check_displacement)
+
+    # update graph features for consistency
+    structure.update_graph_GraphRL(static_response_features, dynamic_response_features)
+
+    return whether_pass, fail_reason
+
+
+def rollout_option(structure, base_env, device, max_option_len, current_option: int, oc_model, epsilon: float = None):
+    """
+    Execute a single option composed of a sequence of primitive actions.
+
+    Args:
+        structure: current structure state
+        base_env: base Environment instance 
+        device: torch device
+        max_option_len: maximum option length
+        current_option: selected option index
+        oc_model: OptionCriticGNN model with get_state, get_action, predict_option_termination
+        epsilon: optional exploration indicator (for logging)
+
+    Returns:
+        next_obs_z: aggregated state vector after option terminates (for next option)
+        option_reward: accumulated reward within this option (or -1000 on failure)
+        option_done: whether option terminated
+        episode_done: whether episode terminated as a result of this option
+        stats: dict with diagnostics (length, termination_reason, entropies, epsilon)
+        step_transitions: list of step-level transitions
+    """
+    option_reward_sum: float = 0.0
+    entropies = []
+    length = 0
+    termination_reason = None
+    episode_done = False
+
+    # Record pre-option material usage to compute saved amount for this option
+    try:
+        pre_option_material_usage = float(structure.calculate_material_usage())
+    except Exception:
+        pre_option_material_usage = None
+
+    # initial state for intra-option policy
+    graph_data = get_graph_data(structure, device)
+    state = oc_model.get_state(*graph_data)
+
+    step_transitions = []  # list of dicts: {obs_z, action, logp, entropy, reward, done, next_obs_z}
+
+    while length < max_option_len:
+        # intra-option action
+        action, logp, entropy = oc_model.get_action(state, current_option)
+        entropies.append(float(entropy.detach().cpu().numpy()))
+
+        # Pre-check: if this action targets a minimum section, force terminate option & episode
+        infeasible = set(getattr(structure, 'already_minimum_section_story_indexes', []) or [])
+        if hasattr(structure, 'restrict_action_space'):
+            try:
+                ra = structure.restrict_action_space()
+                infeasible |= set(ra if ra is not None else [])
+            except Exception:
+                pass
+        if action in infeasible:
+            termination_reason = "minimum_section"
+            whether_pass, fail_reason = check_constraints_without_update(structure, base_env)
+            # finalize option according to rules
+            option_done = True
+            episode_done = True
+            # reward policy handled after loop using option_reward_sum & whether_pass
+            step_pass = whether_pass
+            break
+
+        structure, step_reward, step_pass, is_min_section, fail_reason = apply_primitive_action(base_env, structure, action)
+        option_reward_sum += step_reward
+        length += 1
+
+        # minimum section: force terminate option and episode
+        if is_min_section:
+            termination_reason = "minimum_section"
+            episode_done = True
+            next_graph_data = get_graph_data(structure, device)
+            step_transitions.append({
+                "graph_data": graph_data,
+                "action": action,
+                "logp": logp.detach().clone(),
+                "entropy": entropy.detach().clone(),
+                "reward": float(step_reward),
+                "done": True,
+                "next_graph_data": next_graph_data,
+            })
+            break
+
+        # compute next state for termination prediction
+        next_graph_data = get_graph_data(structure, device)
+        next_state = oc_model.get_state(*next_graph_data)
+
+        # record step transition
+        step_transitions.append({
+            "graph_data": graph_data,
+            "action": action,
+            "logp": logp.detach().clone(),
+            "entropy": entropy.detach().clone(),
+            "reward": float(step_reward),
+            "done": False,
+            "next_graph_data": next_graph_data,
+        })
+
+        # option termination by beta
+        option_termination, _ = oc_model.predict_option_termination(next_state, current_option)
+        if option_termination:
+            termination_reason = "beta"
+            state = next_state
+            graph_data = next_graph_data
+            break
+
+        # continue the option
+        state = next_state
+        graph_data = next_graph_data
+
+    # if not terminated by beta/minimum_section, it hits max length
+    option_done = True
+    if termination_reason is None:
+        termination_reason = "max_len"
+
+    # finalize reward per rules
+    # Pass if not failed at last step (i.e., not an immediate constraint failure)
+    # Note: step_pass refers to the last evaluated step
+    passed = step_pass if length > 0 else True
+    if not passed:
+        option_reward = -1000.0
+        episode_done = True
+        # ensure the last step gets the terminal penalty and marks episode done
+        if len(step_transitions) > 0:
+            step_transitions[-1]["reward"] = -1000.0
+            step_transitions[-1]["done"] = True
+    else:
+        option_reward = float(option_reward_sum)
+
+    # Compute option-level saved material (before vs after this option)
+    try:
+        post_option_material_usage = float(structure.calculate_material_usage())
+        option_saved_material = float(max(0.0, (pre_option_material_usage - post_option_material_usage))) if pre_option_material_usage is not None else float("nan")
+    except Exception:
+        option_saved_material = float("nan")
+
+    stats = {
+        "option_length": length,
+        "termination_reason": termination_reason,
+        "entropy_mean": float(torch.tensor(entropies).mean().item()) if len(entropies) > 0 else float("nan"),
+        "entropy_last": entropies[-1] if len(entropies) > 0 else float("nan"),
+        "epsilon": float(epsilon) if epsilon is not None else None,
+        "passed": bool(passed),
+        "option_saved_material": option_saved_material,
+        "story_level_sections": list(getattr(structure, 'story_level_sections', [])),
+    }
+
+    next_state = state  # latest state
+    return structure, next_state, option_reward, option_done, episode_done, stats, step_transitions, termination_reason
 
 
 def parse_args():
@@ -42,8 +254,8 @@ def parse_args():
     parser.add_argument("--actor_lr", type=float, default=3e-4)
     parser.add_argument("--critic_lr", type=float, default=3e-4)
     parser.add_argument("--grad_clip", type=float, default=10.0)
-    parser.add_argument("--device", type=str, default="cpu")
-    parser.add_argument("--epochs", type=int, default=100)
+    parser.add_argument("--device", type=str, default="cuda")
+    parser.add_argument("--epochs", type=int, default=10)
     parser.add_argument("--hidden_dim", type=int, default=128)
     parser.add_argument("--num_layers", type=int, default=3)
     parser.add_argument("--termination_reg", type=float, default=0.01)
@@ -88,48 +300,16 @@ def main(args):
     hidden_dim = args.hidden_dim
     num_layers = args.num_layers
 
-    adapter = GraphStateAdapter(
+    # No need for separate adapter - OptionCriticGNN includes StateGNN directly
+
+    # Create OptionCriticGNN model
+    A = num_actions(structure)
+    oc = OptionCriticGNN(
         node_feature_dim=node_feature_dim,
         edge_feature_dim=edge_feature_dim,
         hidden_dim=hidden_dim,
+        member_state_dim=hidden_dim,
         num_layers=num_layers,
-        device=device,
-    )
-
-    env = OptionDesignEnv(base_env=base_env, adapter=adapter, max_option_len=args.max_option_len, device=device)
-
-    # Dynamically load Option-Critic from local folder without renaming the original repo
-    repo_root = Path(__file__).resolve().parents[1]
-    oc_path = repo_root / "option-critic-pytorch" / "option_critic.py"
-    if not oc_path.exists():
-        raise FileNotFoundError(f"Option-Critic source not found at {oc_path}")
-    # Ensure local OC repo utilities (e.g., utils.py) are discoverable
-    oc_repo_dir = oc_path.parent
-    if str(oc_repo_dir) not in sys.path:
-        sys.path.insert(0, str(oc_repo_dir))
-    spec = importlib.util.spec_from_file_location("oc_module", oc_path)
-    oc_module = importlib.util.module_from_spec(spec)
-    sys.modules["oc_module"] = oc_module
-    spec.loader.exec_module(oc_module)  # type: ignore
-    OptionCriticFeatures = oc_module.OptionCriticFeatures
-    critic_loss_fn = oc_module.critic_loss
-    actor_loss_fn = oc_module.actor_loss
-
-    # Load OC replay buffer implementation
-    rb_path = repo_root / "option-critic-pytorch" / "experience_replay.py"
-    if not rb_path.exists():
-        raise FileNotFoundError(f"ReplayBuffer source not found at {rb_path}")
-    rb_spec = importlib.util.spec_from_file_location("rb_module", rb_path)
-    rb_module = importlib.util.module_from_spec(rb_spec)
-    sys.modules["rb_module"] = rb_module
-    rb_spec.loader.exec_module(rb_module)  # type: ignore
-    ReplayBuffer = rb_module.ReplayBuffer
-
-    # OC model
-    A = adapter.num_actions(structure)
-    in_features = hidden_dim * 3
-    oc = OptionCriticFeatures(
-        in_features=in_features,
         num_actions=A,
         num_options=args.num_options,
         temperature=args.temperature,
@@ -140,8 +320,12 @@ def main(args):
         device=device,
         testing=False,
     )
-    oc_prime = OptionCriticFeatures(
-        in_features=in_features,
+    oc_prime = OptionCriticGNN(
+        node_feature_dim=node_feature_dim,
+        edge_feature_dim=edge_feature_dim,
+        hidden_dim=hidden_dim,
+        member_state_dim=hidden_dim,
+        num_layers=num_layers,
         num_actions=A,
         num_options=args.num_options,
         temperature=args.temperature,
@@ -154,23 +338,27 @@ def main(args):
     )
     oc_prime.load_state_dict(oc.state_dict())
 
-    # Separate actor/critic parameters
-    actor_params = [
-        oc.options_W, oc.options_b,
-    ]
-    critic_params = [
-        p for n, p in oc.named_parameters() if (n.startswith('Q') or n.startswith('terminations'))
-    ]
-    # features shared; for simplicity, we include them in both with half lr weights if needed
-    shared_params = [p for n, p in oc.named_parameters() if n.startswith('features')]
+    # Separate parameters for different components
+    actor_params = [oc.options_W, oc.options_b]
+    critic_params = [p for n, p in oc.named_parameters() 
+                    if (n.startswith('Q') or n.startswith('terminations'))]
+    state_gnn_params = [p for n, p in oc.named_parameters() 
+                       if n.startswith('state_gnn')]
+    feature_params = [p for n, p in oc.named_parameters() 
+                     if n.startswith('feature_processor')]
 
+    # Use different learning rates for different components
+    gnn_lr = args.actor_lr * 0.1  # Lower learning rate for GNN
+    
     actor_optimizer = optim.Adam([
         {"params": actor_params, "lr": args.actor_lr},
-        {"params": shared_params, "lr": args.actor_lr},
+        {"params": state_gnn_params, "lr": gnn_lr},
+        {"params": feature_params, "lr": args.actor_lr},
     ])
     critic_optimizer = optim.Adam([
         {"params": critic_params, "lr": args.critic_lr},
-        {"params": shared_params, "lr": args.critic_lr},
+        {"params": state_gnn_params, "lr": gnn_lr},
+        {"params": feature_params, "lr": args.critic_lr},
     ])
 
     # Replay buffer
@@ -194,8 +382,7 @@ def main(args):
     }
 
     for ep in range(args.epochs):
-        env.reset(testing=False)
-        obs_z = env.get_obs()
+        structure = base_env.reset(testing=False)
         done = False
         option_termination = True
         curr_option = 0
@@ -214,7 +401,7 @@ def main(args):
             if option_termination:
                 curr_option = np.random.choice(args.num_options) if np.random.rand() < epsilon else greedy_option
 
-            next_obs_z, option_reward, option_done, episode_done, o_stats, step_transitions = env.rollout_option(curr_option, oc, epsilon)
+            structure, next_state, option_reward, option_done, episode_done, o_stats, step_transitions = rollout_option(structure, base_env, device, args.max_option_len, curr_option, oc, epsilon)
 
             # logging stats
             all_stats["option_lengths"].append(o_stats["option_length"])
@@ -235,14 +422,16 @@ def main(args):
                 last_pass_sections = o_stats.get("story_level_sections", last_pass_sections)
                 last_pass_saved_material = o_stats.get("option_saved_material", last_pass_saved_material)
 
-            # push option transition to buffer (as OC expects)
-            buffer.push(obs_z, curr_option, option_reward, next_obs_z, episode_done)
+            # push option transition to buffer (store current state for replay)
+            current_graph_data = get_graph_data(structure, device)
+            buffer.push(current_graph_data, curr_option, option_reward, current_graph_data, episode_done)  # Note: using current state for both obs and next_obs in option-level buffer
 
             # Per-step updates (mean-style as in original): for each intra-option step do one actor update
             if len(step_transitions) > 0:
                 for tr in step_transitions:
-                    a_loss = actor_loss_fn(
-                        tr["obs_z"], curr_option, tr["logp"], tr["entropy"], tr["reward"], tr["done"], tr["next_obs_z"], oc, oc_prime, args
+                    a_loss = actor_loss(
+                        tr["graph_data"], curr_option, tr["logp"], tr["entropy"], tr["reward"], tr["done"], tr["next_graph_data"], 
+                        oc, oc_prime, args.gamma, args.termination_reg, args.entropy_reg
                     )
                     actor_optimizer.zero_grad()
                     a_loss.backward()
@@ -253,7 +442,7 @@ def main(args):
             # Critic updates on schedule (option-level replay)
             if len(buffer) > args.batch_size and (steps % args.update_frequency == 0):
                 data_batch = buffer.sample(args.batch_size)
-                c_loss = critic_loss_fn(oc, oc_prime, data_batch, args)
+                c_loss = critic_loss(oc, oc_prime, data_batch, args.gamma)
                 critic_optimizer.zero_grad()
                 c_loss.backward()
                 if args.grad_clip is not None and args.grad_clip > 0:
@@ -263,10 +452,9 @@ def main(args):
                 if steps % args.freeze_interval == 0:
                     oc_prime.load_state_dict(oc.state_dict())
 
-            state = oc.get_state(next_obs_z)
+            current_graph_data = get_graph_data(structure, device)
+            state = oc.get_state(*current_graph_data)
             option_termination, greedy_option = oc.predict_option_termination(state, curr_option)
-
-            obs_z = next_obs_z
             done = episode_done
             steps += 1
 
