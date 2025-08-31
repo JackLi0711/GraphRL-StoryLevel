@@ -1,5 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.patches import Rectangle
 from typing import List
 from pathlib import Path
 
@@ -118,7 +119,12 @@ def plot_test_behaviors(rec: Record, env: Environment, checkpoint_dir: Path) -> 
     train_scores = rec.training_record["score"]
     test_scores = rec.testing_record["score"]
     test_actions, test_actions_SCWB = rec.testing_record["action"], rec.testing_record["action_SCWB"]
+    test_options = rec.testing_record["option"]  # Get option sequences
     story_num = env._testing_structure.story_num
+
+    # If there is no test data, skip plotting
+    if len(test_scores) == 0 or len(test_actions) == 0:
+        return
 
     action_types = []
     for action in test_actions:
@@ -131,7 +137,11 @@ def plot_test_behaviors(rec: Record, env: Environment, checkpoint_dir: Path) -> 
             types.append(type)
         action_types.append(types)
         
-    test_episodes = np.arange(1, len(test_scores)+1, 1) * int(len(train_scores) / len(test_scores))
+    # robust episode mapping
+    if len(train_scores) > 0:
+        test_episodes = np.linspace(1, len(train_scores), num=len(test_scores))
+    else:
+        test_episodes = np.arange(1, len(test_scores)+1, 1)
     color_mapping = {'xdir-beam': 'dodgerblue', 'zdir-beam': 'yellowgreen', 'out-col': 'orange', 'in-col': 'red'}
 
     fig, ax1 = plt.subplots(figsize=(10, 8))
@@ -141,6 +151,41 @@ def plot_test_behaviors(rec: Record, env: Environment, checkpoint_dir: Path) -> 
             color = color_mapping[type]
             count = 1
             ax1.bar(test_episodes[i], count, color=color, width=3, bottom=j, zorder=1)
+    
+    # Add option boundaries with thick black rectangles
+    for i, (actions, options) in enumerate(zip(test_actions, test_options)):
+        if len(options) == 0:
+            continue
+        
+        # Find option boundaries
+        current_option = options[0]
+        option_start = 0
+        
+        for j in range(1, len(options)):
+            if options[j] != current_option or j == len(options) - 1:
+                # Option boundary detected or end of episode
+                option_end = j if options[j] != current_option else j + 1
+                
+                # Draw thick black rectangle around this option
+                rect_x = test_episodes[i] - 1.5  # Adjust for bar width
+                rect_width = 3  # Match bar width
+                rect_y = option_start
+                rect_height = option_end - option_start
+                
+                rect = Rectangle((rect_x, rect_y), rect_width, rect_height, 
+                               linewidth=3, edgecolor='black', facecolor='none', 
+                               zorder=3, linestyle='-')
+                ax1.add_patch(rect)
+                
+                # Add option number label
+                ax1.text(rect_x + rect_width/2, rect_y + rect_height/2, 
+                        f'O{current_option}', ha='center', va='center', 
+                        fontsize=8, fontweight='bold', color='black', zorder=4,
+                        bbox=dict(boxstyle="round,pad=0.1", facecolor='white', alpha=0.8))
+                
+                # Update for next option
+                current_option = options[j] if j < len(options) else current_option
+                option_start = j
 
     ax1.set_xlabel('Trained Episode', fontsize=16)
     ax1.set_ylabel('Iteration', fontsize=16)

@@ -4,6 +4,7 @@ import logging
 from pathlib import Path
 import json
 import matplotlib.pyplot as plt
+from matplotlib.patches import Rectangle
 import numpy as np
 import torch
 import torch.optim as optim
@@ -11,8 +12,10 @@ import torch.optim as optim
 from RL.environment import Environment
 from RL.option_critic_gnn import OptionCriticGNN, critic_loss, actor_loss
 from RL.experience_replay import ReplayBuffer
+from RL.record import Record
 from Validation import normalization as nda_norm
 from Structure import check, check_nda
+from Visualization.plot import plot_test_behaviors
 
 
 def get_graph_data(structure, device):
@@ -350,9 +353,10 @@ def rollout_option(structure, base_env, device, max_option_len, current_option: 
     return structure, next_state, option_reward, option_done, episode_done, stats, step_transitions, termination_reason
 
 
+
 def evaluate_model(base_env, oc_model, device, num_episodes, max_option_len, logger=None, seed=42):
     """
-    Evaluate the model performance over multiple test episodes.
+    Evaluate the model performance over multiple test episodes and collect action/option histories.
     
     Args:
         base_env: Base environment
@@ -367,6 +371,7 @@ def evaluate_model(base_env, oc_model, device, num_episodes, max_option_len, log
         avg_score: average testing score
         avg_episodes_length: average number of options per episode
         success_rate: percentage of episodes that reached minimum section
+        eval_history: dict containing action and option histories for visualization
     """
     logger.info(f"Starting evaluation for {num_episodes} episodes with seed {seed}")
     
@@ -376,6 +381,9 @@ def evaluate_model(base_env, oc_model, device, num_episodes, max_option_len, log
     
     episode_scores = []
     episode_lengths = []
+    episode_actions = []  # Collect action sequences
+    episode_options = []  # Collect option sequences
+    episode_actions_SCWB = []  # For compatibility
     successful_episodes = 0
     
     # Store original testing mode and set to testing mode
@@ -395,6 +403,10 @@ def evaluate_model(base_env, oc_model, device, num_episodes, max_option_len, log
                 episode_score = 0.0
                 episode_option_count = 0
                 
+                # Track action and option sequences for this episode
+                episode_action_sequence = []
+                episode_option_sequence = []
+                
                 while not done :
                     if option_termination:
                         # Always use greedy option selection during evaluation
@@ -404,6 +416,11 @@ def evaluate_model(base_env, oc_model, device, num_episodes, max_option_len, log
                         structure, next_state, option_reward, option_done, episode_done, o_stats, step_transitions, termination_reason = rollout_option(
                             structure, base_env, device, max_option_len, curr_option, oc_model, None, logger
                         )
+                        
+                        # Collect actions and options from step transitions
+                        for transition in step_transitions:
+                            episode_action_sequence.append(transition["action"])
+                            episode_option_sequence.append(curr_option)
                         
                         # Accumulate score only from successful options
                         if bool(o_stats.get("passed", False)):
@@ -435,7 +452,10 @@ def evaluate_model(base_env, oc_model, device, num_episodes, max_option_len, log
                 
                 episode_scores.append(episode_score)
                 episode_lengths.append(episode_option_count)
-                logger.info(f"Episode {ep+1} completed: score={episode_score:.2f}, length={episode_option_count}")
+                episode_actions.append(episode_action_sequence)
+                episode_options.append(episode_option_sequence)
+                episode_actions_SCWB.append([])  # Empty for compatibility
+                logger.info(f"Episode {ep+1} completed: score={episode_score:.2f}, length={episode_option_count}, actions={len(episode_action_sequence)}")
                 
             except Exception as e:
                 logger.error(f"Error in evaluation episode {ep+1}: {e}")
@@ -455,7 +475,17 @@ def evaluate_model(base_env, oc_model, device, num_episodes, max_option_len, log
     logger.info(f"  Average episode length: {avg_episode_length:.2f}")
     logger.info(f"  Success rate: {success_rate:.1f}% ({successful_episodes}/{num_episodes})")
     
-    return avg_score, avg_episode_length, success_rate
+    # Prepare evaluation history for visualization
+    eval_history = {
+        "scores": episode_scores,
+        "actions": episode_actions,
+        "options": episode_options,
+        "actions_SCWB": episode_actions_SCWB,
+        "avg_score": avg_score,
+        "success_rate": success_rate
+    }
+    
+    return avg_score, avg_episode_length, success_rate, eval_history
 
 
 def parse_args():
@@ -486,12 +516,12 @@ def parse_args():
     parser.add_argument("--critic_lr", type=float, default=3e-4)
     parser.add_argument("--grad_clip", type=float, default=10.0)
     parser.add_argument("--device", type=str, default="cuda")
-    parser.add_argument("--epochs", type=int, default=2)
+    parser.add_argument("--epochs", type=int, default=150)
     parser.add_argument("--hidden_dim", type=int, default=128)
     parser.add_argument("--num_layers", type=int, default=3)
     parser.add_argument("--termination_reg", type=float, default=0.01)
     parser.add_argument("--entropy_reg", type=float, default=0.01)
-    parser.add_argument("--eval_frequency", type=int, default=1, help="Evaluate model every N training episodes")
+    parser.add_argument("--eval_frequency", type=int, default=5, help="Evaluate model every N training episodes")
     parser.add_argument("--eval_episodes", type=int, default=1, help="Number of episodes for evaluation")
     return parser.parse_args()
 
@@ -642,6 +672,14 @@ def main(args):
     best_model_score = float('-inf')
     best_model_path = ckpt_dir / "best_model.pt"
     best_model_info_path = ckpt_dir / "best_model_info.json"
+
+    # Evaluation history tracking for visualization
+    evaluation_histories = {
+        "all_scores": [],      # Flattened list of all scores from all evaluation episodes
+        "all_actions": [],     # Flattened list of all action sequences
+        "all_options": [],     # Flattened list of all option sequences  
+        "all_actions_SCWB": [] # For compatibility
+    }
 
     for ep in range(args.epochs):
         logger.info(f"Starting episode {ep+1}/{args.epochs}")
@@ -804,7 +842,7 @@ def main(args):
         if (ep + 1) % args.eval_frequency == 0:
             logger.info(f"Starting evaluation after episode {ep+1}")
             try:
-                avg_score, avg_episode_length, success_rate = evaluate_model(
+                avg_score, avg_episode_length, success_rate, eval_history = evaluate_model(
                     base_env, oc, device, args.eval_episodes, args.max_option_len, logger, seed=42
                 )
                 
@@ -813,7 +851,14 @@ def main(args):
                 all_stats["eval_success_rates"].append(float(success_rate))
                 all_stats["eval_episode_lengths"].append(float(avg_episode_length))
                 
+                # Collect evaluation histories for visualization
+                evaluation_histories["all_scores"].extend(eval_history["scores"])
+                evaluation_histories["all_actions"].extend(eval_history["actions"])
+                evaluation_histories["all_options"].extend(eval_history["options"])
+                evaluation_histories["all_actions_SCWB"].extend(eval_history["actions_SCWB"])
+                
                 logger.info(f"Episode {ep+1} evaluation: score={avg_score:.2f}, success_rate={success_rate:.1f}%")
+                logger.info(f"Total evaluation episodes collected so far: {len(evaluation_histories['all_scores'])}")
                 
                 # Check if this is the best model so far
                 if avg_score > best_model_score:
@@ -937,6 +982,39 @@ def main(args):
     except Exception as e:
         logger.warning(f"Failed plotting episode histories: {e}")
 
+    # Generate training behavior visualization using evaluation histories
+    try:
+        logger.info("Generating training behavior visualization using evaluation histories...")
+        
+        if len(evaluation_histories["all_scores"]) > 0:
+            # Create a Record-like object for compatibility with plot_test_behaviors
+            class EvaluationRecord:
+                def __init__(self, training_scores, evaluation_histories):
+                    self.training_record = {"score": training_scores}
+                    self.testing_record = {
+                        "score": evaluation_histories["all_scores"],
+                        "action": evaluation_histories["all_actions"],
+                        "action_SCWB": evaluation_histories["all_actions_SCWB"],
+                        "option": evaluation_histories["all_options"]
+                    }
+            
+            # Create record with training scores from all_stats
+            training_scores = all_stats.get("episode_score", [])
+            eval_record = EvaluationRecord(training_scores, evaluation_histories)
+            
+            # Generate the behavior visualization
+            logger.info("Generating evaluation behavior visualization...")
+            plot_test_behaviors(eval_record, base_env, ckpt_dir)
+            logger.info(f"Evaluation behavior plot saved to: {ckpt_dir / 'testing_behaviors.png'}")
+            logger.info(f"Total evaluation episodes plotted: {len(evaluation_histories['all_scores'])}")
+        else:
+            logger.warning("No evaluation histories available for visualization. Make sure eval_frequency is set properly.")
+        
+    except Exception as e:
+        logger.error(f"Error in evaluation behavior visualization: {e}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
+
     # Final summary with best model information
     try:
         logger.info("Training completed!")
@@ -947,6 +1025,10 @@ def main(args):
             logger.info(f"To run inference with the best model, use: python inference_best_model.py --checkpoint_dir {ckpt_dir}")
         else:
             logger.info("No best model was saved (no evaluations performed)")
+            
+        if len(evaluation_histories["all_scores"]) > 0:
+            logger.info(f"Evaluation behavior visualization saved at: {ckpt_dir / 'testing_behaviors.png'}")
+            logger.info(f"Visualization includes {len(evaluation_histories['all_scores'])} evaluation episodes from training")
     except Exception as e:
         logger.error(f"Error in final summary: {e}")
 
