@@ -516,18 +516,25 @@ def parse_args():
     parser.add_argument("--critic_lr", type=float, default=3e-4)
     parser.add_argument("--grad_clip", type=float, default=10.0)
     parser.add_argument("--device", type=str, default="cuda")
-    parser.add_argument("--epochs", type=int, default=150)
+    parser.add_argument("--epochs", type=int, default=2)
     parser.add_argument("--hidden_dim", type=int, default=128)
     parser.add_argument("--num_layers", type=int, default=3)
     parser.add_argument("--termination_reg", type=float, default=0.01)
     parser.add_argument("--entropy_reg", type=float, default=0.01)
-    parser.add_argument("--eval_frequency", type=int, default=5, help="Evaluate model every N training episodes")
+    parser.add_argument("--eval_frequency", type=int, default=1, help="Evaluate model every N training episodes")
     parser.add_argument("--eval_episodes", type=int, default=1, help="Number of episodes for evaluation")
     return parser.parse_args()
 
 
 def main(args):
     device = torch.device(args.device)
+    
+    # Create timestamped checkpoint directory to avoid overwriting previous results
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    ckpt_dir = Path(__file__).resolve().parent / "checkpoints" / "option_oc" / timestamp
+    ckpt_dir.mkdir(parents=True, exist_ok=True)
+    print(f"Created timestamped checkpoint directory: {ckpt_dir}")
+    
     logger = logging.getLogger("OC_Train")
     if not logger.handlers:
         # Create formatter
@@ -539,9 +546,7 @@ def main(args):
         console_handler.setFormatter(formatter)
         logger.addHandler(console_handler)
         
-        # File handler - save to checkpoint directory
-        ckpt_dir = Path(__file__).resolve().parent / "checkpoints" / "option_oc"
-        ckpt_dir.mkdir(parents=True, exist_ok=True)
+        # File handler - save to timestamped checkpoint directory
         log_file = ckpt_dir / "training.log"
         file_handler = logging.FileHandler(log_file, mode='w', encoding='utf-8')
         file_handler.setLevel(logging.DEBUG)
@@ -551,13 +556,12 @@ def main(args):
         # Set logger level
         logger.setLevel(logging.DEBUG)
         logger.info(f"Debug logging enabled - logs saved to {log_file}")
+        logger.info(f"Timestamped checkpoint directory: {ckpt_dir}")
         logger.info("Use INFO level to reduce verbosity")
 
     # Build base env (NDA/SCWB disabled per spec)
     nda_simulator = None
     nda_norm_dict = nda_norm.get_normalization_dict() if hasattr(nda_norm, "get_normalization_dict") else {}
-    ckpt_dir = Path(__file__).resolve().parent / "checkpoints" / "option_oc"
-    ckpt_dir.mkdir(parents=True, exist_ok=True)
     base_env = Environment(
         structure_shape=args.structure_shape,
         add_structure_geometry=args.add_structure_geometry,
@@ -666,6 +670,8 @@ def main(args):
         "eval_scores": [],
         "eval_success_rates": [],
         "eval_episode_lengths": [],
+        "actor_losses": [],
+        "critic_losses": [],
     }
 
     # Best model tracking
@@ -736,7 +742,7 @@ def main(args):
                 break
 
             # logging stats
-            all_stats["option_lengths"].append(o_stats["option_length"])
+            all_stats["option_lengths"].append([o_stats["option_length"]])
             all_stats["termination_reasons"][o_stats["termination_reason"]] = all_stats["termination_reasons"].get(o_stats["termination_reason"], 0) + 1
             all_stats["entropy_mean"].append(o_stats["entropy_mean"])
             all_stats["entropy_last"].append(o_stats["entropy_last"])
@@ -778,6 +784,9 @@ def main(args):
                         if args.grad_clip is not None and args.grad_clip > 0:
                             torch.nn.utils.clip_grad_norm_(oc.parameters(), max_norm=args.grad_clip)
                         actor_optimizer.step()
+                        
+                        # Record actor loss for plotting
+                        all_stats["actor_losses"].append(float(a_loss.item()))
                         logger.debug(f"Actor update {i+1} completed, loss: {a_loss.item()}")
                 except Exception as e:
                     logger.error(f"Error in actor updates: {e}")
@@ -796,6 +805,9 @@ def main(args):
                     if args.grad_clip is not None and args.grad_clip > 0:
                         torch.nn.utils.clip_grad_norm_(oc.parameters(), max_norm=args.grad_clip)
                     critic_optimizer.step()
+                    
+                    # Record critic loss for plotting
+                    all_stats["critic_losses"].append(float(c_loss.item()))
                     logger.debug(f"Critic update completed, loss: {c_loss.item()}")
 
                     if steps % args.freeze_interval == 0:
@@ -979,6 +991,44 @@ def main(args):
             plt.savefig(ckpt_dir / 'evaluation_metrics.png', dpi=200)
             plt.close()
 
+        # Loss histories
+        actor_losses = all_stats.get("actor_losses", [])
+        critic_losses = all_stats.get("critic_losses", [])
+        if len(actor_losses) > 0 or len(critic_losses) > 0:
+            plt.figure(figsize=(15, 5))
+            
+            # Actor loss
+            if len(actor_losses) > 0:
+                plt.subplot(1, 2, 1)
+                plt.plot(range(1, len(actor_losses)+1), actor_losses, alpha=0.6, label='Actor Loss', color='#e377c2')
+                if len(actor_losses) >= 20:
+                    w = min(50, max(10, len(actor_losses)//20))
+                    mv = np.convolve(actor_losses, np.ones(w)/w, mode='valid')
+                    plt.plot(range(w, len(actor_losses)+1), mv, label=f'Moving Avg ({w})', color='#8c564b', linewidth=2)
+                plt.xlabel('Update Step')
+                plt.ylabel('Loss')
+                plt.title('Actor Loss History')
+                plt.grid(True, alpha=0.3)
+                plt.legend()
+            
+            # Critic loss
+            if len(critic_losses) > 0:
+                plt.subplot(1, 2, 2)
+                plt.plot(range(1, len(critic_losses)+1), critic_losses, alpha=0.6, label='Critic Loss', color='#17becf')
+                if len(critic_losses) >= 20:
+                    w = min(50, max(10, len(critic_losses)//20))
+                    mv = np.convolve(critic_losses, np.ones(w)/w, mode='valid')
+                    plt.plot(range(w, len(critic_losses)+1), mv, label=f'Moving Avg ({w})', color='#bcbd22', linewidth=2)
+                plt.xlabel('Update Step')
+                plt.ylabel('Loss')
+                plt.title('Critic Loss History')
+                plt.grid(True, alpha=0.3)
+                plt.legend()
+            
+            plt.tight_layout()
+            plt.savefig(ckpt_dir / 'loss_history.png', dpi=200)
+            plt.close()
+
     except Exception as e:
         logger.warning(f"Failed plotting episode histories: {e}")
 
@@ -1029,6 +1079,16 @@ def main(args):
         if len(evaluation_histories["all_scores"]) > 0:
             logger.info(f"Evaluation behavior visualization saved at: {ckpt_dir / 'testing_behaviors.png'}")
             logger.info(f"Visualization includes {len(evaluation_histories['all_scores'])} evaluation episodes from training")
+        
+        # Loss history summary
+        actor_losses = all_stats.get("actor_losses", [])
+        critic_losses = all_stats.get("critic_losses", [])
+        if len(actor_losses) > 0 or len(critic_losses) > 0:
+            logger.info(f"Loss history visualization saved at: {ckpt_dir / 'loss_history.png'}")
+            if len(actor_losses) > 0:
+                logger.info(f"Total actor updates: {len(actor_losses)}, final actor loss: {actor_losses[-1]:.4f}")
+            if len(critic_losses) > 0:
+                logger.info(f"Total critic updates: {len(critic_losses)}, final critic loss: {critic_losses[-1]:.4f}")
     except Exception as e:
         logger.error(f"Error in final summary: {e}")
 
