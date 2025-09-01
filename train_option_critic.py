@@ -18,6 +18,138 @@ from Structure import check, check_nda
 from Visualization.plot import plot_test_behaviors
 
 
+class TerminationProbabilityLogger:
+    """
+    Logger for Option-Critic termination probabilities.
+    Collects and saves termination statistics to JSON files.
+    """
+    
+    def __init__(self, save_path="oc_stats.json"):
+        self.save_path = save_path
+        self.stats = {
+            "termination_probabilities": [],
+            "episode_stats": [],
+            "global_stats": {
+                "total_terminations": 0,
+                "total_predictions": 0,
+                "avg_termination_prob": 0.0
+            }
+        }
+        self.episode_terminations = []
+        self.current_episode = 0
+    
+    def log_termination_prediction(self, option, termination_probs, termination_decision, episode=None, step=None, context=""):
+        """
+        Log a termination probability prediction.
+        
+        Args:
+            option: current option index
+            termination_probs: tensor of termination probabilities for all options
+            termination_decision: boolean decision for current option
+            episode: episode number (optional)
+            step: step number (optional)
+            context: additional context string
+        """
+        # Convert tensor to list if needed
+        if isinstance(termination_probs, torch.Tensor):
+            if termination_probs.dim() > 1:
+                # Handle multi-dimensional tensor (e.g., [batch_size, num_options])
+                # Take the mean across batch dimension or first sample
+                if termination_probs.shape[0] > 1:
+                    termination_probs = termination_probs.mean(dim=0)  # Average across batch
+                else:
+                    termination_probs = termination_probs[0]  # Take first sample
+            termination_probs = termination_probs.detach().cpu().numpy().tolist()
+        
+        entry = {
+            "episode": episode if episode is not None else self.current_episode,
+            "step": step,
+            "option": int(option),
+            "termination_probs": termination_probs,
+            "termination_decision": bool(termination_decision),
+            "context": context,
+            "timestamp": datetime.datetime.now().isoformat()
+        }
+        
+        self.stats["termination_probabilities"].append(entry)
+        
+        # Track for episode stats
+        if termination_decision:
+            try:
+                # termination_probs should now be a list after conversion above
+                if isinstance(termination_probs, (list, np.ndarray)) and len(termination_probs) > option:
+                    term_prob = float(termination_probs[option])
+                else:
+                    term_prob = 0.0
+                    print(f"DEBUG: Cannot extract termination prob for option {option} from {termination_probs}")
+            except (ValueError, TypeError, IndexError) as e:
+                print(f"WARNING: Error extracting episode termination probability: {e}, using 0.0")
+                term_prob = 0.0
+            
+            self.episode_terminations.append({
+                "option": int(option),
+                "termination_prob": term_prob,
+                "step": step
+            })
+        
+        # Update global stats
+        self.stats["global_stats"]["total_predictions"] += 1
+        if termination_decision:
+            self.stats["global_stats"]["total_terminations"] += 1
+        
+        # Update average termination probability
+        try:
+            # termination_probs should now be a list after conversion above
+            if isinstance(termination_probs, (list, np.ndarray)) and len(termination_probs) > option:
+                current_prob = float(termination_probs[option])
+            else:
+                current_prob = 0.0
+                print(f"DEBUG: Cannot extract termination prob for option {option} from {termination_probs}")
+        except (ValueError, TypeError, IndexError) as e:
+            print(f"WARNING: Error extracting termination probability: {e}, using 0.0")
+            current_prob = 0.0
+        
+        total_preds = self.stats["global_stats"]["total_predictions"]
+        prev_avg = self.stats["global_stats"]["avg_termination_prob"]
+        self.stats["global_stats"]["avg_termination_prob"] = (prev_avg * (total_preds - 1) + current_prob) / total_preds
+    
+    def end_episode(self):
+        """Mark the end of an episode and save episode statistics."""
+        episode_stats = {
+            "episode": self.current_episode,
+            "num_terminations": len(self.episode_terminations),
+            "terminations": self.episode_terminations.copy(),
+            "avg_termination_prob": np.mean([t["termination_prob"] for t in self.episode_terminations]) if self.episode_terminations else 0.0
+        }
+        
+        self.stats["episode_stats"].append(episode_stats)
+        self.episode_terminations.clear()
+        self.current_episode += 1
+    
+    def save_stats(self):
+        """Save statistics to JSON file."""
+        try:
+            with open(self.save_path, 'w') as f:
+                json.dump(self.stats, f, indent=2, default=str)
+            print(f"Termination probability stats saved to {self.save_path}")
+        except Exception as e:
+            print(f"Error saving termination probability stats: {e}")
+    
+    def print_summary(self):
+        """Print a summary of collected statistics."""
+        global_stats = self.stats["global_stats"]
+        print(f"\n=== Termination Probability Summary ===")
+        print(f"Total predictions: {global_stats['total_predictions']}")
+        print(f"Total terminations: {global_stats['total_terminations']}")
+        print(f"Termination rate: {global_stats['total_terminations'] / max(1, global_stats['total_predictions']) * 100:.2f}%")
+        print(f"Average termination probability: {global_stats['avg_termination_prob']:.4f}")
+        print(f"Episodes recorded: {len(self.stats['episode_stats'])}")
+
+
+# Global logger instance
+termination_logger = TerminationProbabilityLogger()
+
+
 def get_graph_data(structure, device):
     """
     Extract graph data for OptionCriticGNN.
@@ -288,7 +420,25 @@ def rollout_option(structure, base_env, device, max_option_len, current_option: 
         # option termination by beta
         print(f"DEBUG: Checking option termination by beta")
         try:
+            # Get termination probabilities for logging
+            termination_probs = oc_model.get_terminations(next_state)
             option_termination, _ = oc_model.predict_option_termination(next_state, current_option)
+            
+            # Log termination probability prediction
+            try:
+                # Debug: print the structure of termination_probs
+                print(f"DEBUG: termination_probs type: {type(termination_probs)}, shape: {getattr(termination_probs, 'shape', 'N/A')}, value: {termination_probs}")
+                termination_logger.log_termination_prediction(
+                    option=current_option,
+                    termination_probs=termination_probs,
+                    termination_decision=option_termination,
+                    step=length,
+                    context="rollout_option"
+                )
+            except Exception as log_e:
+                print(f"WARNING: Failed to log termination probability: {log_e}")
+                print(f"DEBUG: termination_probs details - type: {type(termination_probs)}, value: {termination_probs}")
+            
             print(f"DEBUG: Beta termination check result: {option_termination}")
             if option_termination:
                 print(f"DEBUG: Option terminated by beta, breaking from loop")
@@ -441,7 +591,24 @@ def evaluate_model(base_env, oc_model, device, num_episodes, max_option_len, log
                             try:
                                 current_graph_data = get_graph_data(structure, device)
                                 state = oc_model.get_state(*current_graph_data)
+                                
+                                # Get termination probabilities for logging
+                                termination_probs = oc_model.get_terminations(state)
                                 option_termination, greedy_option = oc_model.predict_option_termination(state, curr_option)
+                                
+                                # Log termination probability prediction
+                                try:
+                                    termination_logger.log_termination_prediction(
+                                        option=curr_option,
+                                        termination_probs=termination_probs,
+                                        termination_decision=option_termination,
+                                        episode=ep,
+                                        step=episode_option_count,
+                                        context="evaluation_loop"
+                                    )
+                                except Exception as log_e:
+                                    print(f"WARNING: Failed to log termination probability in evaluation: {log_e}")
+                                    
                             except Exception as e:
                                 logger.error(f"Error in option termination prediction during eval: {e}")
                                 option_termination = True
@@ -517,12 +684,12 @@ def parse_args():
     parser.add_argument("--critic_lr", type=float, default=3e-4)
     parser.add_argument("--grad_clip", type=float, default=10.0)
     parser.add_argument("--device", type=str, default="cuda")
-    parser.add_argument("--epochs", type=int, default=150)
+    parser.add_argument("--epochs", type=int, default=4)
     parser.add_argument("--hidden_dim", type=int, default=128)
     parser.add_argument("--num_layers", type=int, default=3)
     parser.add_argument("--termination_reg", type=float, default=0.01)
     parser.add_argument("--entropy_reg", type=float, default=0.01)
-    parser.add_argument("--eval_frequency", type=int, default=5, help="Evaluate model every N training episodes")
+    parser.add_argument("--eval_frequency", type=int, default=2, help="Evaluate model every N training episodes")
     parser.add_argument("--eval_episodes", type=int, default=1, help="Number of episodes for evaluation")
     return parser.parse_args()
 
@@ -824,7 +991,24 @@ def main(args):
             try:
                 current_graph_data = get_graph_data(structure, device)
                 state = oc.get_state(*current_graph_data)
+                
+                # Get termination probabilities for logging
+                termination_probs = oc.get_terminations(state)
                 option_termination, greedy_option = oc.predict_option_termination(state, curr_option)
+                
+                # Log termination probability prediction
+                try:
+                    termination_logger.log_termination_prediction(
+                        option=curr_option,
+                        termination_probs=termination_probs,
+                        termination_decision=option_termination,
+                        episode=ep,
+                        step=loop_iteration,
+                        context="main_training_loop"
+                    )
+                except Exception as log_e:
+                    logger.warning(f"Failed to log termination probability in main loop: {log_e}")
+                
                 logger.debug(f"Option termination prediction: {option_termination}, greedy_option: {greedy_option}")
             except Exception as e:
                 logger.error(f"Error in option termination prediction: {e}")
@@ -836,6 +1020,12 @@ def main(args):
             logger.debug(f"End of loop iteration {loop_iteration}, done={done}, steps={steps}")
 
         logger.info(f"Episode {ep+1} completed with {loop_iteration} iterations, {steps} steps")
+        
+        # Mark episode end for termination probability logging
+        try:
+            termination_logger.end_episode()
+        except Exception as e:
+            logger.warning(f"Failed to end episode in termination logger: {e}")
         
         # episode-level aggregates
         try:
@@ -1071,6 +1261,15 @@ def main(args):
     # Final summary with best model information
     try:
         logger.info("Training completed!")
+        
+        # Save and summarize termination probability statistics
+        try:
+            termination_logger.save_stats()
+            termination_logger.print_summary()
+            logger.info(f"Termination probability statistics saved to: {termination_logger.save_path}")
+        except Exception as e:
+            logger.warning(f"Failed to save termination probability statistics: {e}")
+        
         if best_model_path.exists():
             logger.info(f"Best model saved at: {best_model_path}")
             logger.info(f"Best model score: {best_model_score:.2f}")
