@@ -359,7 +359,7 @@ def rollout_option(structure, base_env, device, max_option_len, current_option: 
         except Exception as e:
             print(f"ERROR: Failed to apply primitive action: {e}")
             termination_reason = "action_apply_error"
-            step_reward = -1 # -1000
+            step_reward = 0 # -1000
             step_pass = False
             is_min_section = False
             fail_reason = "action_apply_error"
@@ -474,7 +474,7 @@ def rollout_option(structure, base_env, device, max_option_len, current_option: 
         episode_done = True
         # Apply penalty reward to the last step that caused the failure
         if len(step_transitions) > 0:
-            step_transitions[-1]["reward"] = -1 # -1000.0
+            step_transitions[-1]["reward"] = 0 # -1000.0
             step_transitions[-1]["done"] = True
             print(f"DEBUG: Updated last step transition with penalty reward")
     

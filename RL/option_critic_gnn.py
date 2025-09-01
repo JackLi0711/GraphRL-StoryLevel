@@ -559,7 +559,7 @@ def actor_loss(obs, option: int, logp: torch.Tensor, entropy: torch.Tensor,
          next_option_term_prob * next_Q_prime.max())
     
     # Termination loss
-    termination_loss = option_term_prob * (Q[option] - Q.max() + termination_reg) * (1 - done)
+    termination_loss = option_term_prob * (Q[option].detach() - Q.max().detach() + termination_reg) * (1 - done)
     
     # Policy gradient loss with entropy regularization
     advantage = gt.detach() - Q[option]
