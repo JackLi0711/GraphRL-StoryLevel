@@ -4,6 +4,7 @@ from matplotlib.patches import Rectangle
 from typing import List
 from pathlib import Path
 
+
 from RL.record import Record
 from RL.environment import Environment
 
@@ -120,7 +121,9 @@ def plot_test_behaviors(rec: Record, env: Environment, checkpoint_dir: Path) -> 
     test_scores = rec.testing_record["score"]
     test_actions, test_actions_SCWB = rec.testing_record["action"], rec.testing_record["action_SCWB"]
     test_options = rec.testing_record["option"]  # Get option sequences
+    test_option_instances = rec.testing_record.get("option_instances", None)  # Get option instance data
     story_num = env._testing_structure.story_num
+    
 
     # If there is no test data, skip plotting
     if len(test_scores) == 0 or len(test_actions) == 0:
@@ -130,11 +133,11 @@ def plot_test_behaviors(rec: Record, env: Environment, checkpoint_dir: Path) -> 
     for action in test_actions:
         types = []
         for a in action:
-            if a < story_num: type = "xdir-beam"
-            elif a < story_num*2: type = "zdir-beam"
-            elif a < story_num*3: type = "out-col"
-            else: type = "in-col"
-            types.append(type)
+            if a < story_num: action_type = "xdir-beam"
+            elif a < story_num*2: action_type = "zdir-beam"
+            elif a < story_num*3: action_type = "out-col"
+            else: action_type = "in-col"
+            types.append(action_type)
         action_types.append(types)
         
     # robust episode mapping
@@ -147,45 +150,102 @@ def plot_test_behaviors(rec: Record, env: Environment, checkpoint_dir: Path) -> 
     fig, ax1 = plt.subplots(figsize=(10, 8))
 
     for i, types in enumerate(action_types):
-        for j, type in enumerate(types):
-            color = color_mapping[type]
+        for j, action_type in enumerate(types):
+            color = color_mapping[action_type]
             count = 1
             ax1.bar(test_episodes[i], count, color=color, width=3, bottom=j, zorder=1)
     
     # Add option boundaries with thick black rectangles
-    for i, (actions, options) in enumerate(zip(test_actions, test_options)):
-        if len(options) == 0:
-            continue
-        
-        # Find option boundaries
-        current_option = options[0]
-        option_start = 0
-        
-        for j in range(1, len(options)):
-            if options[j] != current_option or j == len(options) - 1:
-                # Option boundary detected or end of episode
-                option_end = j if options[j] != current_option else j + 1
+    # Use option instances data if available, otherwise fall back to old method
+    use_new_method = False
+    if test_option_instances is not None and len(test_option_instances) > 0:
+        use_new_method = True
+        # New method using option instance data
+        for i, (actions, instances) in enumerate(zip(test_actions, test_option_instances)):
+            if not instances or len(instances) == 0:
+                continue
+            
+            # Validate that instances is a list and has the expected structure
+            if not isinstance(instances, list) or not isinstance(instances[0], dict):
+                print(f"Warning: Invalid instances format for episode {i}, falling back to old method")
+                use_new_method = False
+                break
                 
-                # Draw thick black rectangle around this option
-                rect_x = test_episodes[i] - 1.5  # Adjust for bar width
-                rect_width = 3  # Match bar width
-                rect_y = option_start
-                rect_height = option_end - option_start
-                
-                rect = Rectangle((rect_x, rect_y), rect_width, rect_height, 
-                               linewidth=3, edgecolor='black', facecolor='none', 
-                               zorder=3, linestyle='-')
-                ax1.add_patch(rect)
-                
-                # Add option number label
-                ax1.text(rect_x + rect_width/2, rect_y + rect_height/2, 
-                        f'O{current_option}', ha='center', va='center', 
-                        fontsize=8, fontweight='bold', color='black', zorder=4,
-                        bbox=dict(boxstyle="round,pad=0.1", facecolor='white', alpha=0.8))
-                
-                # Update for next option
-                current_option = options[j] if j < len(options) else current_option
-                option_start = j
+            if "instance_id" not in instances[0] or "option_index" not in instances[0]:
+                print(f"Warning: Missing keys in instances for episode {i}, falling back to old method")
+                use_new_method = False
+                break
+            
+            # Group consecutive steps by option instance ID
+            current_instance_id = instances[0]["instance_id"]
+            current_option_index = instances[0]["option_index"]
+            option_start = 0
+            
+            for j in range(1, len(instances)):
+                # Check if option instance changed or if we're at the end
+                if instances[j]["instance_id"] != current_instance_id or j == len(instances) - 1:
+                    # Option instance boundary detected or end of episode
+                    option_end = j if instances[j]["instance_id"] != current_instance_id else j + 1
+                    
+                    # Draw thick black rectangle around this option instance
+                    rect_x = test_episodes[i] - 1.5  # Adjust for bar width
+                    rect_width = 3  # Match bar width
+                    rect_y = option_start
+                    rect_height = option_end - option_start
+                    
+                    rect = Rectangle((rect_x, rect_y), rect_width, rect_height, 
+                                   linewidth=3, edgecolor='black', facecolor='none', 
+                                   zorder=3, linestyle='-')
+                    ax1.add_patch(rect)
+                    
+                    # Add option number label with instance info
+                    ax1.text(rect_x + rect_width/2, rect_y + rect_height/2, 
+                            f'O{current_option_index}', ha='center', va='center', 
+                            fontsize=8, fontweight='bold', color='black', zorder=4,
+                            bbox=dict(boxstyle="round,pad=0.1", facecolor='white', alpha=0.8))
+                    
+                    # Update for next option instance
+                    if j < len(instances):
+                        current_instance_id = instances[j]["instance_id"]
+                        current_option_index = instances[j]["option_index"]
+                    option_start = j
+    
+    # Fall back to old method if new method was not used or failed
+    if not use_new_method:
+        # Fall back to old method using option index changes
+        for i, (actions, options) in enumerate(zip(test_actions, test_options)):
+            if len(options) == 0:
+                continue
+            
+            # Find option boundaries
+            current_option = options[0]
+            option_start = 0
+            
+            for j in range(1, len(options)):
+                if options[j] != current_option or j == len(options) - 1:
+                    # Option boundary detected or end of episode
+                    option_end = j if options[j] != current_option else j + 1
+                    
+                    # Draw thick black rectangle around this option
+                    rect_x = test_episodes[i] - 1.5  # Adjust for bar width
+                    rect_width = 3  # Match bar width
+                    rect_y = option_start
+                    rect_height = option_end - option_start
+                    
+                    rect = Rectangle((rect_x, rect_y), rect_width, rect_height, 
+                                   linewidth=3, edgecolor='black', facecolor='none', 
+                                   zorder=3, linestyle='-')
+                    ax1.add_patch(rect)
+                    
+                    # Add option number label
+                    ax1.text(rect_x + rect_width/2, rect_y + rect_height/2, 
+                            f'O{current_option}', ha='center', va='center', 
+                            fontsize=8, fontweight='bold', color='black', zorder=4,
+                            bbox=dict(boxstyle="round,pad=0.1", facecolor='white', alpha=0.8))
+                    
+                    # Update for next option
+                    current_option = options[j] if j < len(options) else current_option
+                    option_start = j
 
     ax1.set_xlabel('Trained Episode', fontsize=16)
     ax1.set_ylabel('Iteration', fontsize=16)

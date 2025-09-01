@@ -533,6 +533,7 @@ def evaluate_model(base_env, oc_model, device, num_episodes, max_option_len, log
     episode_lengths = []
     episode_actions = []  # Collect action sequences
     episode_options = []  # Collect option sequences
+    episode_option_instances = []  # Collect option instance data with termination info
     episode_actions_SCWB = []  # For compatibility
     successful_episodes = 0
     
@@ -556,6 +557,8 @@ def evaluate_model(base_env, oc_model, device, num_episodes, max_option_len, log
                 # Track action and option sequences for this episode
                 episode_action_sequence = []
                 episode_option_sequence = []
+                current_episode_option_instances = []  # Track option instances with termination info for this episode
+                current_option_instance_id = 0  # Unique ID for each option instance
                 
                 while not done :
                     if option_termination:
@@ -571,6 +574,12 @@ def evaluate_model(base_env, oc_model, device, num_episodes, max_option_len, log
                         for transition in step_transitions:
                             episode_action_sequence.append(transition["action"])
                             episode_option_sequence.append(curr_option)
+                            # Record option instance info for this step
+                            current_episode_option_instances.append({
+                                "option_index": curr_option,
+                                "instance_id": current_option_instance_id,
+                                "action_step": len(episode_action_sequence) - 1
+                            })
                         
                         # Accumulate score only from successful options
                         if bool(o_stats.get("passed", False)):
@@ -585,6 +594,10 @@ def evaluate_model(base_env, oc_model, device, num_episodes, max_option_len, log
                             logger.info(f"Episode {ep+1} reached minimum section successfully")
                         
                         done = episode_done
+                        
+                        # If the option terminated (for any reason), increment instance ID for next option
+                        if option_done:
+                            current_option_instance_id += 1
                         
                         # Update option termination for next iteration
                         if not done:
@@ -622,6 +635,7 @@ def evaluate_model(base_env, oc_model, device, num_episodes, max_option_len, log
                 episode_lengths.append(episode_option_count)
                 episode_actions.append(episode_action_sequence)
                 episode_options.append(episode_option_sequence)
+                episode_option_instances.append(current_episode_option_instances)  # Store option instance data for this episode
                 episode_actions_SCWB.append([])  # Empty for compatibility
                 logger.info(f"Episode {ep+1} completed: score={episode_score:.2f}, length={episode_option_count}, actions={len(episode_action_sequence)}")
                 
@@ -648,6 +662,7 @@ def evaluate_model(base_env, oc_model, device, num_episodes, max_option_len, log
         "scores": episode_scores,
         "actions": episode_actions,
         "options": episode_options,
+        "option_instances": episode_option_instances,  # Include option instance data
         "actions_SCWB": episode_actions_SCWB,
         "avg_score": avg_score,
         "success_rate": success_rate
@@ -684,12 +699,12 @@ def parse_args():
     parser.add_argument("--critic_lr", type=float, default=3e-4)
     parser.add_argument("--grad_clip", type=float, default=10.0)
     parser.add_argument("--device", type=str, default="cuda")
-    parser.add_argument("--epochs", type=int, default=4)
+    parser.add_argument("--epochs", type=int, default=2)
     parser.add_argument("--hidden_dim", type=int, default=128)
     parser.add_argument("--num_layers", type=int, default=3)
     parser.add_argument("--termination_reg", type=float, default=0.01)
     parser.add_argument("--entropy_reg", type=float, default=0.01)
-    parser.add_argument("--eval_frequency", type=int, default=2, help="Evaluate model every N training episodes")
+    parser.add_argument("--eval_frequency", type=int, default=1, help="Evaluate model every N training episodes")
     parser.add_argument("--eval_episodes", type=int, default=1, help="Number of episodes for evaluation")
     return parser.parse_args()
 
@@ -851,7 +866,8 @@ def main(args):
     evaluation_histories = {
         "all_scores": [],      # Flattened list of all scores from all evaluation episodes
         "all_actions": [],     # Flattened list of all action sequences
-        "all_options": [],     # Flattened list of all option sequences  
+        "all_options": [],     # Flattened list of all option sequences
+        "all_option_instances": [], # Flattened list of all option instances with termination info
         "all_actions_SCWB": [] # For compatibility
     }
 
@@ -1060,6 +1076,7 @@ def main(args):
                 evaluation_histories["all_scores"].extend(eval_history["scores"])
                 evaluation_histories["all_actions"].extend(eval_history["actions"])
                 evaluation_histories["all_options"].extend(eval_history["options"])
+                evaluation_histories["all_option_instances"].extend(eval_history["option_instances"])
                 evaluation_histories["all_actions_SCWB"].extend(eval_history["actions_SCWB"])
                 
                 logger.info(f"Episode {ep+1} evaluation: score={avg_score:.2f}, success_rate={success_rate:.1f}%")
@@ -1238,7 +1255,8 @@ def main(args):
                         "score": evaluation_histories["all_scores"],
                         "action": evaluation_histories["all_actions"],
                         "action_SCWB": evaluation_histories["all_actions_SCWB"],
-                        "option": evaluation_histories["all_options"]
+                        "option": evaluation_histories["all_options"],
+                        "option_instances": evaluation_histories["all_option_instances"]
                     }
             
             # Create record with training scores from all_stats
