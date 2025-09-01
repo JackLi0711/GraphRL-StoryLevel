@@ -451,9 +451,10 @@ def critic_loss(model: OptionCriticGNN,
     next_Q_prime = torch.stack(next_Q_prime_list, dim=0)  # Shape: [batch_size, num_options]  
     next_termination_probs = torch.stack(next_termination_probs_list, dim=0).detach()  # Shape: [batch_size, num_options]
     
-    # Debug: print shapes
-    print(f"DEBUG critic_loss: Q shape: {Q.shape}, next_Q_prime shape: {next_Q_prime.shape}, next_termination_probs shape: {next_termination_probs.shape}")
-    print(f"DEBUG critic_loss: options: {options}, batch_size: {batch_size}, rewards shape: {rewards.shape}")
+    # Debug: print shapes (reduced frequency for step-level updates)
+    if batch_size <= 5:  # Only print for small batches to reduce noise
+        print(f"DEBUG critic_loss: Q shape: {Q.shape}, next_Q_prime shape: {next_Q_prime.shape}, next_termination_probs shape: {next_termination_probs.shape}")
+        print(f"DEBUG critic_loss: options: {options}, batch_size: {batch_size}, rewards shape: {rewards.shape}")
     
     # Ensure all have correct batch dimension
     if Q.dim() == 1:

@@ -84,6 +84,7 @@ def check_constraints_without_update(structure, base_env):
 def rollout_option(structure, base_env, device, max_option_len, current_option: int, oc_model, epsilon: float = None, logger=None):
     """
     Execute a single option composed of a sequence of primitive actions.
+    Now returns step-level transitions for step-based critic updates.
 
     Args:
         structure: current structure state
@@ -95,14 +96,14 @@ def rollout_option(structure, base_env, device, max_option_len, current_option: 
         epsilon: optional exploration indicator (for logging)
 
     Returns:
-        next_obs_z: aggregated state vector after option terminates (for next option)
-        option_reward: accumulated reward within this option (or -1000 on failure)
+        structure: updated structure after option execution
+        next_state: final state after option terminates
         option_done: whether option terminated
         episode_done: whether episode terminated as a result of this option
         stats: dict with diagnostics (length, termination_reason, entropies, epsilon)
-        step_transitions: list of step-level transitions
+        step_transitions: list of step-level transitions for buffer storage
+        termination_reason: reason for option termination
     """
-    option_reward_sum: float = 0.0
     entropies = []
     length = 0
     termination_reason = None
@@ -118,7 +119,7 @@ def rollout_option(structure, base_env, device, max_option_len, current_option: 
     graph_data = get_graph_data(structure, device)
     state = oc_model.get_state(*graph_data)
 
-    step_transitions = []  # list of dicts: {obs_z, action, logp, entropy, reward, done, next_obs_z}
+    step_transitions = []  # list of dicts: {obs, action, logp, entropy, reward, done, next_obs, option}
 
     if logger:
         logger.debug(f"Starting rollout_option for option {current_option}, max_len={max_option_len}")
@@ -226,13 +227,13 @@ def rollout_option(structure, base_env, device, max_option_len, current_option: 
         except Exception as e:
             print(f"ERROR: Failed to apply primitive action: {e}")
             termination_reason = "action_apply_error"
-            step_reward = -1000.0
+            step_reward = -1 # -1000
             step_pass = False
             is_min_section = False
             fail_reason = "action_apply_error"
-        option_reward_sum += step_reward
+        # Don't accumulate rewards at option level anymore
         length += 1
-        print(f"DEBUG: Updated length to {length}, option_reward_sum to {option_reward_sum}")
+        print(f"DEBUG: Updated length to {length}, step_reward: {step_reward}")
 
         # minimum section: force terminate option and episode
         if is_min_section:
@@ -242,13 +243,14 @@ def rollout_option(structure, base_env, device, max_option_len, current_option: 
             try:
                 next_graph_data = get_graph_data(structure, device)
                 step_transitions.append({
-                    "graph_data": graph_data,
+                    "obs": graph_data,
                     "action": action,
                     "logp": logp.detach().clone(),
                     "entropy": entropy.detach().clone(),
                     "reward": float(step_reward),
                     "done": True,
-                    "next_graph_data": next_graph_data,
+                    "next_obs": next_graph_data,
+                    "option": current_option,  # Add option to each step transition
                 })
                 print(f"DEBUG: Added final step transition, breaking from loop")
             except Exception as e:
@@ -270,13 +272,14 @@ def rollout_option(structure, base_env, device, max_option_len, current_option: 
         print(f"DEBUG: Recording step transition")
         try:
             step_transitions.append({
-                "graph_data": graph_data,
+                "obs": graph_data,
                 "action": action,
                 "logp": logp.detach().clone(),
                 "entropy": entropy.detach().clone(),
                 "reward": float(step_reward),
                 "done": False,
-                "next_graph_data": next_graph_data,
+                "next_obs": next_graph_data,
+                "option": current_option,  # Add option to each step transition
             })
             print(f"DEBUG: Step transition recorded, total transitions: {len(step_transitions)}")
         except Exception as e:
@@ -311,24 +314,21 @@ def rollout_option(structure, base_env, device, max_option_len, current_option: 
         termination_reason = "max_len"
         print(f"DEBUG: Set termination reason to max_len")
 
-    # finalize reward per rules
-    # Pass if not failed at last step (i.e., not an immediate constraint failure)
+    # Check constraint compliance and apply penalty to last step if failed
     # Note: step_pass refers to the last evaluated step
     passed = step_pass if length > 0 else True
     print(f"DEBUG: Final step_pass check: step_pass={step_pass}, length={length}, passed={passed}")
     
     if not passed:
-        print(f"DEBUG: Option failed, applying penalty reward")
-        option_reward = -1000.0
+        print(f"DEBUG: Option failed, applying penalty to last step")
         episode_done = True
-        # ensure the last step gets the terminal penalty and marks episode done
+        # Apply penalty reward to the last step that caused the failure
         if len(step_transitions) > 0:
-            step_transitions[-1]["reward"] = -1000.0
+            step_transitions[-1]["reward"] = -1 # -1000.0
             step_transitions[-1]["done"] = True
-            print(f"DEBUG: Updated last step transition with penalty")
-    else:
-        option_reward = float(option_reward_sum)
-        print(f"DEBUG: Option passed, final reward: {option_reward}")
+            print(f"DEBUG: Updated last step transition with penalty reward")
+    
+    print(f"DEBUG: Option execution completed, passed={passed}")
 
     # Compute option-level saved material (before vs after this option)
     try:
@@ -349,8 +349,8 @@ def rollout_option(structure, base_env, device, max_option_len, current_option: 
     }
 
     next_state = state  # latest state
-    print(f"DEBUG: rollout_option returning - option_reward: {option_reward}, option_done: {option_done}, episode_done: {episode_done}, termination_reason: {termination_reason}, num_transitions: {len(step_transitions)}")
-    return structure, next_state, option_reward, option_done, episode_done, stats, step_transitions, termination_reason
+    print(f"DEBUG: rollout_option returning - option_done: {option_done}, episode_done: {episode_done}, termination_reason: {termination_reason}, num_transitions: {len(step_transitions)}")
+    return structure, next_state, option_done, episode_done, stats, step_transitions, termination_reason
 
 
 
@@ -413,7 +413,7 @@ def evaluate_model(base_env, oc_model, device, num_episodes, max_option_len, log
                         curr_option = greedy_option
                     
                     try:
-                        structure, next_state, option_reward, option_done, episode_done, o_stats, step_transitions, termination_reason = rollout_option(
+                        structure, next_state, option_done, episode_done, o_stats, step_transitions, termination_reason = rollout_option(
                             structure, base_env, device, max_option_len, curr_option, oc_model, None, logger
                         )
                         
@@ -424,7 +424,8 @@ def evaluate_model(base_env, oc_model, device, num_episodes, max_option_len, log
                         
                         # Accumulate score only from successful options
                         if bool(o_stats.get("passed", False)):
-                            episode_score += float(option_reward)
+                            option_total_reward = sum(tr["reward"] for tr in step_transitions)
+                            episode_score += float(option_total_reward)
                         
                         episode_option_count += 1
                         
@@ -516,12 +517,12 @@ def parse_args():
     parser.add_argument("--critic_lr", type=float, default=3e-4)
     parser.add_argument("--grad_clip", type=float, default=10.0)
     parser.add_argument("--device", type=str, default="cuda")
-    parser.add_argument("--epochs", type=int, default=2)
+    parser.add_argument("--epochs", type=int, default=150)
     parser.add_argument("--hidden_dim", type=int, default=128)
     parser.add_argument("--num_layers", type=int, default=3)
     parser.add_argument("--termination_reg", type=float, default=0.01)
     parser.add_argument("--entropy_reg", type=float, default=0.01)
-    parser.add_argument("--eval_frequency", type=int, default=1, help="Evaluate model every N training episodes")
+    parser.add_argument("--eval_frequency", type=int, default=5, help="Evaluate model every N training episodes")
     parser.add_argument("--eval_episodes", type=int, default=1, help="Number of episodes for evaluation")
     return parser.parse_args()
 
@@ -734,8 +735,8 @@ def main(args):
 
             logger.debug(f"Calling rollout_option with curr_option={curr_option}")
             try:
-                structure, next_state, option_reward, option_done, episode_done, o_stats, step_transitions, termination_reason = rollout_option(structure, base_env, device, args.max_option_len, curr_option, oc, epsilon, logger)
-                logger.debug(f"rollout_option returned: option_done={option_done}, episode_done={episode_done}, option_reward={option_reward}, termination_reason={termination_reason}")
+                structure, next_state, option_done, episode_done, o_stats, step_transitions, termination_reason = rollout_option(structure, base_env, device, args.max_option_len, curr_option, oc, epsilon, logger)
+                logger.debug(f"rollout_option returned: option_done={option_done}, episode_done={episode_done}, termination_reason={termination_reason}")
             except Exception as e:
                 logger.error(f"Error in rollout_option: {e}")
                 logger.error(f"Exception details:", exc_info=True)
@@ -754,29 +755,30 @@ def main(args):
             if not np.isnan(o_stats["entropy_mean"]):
                 episode_entropies.append(o_stats["entropy_mean"])
 
-            # score definition: only add reward if this option passed constraints
+            # Calculate episode score from step rewards (only if option passed)
             if bool(o_stats.get("passed", False)):
-                episode_score += float(option_reward)
+                option_total_reward = sum(tr["reward"] for tr in step_transitions)
+                episode_score += float(option_total_reward)
                 last_pass_sections = o_stats.get("story_level_sections", last_pass_sections)
                 last_pass_saved_material = o_stats.get("option_saved_material", last_pass_saved_material)
 
-            # push option transition to buffer (store current state for replay)
-            logger.debug(f"Pushing transition to buffer, buffer size before: {len(buffer)}")
+            # Push step-level transitions to buffer (like option-critic-pytorch)
+            logger.debug(f"Pushing {len(step_transitions)} step transitions to buffer, buffer size before: {len(buffer)}")
             try:
-                current_graph_data = get_graph_data(structure, device)
-                buffer.push(current_graph_data, curr_option, option_reward, current_graph_data, episode_done)  # Note: using current state for both obs and next_obs in option-level buffer
+                for tr in step_transitions:
+                    buffer.push(tr["obs"], tr["option"], tr["reward"], tr["next_obs"], tr["done"])
                 logger.debug(f"Buffer size after push: {len(buffer)}")
             except Exception as e:
-                logger.error(f"Error pushing to buffer: {e}")
+                logger.error(f"Error pushing step transitions to buffer: {e}")
 
-            # Per-step updates (mean-style as in original): for each intra-option step do one actor update
+            # Per-step actor updates: for each intra-option step do one actor update
             logger.debug(f"Number of step transitions: {len(step_transitions)}")
             if len(step_transitions) > 0:
                 try:
                     for i, tr in enumerate(step_transitions):
                         logger.debug(f"Processing step transition {i+1}/{len(step_transitions)}")
                         a_loss = actor_loss(
-                            tr["graph_data"], curr_option, tr["logp"], tr["entropy"], tr["reward"], tr["done"], tr["next_graph_data"], 
+                            tr["obs"], tr["option"], tr["logp"], tr["entropy"], tr["reward"], tr["done"], tr["next_obs"], 
                             oc, oc_prime, args.gamma, args.termination_reg, args.entropy_reg
                         )
                         actor_optimizer.zero_grad()
@@ -791,14 +793,14 @@ def main(args):
                 except Exception as e:
                     logger.error(f"Error in actor updates: {e}")
 
-            # Critic updates on schedule (option-level replay)
+            # Critic updates on schedule (step-level replay like option-critic-pytorch)
             should_update_critic = len(buffer) > args.batch_size and (steps % args.update_frequency == 0)
             logger.debug(f"Critic update check: buffer_size={len(buffer)}, batch_size={args.batch_size}, steps={steps}, should_update={should_update_critic}")
             if should_update_critic:
                 try:
-                    logger.debug(f"Performing critic update")
-                    data_batch = buffer.sample(args.batch_size)
-                    logger.debug(f"Sampled batch, obs type: {type(data_batch[0])}, options: {len(data_batch[1])}")
+                    logger.debug(f"Performing step-level critic update")
+                    data_batch = buffer.sample(args.batch_size)  # Now sampling step-level transitions
+                    logger.debug(f"Sampled batch with {args.batch_size} step-level transitions")
                     c_loss = critic_loss(oc, oc_prime, data_batch, args.gamma)
                     critic_optimizer.zero_grad()
                     c_loss.backward()
@@ -838,8 +840,9 @@ def main(args):
         # episode-level aggregates
         try:
             all_stats["episode_rewards"].append(float(np.sum([t[2] if isinstance(t, (list, tuple)) and len(t) > 2 else 0.0 for t in []])))  # placeholder, kept for compatibility
-            # use the last option reward as proxy; if需要更精準可在 roll 過程累加
-            all_stats["episode_rewards"][-1] = float(option_reward) if len(all_stats["episode_rewards"]) > 0 else float(option_reward)
+            # Calculate episode reward from step rewards
+            episode_total_reward = sum(tr["reward"] for tr in step_transitions)
+            all_stats["episode_rewards"][-1] = float(episode_total_reward) if len(all_stats["episode_rewards"]) > 0 else float(episode_total_reward)
             all_stats["episode_score"].append(float(episode_score))
             all_stats["last_pass_sections"].append(last_pass_sections)
             all_stats["last_pass_saved_material"].append(float(last_pass_saved_material) if last_pass_saved_material is not None else None)
