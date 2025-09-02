@@ -694,17 +694,17 @@ def parse_args():
     parser.add_argument("--update_frequency", type=int, default=4)
     parser.add_argument("--freeze_interval", type=int, default=2000)
     parser.add_argument("--batch_size", type=int, default=32)
-    parser.add_argument("--lr", type=float, default=3e-4)
-    parser.add_argument("--actor_lr", type=float, default=3e-4)
-    parser.add_argument("--critic_lr", type=float, default=3e-4)
+    parser.add_argument("--lr", type=float, default=1e-5)
+    parser.add_argument("--actor_lr", type=float, default=1e-5)
+    parser.add_argument("--critic_lr", type=float, default=1e-5)
     parser.add_argument("--grad_clip", type=float, default=10.0)
     parser.add_argument("--device", type=str, default="cuda")
-    parser.add_argument("--epochs", type=int, default=2)
+    parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--hidden_dim", type=int, default=128)
     parser.add_argument("--num_layers", type=int, default=3)
-    parser.add_argument("--termination_reg", type=float, default=0.01)
+    parser.add_argument("--termination_reg", type=float, default=0.5)
     parser.add_argument("--entropy_reg", type=float, default=0.01)
-    parser.add_argument("--eval_frequency", type=int, default=1, help="Evaluate model every N training episodes")
+    parser.add_argument("--eval_frequency", type=int, default=5, help="Evaluate model every N training episodes")
     parser.add_argument("--eval_episodes", type=int, default=1, help="Number of episodes for evaluation")
     return parser.parse_args()
 
@@ -810,9 +810,11 @@ def main(args):
     oc_prime.load_state_dict(oc.state_dict())
 
     # Separate parameters for different components
-    actor_params = [oc.options_W, oc.options_b]
+    termination_params = [p for n, p in oc.named_parameters() 
+                         if n.startswith('terminations')]
+    actor_params = [oc.options_W, oc.options_b] + termination_params
     critic_params = [p for n, p in oc.named_parameters() 
-                    if (n.startswith('Q') or n.startswith('terminations'))]
+                    if n.startswith('Q')]
     state_gnn_params = [p for n, p in oc.named_parameters() 
                        if n.startswith('state_gnn')]
     feature_params = [p for n, p in oc.named_parameters() 

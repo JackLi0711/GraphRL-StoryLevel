@@ -113,13 +113,18 @@ class OptionCriticGNN(nn.Module):
         nn.init.zeros_(self.options_b)
         
         # Initialize other layers
-        for module in [self.feature_processor, self.Q, self.terminations]:
+        for module in [self.feature_processor, self.Q]:
             if hasattr(module, 'weight'):
                 nn.init.xavier_uniform_(module.weight)
             elif hasattr(module, 'children'):
                 for child in module.children():
                     if hasattr(child, 'weight'):
                         nn.init.xavier_uniform_(child.weight)
+        
+        # Special initialization for termination network
+        # Initialize with negative bias to start with low termination probabilities (~0.1)
+        nn.init.xavier_uniform_(self.terminations.weight)
+        nn.init.constant_(self.terminations.bias, -2.2)  # sigmoid(-2.2) ≈ 0.1
     
     def get_state(self, 
                   graph_x: torch.Tensor,
