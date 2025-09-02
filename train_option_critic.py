@@ -213,7 +213,7 @@ def check_constraints_without_update(structure, base_env):
     return whether_pass, fail_reason
 
 
-def rollout_option(structure, base_env, device, max_option_len, current_option: int, oc_model, epsilon: float = None, logger=None):
+def rollout_option(structure, base_env, device, max_option_len, current_option: int, oc_model, epsilon: float = None, logger=None, option_length_bonus: float = 0.0):
     """
     Execute a single option composed of a sequence of primitive actions.
     Now returns step-level transitions for step-based critic updates.
@@ -351,7 +351,13 @@ def rollout_option(structure, base_env, device, max_option_len, current_option: 
             
         try:
             structure, step_reward, step_pass, is_min_section, fail_reason = apply_primitive_action(base_env, structure, action)
-            log_msg = f"Action applied - reward: {step_reward}, pass: {step_pass}, min_section: {is_min_section}, fail_reason: {fail_reason}"
+            
+            # Apply option length bonus: reward += (step_number - 1) * bonus
+            # length is 0-indexed, so length equals (step_number - 1)
+            length_bonus = length * option_length_bonus
+            step_reward += length_bonus
+            
+            log_msg = f"Action applied - original_reward: {step_reward - length_bonus}, length_bonus: {length_bonus}, final_reward: {step_reward}, pass: {step_pass}, min_section: {is_min_section}, fail_reason: {fail_reason}"
             if logger:
                 logger.debug(log_msg)
             else:
@@ -567,7 +573,7 @@ def evaluate_model(base_env, oc_model, device, num_episodes, max_option_len, log
                     
                     try:
                         structure, next_state, option_done, episode_done, o_stats, step_transitions, termination_reason = rollout_option(
-                            structure, base_env, device, max_option_len, curr_option, oc_model, None, logger
+                            structure, base_env, device, max_option_len, curr_option, oc_model, None, logger, 0.0
                         )
                         
                         # Collect actions and options from step transitions
@@ -704,6 +710,7 @@ def parse_args():
     parser.add_argument("--num_layers", type=int, default=3)
     parser.add_argument("--termination_reg", type=float, default=0.5)
     parser.add_argument("--entropy_reg", type=float, default=0.01)
+    parser.add_argument("--option_length_bonus", type=float, default=10, help="Bonus reward for longer options: reward += (step-1) * bonus")
     parser.add_argument("--eval_frequency", type=int, default=5, help="Evaluate model every N training episodes")
     parser.add_argument("--eval_episodes", type=int, default=1, help="Number of episodes for evaluation")
     return parser.parse_args()
@@ -920,7 +927,7 @@ def main(args):
 
             logger.debug(f"Calling rollout_option with curr_option={curr_option}")
             try:
-                structure, next_state, option_done, episode_done, o_stats, step_transitions, termination_reason = rollout_option(structure, base_env, device, args.max_option_len, curr_option, oc, epsilon, logger)
+                structure, next_state, option_done, episode_done, o_stats, step_transitions, termination_reason = rollout_option(structure, base_env, device, args.max_option_len, curr_option, oc, epsilon, logger, args.option_length_bonus)
                 logger.debug(f"rollout_option returned: option_done={option_done}, episode_done={episode_done}, termination_reason={termination_reason}")
             except Exception as e:
                 logger.error(f"Error in rollout_option: {e}")
