@@ -436,7 +436,10 @@ def rollout_option(structure, base_env, device, max_option_len, current_option: 
                     term_probs_display = termination_probs.mean(dim=0).detach().cpu().numpy()
                 else:
                     term_probs_display = termination_probs.detach().cpu().numpy()
-                print(f"TERMINATION_PROBS: Step {length}, Option {current_option}, All β: {term_probs_display}, Current β: {term_probs_display[current_option]:.4f}, Decision: {'TERMINATE' if option_termination else 'CONTINUE'}")
+                
+                # Print each option's termination probability clearly
+                term_probs_str = ", ".join([f"β{i}: {prob:.4f}" for i, prob in enumerate(term_probs_display)])
+                print(f"TERMINATION_PROBS Step {length+1}: [{term_probs_str}] | Current Option {current_option}: β{current_option}={term_probs_display[current_option]:.4f} → {'TERMINATE' if option_termination else 'CONTINUE'}")
             
             # Log termination probability prediction
             try:
@@ -1031,7 +1034,10 @@ def main(args):
                         term_probs_display = termination_probs.mean(dim=0).detach().cpu().numpy()
                     else:
                         term_probs_display = termination_probs.detach().cpu().numpy()
-                    print(f"MAIN_LOOP: Episode {ep+1}, Loop {loop_iteration}, Current Option {curr_option}, All β: {term_probs_display}, Current β: {term_probs_display[curr_option]:.4f}, Next Option: {greedy_option}")
+                    
+                    # Print each option's termination probability clearly
+                    term_probs_str = ", ".join([f"β{i}: {prob:.4f}" for i, prob in enumerate(term_probs_display)])
+                    print(f"MAIN_LOOP Ep{ep+1}-Loop{loop_iteration}: [{term_probs_str}] | Current Option {curr_option}: β{curr_option}={term_probs_display[curr_option]:.4f} → {'TERMINATE' if option_termination else 'CONTINUE'} → Next Option: {greedy_option}")
                 
                 # Log termination probability prediction
                 try:
