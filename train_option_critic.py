@@ -430,10 +430,16 @@ def rollout_option(structure, base_env, device, max_option_len, current_option: 
             termination_probs = oc_model.get_terminations(next_state)
             option_termination, _ = oc_model.predict_option_termination(next_state, current_option)
             
+            # Print termination probabilities for monitoring
+            if hasattr(termination_probs, 'shape'):
+                if termination_probs.dim() > 1:
+                    term_probs_display = termination_probs.mean(dim=0).detach().cpu().numpy()
+                else:
+                    term_probs_display = termination_probs.detach().cpu().numpy()
+                print(f"TERMINATION_PROBS: Step {length}, Option {current_option}, All β: {term_probs_display}, Current β: {term_probs_display[current_option]:.4f}, Decision: {'TERMINATE' if option_termination else 'CONTINUE'}")
+            
             # Log termination probability prediction
             try:
-                # Debug: print the structure of termination_probs
-                print(f"DEBUG: termination_probs type: {type(termination_probs)}, shape: {getattr(termination_probs, 'shape', 'N/A')}, value: {termination_probs}")
                 termination_logger.log_termination_prediction(
                     option=current_option,
                     termination_probs=termination_probs,
@@ -443,11 +449,9 @@ def rollout_option(structure, base_env, device, max_option_len, current_option: 
                 )
             except Exception as log_e:
                 print(f"WARNING: Failed to log termination probability: {log_e}")
-                print(f"DEBUG: termination_probs details - type: {type(termination_probs)}, value: {termination_probs}")
             
-            print(f"DEBUG: Beta termination check result: {option_termination}")
             if option_termination:
-                print(f"DEBUG: Option terminated by beta, breaking from loop")
+                print(f"==> Option {current_option} TERMINATED by β={term_probs_display[current_option]:.4f} at step {length}")
                 termination_reason = "beta"
                 state = next_state
                 graph_data = next_graph_data
@@ -708,7 +712,7 @@ def parse_args():
     parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--hidden_dim", type=int, default=128)
     parser.add_argument("--num_layers", type=int, default=3)
-    parser.add_argument("--termination_reg", type=float, default=0.5)
+    parser.add_argument("--termination_reg", type=float, default=0.01)
     parser.add_argument("--entropy_reg", type=float, default=0.01)
     parser.add_argument("--option_length_bonus", type=float, default=10, help="Bonus reward for longer options: reward += (step-1) * bonus")
     parser.add_argument("--eval_frequency", type=int, default=5, help="Evaluate model every N training episodes")
@@ -1021,6 +1025,14 @@ def main(args):
                 termination_probs = oc.get_terminations(state)
                 option_termination, greedy_option = oc.predict_option_termination(state, curr_option)
                 
+                # Print termination probabilities for monitoring in main loop
+                if hasattr(termination_probs, 'shape'):
+                    if termination_probs.dim() > 1:
+                        term_probs_display = termination_probs.mean(dim=0).detach().cpu().numpy()
+                    else:
+                        term_probs_display = termination_probs.detach().cpu().numpy()
+                    print(f"MAIN_LOOP: Episode {ep+1}, Loop {loop_iteration}, Current Option {curr_option}, All β: {term_probs_display}, Current β: {term_probs_display[curr_option]:.4f}, Next Option: {greedy_option}")
+                
                 # Log termination probability prediction
                 try:
                     termination_logger.log_termination_prediction(
@@ -1045,6 +1057,17 @@ def main(args):
             logger.debug(f"End of loop iteration {loop_iteration}, done={done}, steps={steps}")
 
         logger.info(f"Episode {ep+1} completed with {loop_iteration} iterations, {steps} steps")
+        
+        # Print episode termination probability summary
+        try:
+            if len(termination_logger.episode_terminations) > 0:
+                avg_term_prob = np.mean([t["termination_prob"] for t in termination_logger.episode_terminations])
+                num_terminations = len(termination_logger.episode_terminations)
+                print(f"EPISODE_SUMMARY: Episode {ep+1}, Terminations: {num_terminations}, Avg β: {avg_term_prob:.4f}")
+            else:
+                print(f"EPISODE_SUMMARY: Episode {ep+1}, No terminations recorded")
+        except Exception as e:
+            logger.warning(f"Failed to compute episode termination summary: {e}")
         
         # Mark episode end for termination probability logging
         try:

@@ -162,7 +162,19 @@ class OptionCriticGNN(nn.Module):
         )
         
         # Process features for Option-Critic
-        state = self.feature_processor(gnn_features)
+        processed_features = self.feature_processor(gnn_features)
+        
+        # StateGNN returns [total_story_member_num, member_state_dim*2]
+        # We need a single global state vector for Option-Critic
+        # Use global mean pooling to aggregate all story members into one state
+        if processed_features.dim() == 2 and processed_features.shape[0] > 1:
+            # Multiple story members -> single global state representation
+            state = processed_features.mean(dim=0, keepdim=True)  # Shape: [1, feature_dim]
+        else:
+            # Already single state or scalar
+            state = processed_features
+            if state.dim() == 1:
+                state = state.unsqueeze(0)  # Ensure batch dimension: [1, feature_dim]
         
         return state
     
@@ -552,19 +564,30 @@ def actor_loss(obs, option: int, logp: torch.Tensor, entropy: torch.Tensor,
     Q = model.get_Q(state).detach().squeeze()
     next_Q_prime = model_prime.get_Q(next_state_prime).detach().squeeze()
     
-    # Handle dimensions
+    # Handle dimensions - ensure consistent shape for max operations
     if Q.dim() == 0:
         Q = Q.unsqueeze(0)
     if next_Q_prime.dim() == 0:
         next_Q_prime = next_Q_prime.unsqueeze(0)
     
+    # For 1D tensors, use .max() directly; for 2D tensors, use .max(dim=-1)[0]
+    if Q.dim() == 1:
+        Q_max = Q.max()
+    else:
+        Q_max = Q.max(dim=-1)[0]
+        
+    if next_Q_prime.dim() == 1:
+        next_Q_max = next_Q_prime.max()
+    else:
+        next_Q_max = next_Q_prime.max(dim=-1)[0]
+    
     # Compute target
     gt = reward + (1 - done) * gamma * \
         ((1 - next_option_term_prob) * next_Q_prime[option] + 
-         next_option_term_prob * next_Q_prime.max())
+         next_option_term_prob * next_Q_max)
     
     # Termination loss
-    termination_loss = option_term_prob * (Q[option].detach() - Q.max().detach() + termination_reg) * (1 - done)
+    termination_loss = option_term_prob * (Q[option].detach() - Q_max.detach() + termination_reg) * (1 - done)
     
     # Policy gradient loss with entropy regularization
     advantage = gt.detach() - Q[option]
