@@ -355,9 +355,10 @@ def rollout_option(structure, base_env, device, max_option_len, current_option: 
             # Apply option length bonus: reward += (step_number - 1) * bonus
             # length is 0-indexed, so length equals (step_number - 1)
             length_bonus = length * option_length_bonus
+            original_reward = step_reward  # Store original reward before adding bonus
             step_reward += length_bonus
             
-            log_msg = f"Action applied - original_reward: {step_reward - length_bonus}, length_bonus: {length_bonus}, final_reward: {step_reward}, pass: {step_pass}, min_section: {is_min_section}, fail_reason: {fail_reason}"
+            log_msg = f"Action applied - original_reward: {original_reward}, length_bonus: {length_bonus}, final_reward: {step_reward}, pass: {step_pass}, min_section: {is_min_section}, fail_reason: {fail_reason}"
             if logger:
                 logger.debug(log_msg)
             else:
@@ -386,6 +387,7 @@ def rollout_option(structure, base_env, device, max_option_len, current_option: 
                     "logp": logp.detach().clone(),
                     "entropy": entropy.detach().clone(),
                     "reward": float(step_reward),
+                    "original_reward": float(original_reward),
                     "done": True,
                     "next_obs": next_graph_data,
                     "option": current_option,  # Add option to each step transition
@@ -415,6 +417,7 @@ def rollout_option(structure, base_env, device, max_option_len, current_option: 
                 "logp": logp.detach().clone(),
                 "entropy": entropy.detach().clone(),
                 "reward": float(step_reward),
+                "original_reward": float(original_reward),
                 "done": False,
                 "next_obs": next_graph_data,
                 "option": current_option,  # Add option to each step transition
@@ -488,6 +491,7 @@ def rollout_option(structure, base_env, device, max_option_len, current_option: 
         # Apply penalty reward to the last step that caused the failure
         if len(step_transitions) > 0:
             step_transitions[-1]["reward"] = 0 # -1000.0
+            step_transitions[-1]["original_reward"] = 0 # -1000.0
             step_transitions[-1]["done"] = True
             print(f"DEBUG: Updated last step transition with penalty reward")
     
@@ -594,9 +598,9 @@ def evaluate_model(base_env, oc_model, device, num_episodes, max_option_len, log
                                 "action_step": len(episode_action_sequence) - 1
                             })
                         
-                        # Accumulate score only from successful options
+                        # Accumulate score only from successful options (using original reward without length bonus)
                         if bool(o_stats.get("passed", False)):
-                            option_total_reward = sum(tr["reward"] for tr in step_transitions)
+                            option_total_reward = sum(tr["original_reward"] for tr in step_transitions)
                             episode_score += float(option_total_reward)
                         
                         episode_option_count += 1
@@ -717,7 +721,7 @@ def parse_args():
     parser.add_argument("--num_layers", type=int, default=3)
     parser.add_argument("--termination_reg", type=float, default=0.01)
     parser.add_argument("--entropy_reg", type=float, default=0.01)
-    parser.add_argument("--option_length_bonus", type=float, default=10, help="Bonus reward for longer options: reward += (step-1) * bonus")
+    parser.add_argument("--option_length_bonus", type=float, default=0.1, help="Bonus reward for longer options: reward += (step-1) * bonus")
     parser.add_argument("--eval_frequency", type=int, default=5, help="Evaluate model every N training episodes")
     parser.add_argument("--eval_episodes", type=int, default=1, help="Number of episodes for evaluation")
     return parser.parse_args()
@@ -954,9 +958,9 @@ def main(args):
             if not np.isnan(o_stats["entropy_mean"]):
                 episode_entropies.append(o_stats["entropy_mean"])
 
-            # Calculate episode score from step rewards (only if option passed)
+            # Calculate episode score from step rewards (only if option passed, using original reward without length bonus)
             if bool(o_stats.get("passed", False)):
-                option_total_reward = sum(tr["reward"] for tr in step_transitions)
+                option_total_reward = sum(tr["original_reward"] for tr in step_transitions)
                 episode_score += float(option_total_reward)
                 last_pass_sections = o_stats.get("story_level_sections", last_pass_sections)
                 last_pass_saved_material = o_stats.get("option_saved_material", last_pass_saved_material)
