@@ -366,7 +366,7 @@ def rollout_option(structure, base_env, device, max_option_len, current_option: 
         except Exception as e:
             print(f"ERROR: Failed to apply primitive action: {e}")
             termination_reason = "action_apply_error"
-            step_reward = 0 # -1000
+            step_reward = -1 # -1000
             step_pass = False
             is_min_section = False
             fail_reason = "action_apply_error"
@@ -490,8 +490,8 @@ def rollout_option(structure, base_env, device, max_option_len, current_option: 
         episode_done = True
         # Apply penalty reward to the last step that caused the failure
         if len(step_transitions) > 0:
-            step_transitions[-1]["reward"] = 0 # -1000.0
-            step_transitions[-1]["original_reward"] = 0 # -1000.0
+            step_transitions[-1]["reward"] = -1 # -1000.0
+            step_transitions[-1]["original_reward"] = -1 # -1000.0
             step_transitions[-1]["done"] = True
             print(f"DEBUG: Updated last step transition with penalty reward")
     
@@ -700,25 +700,25 @@ def parse_args():
     parser.add_argument("--check_acceleration", action="store_true", default=False)
     parser.add_argument("--check_displacement", action="store_true", default=True)
     # OC
-    parser.add_argument("--num_options", type=int, default=4)
+    parser.add_argument("--num_options", type=int, default=8)
     parser.add_argument("--max_option_len", type=int, default=16)
     parser.add_argument("--temperature", type=float, default=1.0)
     parser.add_argument("--eps_start", type=float, default=1.0)
     parser.add_argument("--eps_min", type=float, default=0.1)
-    parser.add_argument("--eps_decay", type=int, default=int(1e6))
+    parser.add_argument("--eps_decay", type=int, default=int(1e3))
     parser.add_argument("--eps_test", type=float, default=0.05)
     parser.add_argument("--gamma", type=float, default=0.99)
     parser.add_argument("--update_frequency", type=int, default=4)
-    parser.add_argument("--freeze_interval", type=int, default=2000)
-    parser.add_argument("--batch_size", type=int, default=32)
-    parser.add_argument("--lr", type=float, default=1e-5)
-    parser.add_argument("--actor_lr", type=float, default=1e-5)
-    parser.add_argument("--critic_lr", type=float, default=1e-5)
+    parser.add_argument("--freeze_interval", type=int, default=1000)
+    parser.add_argument("--batch_size", type=int, default=256)
+    parser.add_argument("--lr", type=float, default=1e-4)
+    parser.add_argument("--actor_lr", type=float, default=1e-4)
+    parser.add_argument("--critic_lr", type=float, default=1e-4)
     parser.add_argument("--grad_clip", type=float, default=10.0)
     parser.add_argument("--device", type=str, default="cuda")
-    parser.add_argument("--epochs", type=int, default=100)
-    parser.add_argument("--hidden_dim", type=int, default=128)
-    parser.add_argument("--num_layers", type=int, default=3)
+    parser.add_argument("--epochs", type=int, default=50)
+    parser.add_argument("--hidden_dim", type=int, default=64) # 128
+    parser.add_argument("--num_layers", type=int, default=3)  # 3 
     parser.add_argument("--termination_reg", type=float, default=0.01)
     parser.add_argument("--entropy_reg", type=float, default=0.01)
     parser.add_argument("--option_length_bonus", type=float, default=0.1, help="Bonus reward for longer options: reward += (step-1) * bonus")

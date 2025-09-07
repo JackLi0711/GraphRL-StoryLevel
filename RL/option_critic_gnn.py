@@ -79,24 +79,25 @@ class OptionCriticGNN(nn.Module):
             num_layers=num_layers
         )
         
-        # Feature processing layers
+        # Feature processing layers - COMMENTED OUT FOR ABLATION STUDY
         # StateGNN outputs shape: [total story_member_num, member_state_dim*2]
         gnn_output_dim = member_state_dim * 2
-        feature_dim = 512
+        # feature_dim = 512  # COMMENTED OUT - using gnn_output_dim directly
         
-        self.feature_processor = nn.Sequential(
-            nn.Linear(gnn_output_dim, feature_dim),
-            nn.ReLU(),
-            nn.Linear(feature_dim, feature_dim),
-            nn.ReLU()
-        )
+        # COMMENTED OUT - Removing feature processor to test necessity
+        # self.feature_processor = nn.Sequential(
+        #     nn.Linear(gnn_output_dim, feature_dim),
+        #     nn.ReLU(),
+        #     nn.Linear(feature_dim, feature_dim),
+        #     nn.ReLU()
+        # )
         
-        # Option-Critic components
-        self.Q = nn.Linear(feature_dim, num_options)  # Policy-Over-Options
-        self.terminations = nn.Linear(feature_dim, num_options)  # Option-Termination
+        # Option-Critic components - MODIFIED to use gnn_output_dim directly
+        self.Q = nn.Linear(gnn_output_dim, num_options)  # Policy-Over-Options
+        self.terminations = nn.Linear(gnn_output_dim, num_options)  # Option-Termination
         
-        # Intra-option policies (one for each option)
-        self.options_W = nn.Parameter(torch.zeros(num_options, feature_dim, num_actions))
+        # Intra-option policies (one for each option) - MODIFIED dimensions
+        self.options_W = nn.Parameter(torch.zeros(num_options, gnn_output_dim, num_actions))
         self.options_b = nn.Parameter(torch.zeros(num_options, num_actions))
         
         # Initialize parameters
@@ -112,8 +113,9 @@ class OptionCriticGNN(nn.Module):
         nn.init.normal_(self.options_W, mean=0.0, std=0.01)
         nn.init.zeros_(self.options_b)
         
-        # Initialize other layers
-        for module in [self.feature_processor, self.Q]:
+        # Initialize other layers - MODIFIED to exclude feature_processor
+        # for module in [self.feature_processor, self.Q]:  # COMMENTED OUT - feature_processor removed
+        for module in [self.Q]:  # MODIFIED - only initialize Q network
             if hasattr(module, 'weight'):
                 nn.init.xavier_uniform_(module.weight)
             elif hasattr(module, 'children'):
@@ -161,20 +163,21 @@ class OptionCriticGNN(nn.Module):
             structure_story_ptr=structure_story_ptr
         )
         
-        # Process features for Option-Critic
-        processed_features = self.feature_processor(gnn_features)
+        # Process features for Option-Critic - MODIFIED to skip feature processing
+        # processed_features = self.feature_processor(gnn_features)  # COMMENTED OUT
         
         # StateGNN returns [total_story_member_num, member_state_dim*2]
         # We need a single global state vector for Option-Critic
         # Use global mean pooling to aggregate all story members into one state
-        if processed_features.dim() == 2 and processed_features.shape[0] > 1:
+        # MODIFIED - directly use gnn_features instead of processed_features
+        if gnn_features.dim() == 2 and gnn_features.shape[0] > 1:
             # Multiple story members -> single global state representation
-            state = processed_features.mean(dim=0, keepdim=True)  # Shape: [1, feature_dim]
+            state = gnn_features.mean(dim=0, keepdim=True)  # Shape: [1, gnn_output_dim]
         else:
             # Already single state or scalar
-            state = processed_features
+            state = gnn_features
             if state.dim() == 1:
-                state = state.unsqueeze(0)  # Ensure batch dimension: [1, feature_dim]
+                state = state.unsqueeze(0)  # Ensure batch dimension: [1, gnn_output_dim]
         
         return state
     
