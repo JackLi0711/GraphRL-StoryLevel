@@ -722,6 +722,7 @@ def parse_args():
     parser.add_argument("--termination_reg", type=float, default=0.01)
     parser.add_argument("--entropy_reg", type=float, default=0.01)
     parser.add_argument("--option_length_bonus", type=float, default=0.1, help="Bonus reward for longer options: reward += (step-1) * bonus")
+    parser.add_argument("--termination_lr_ratio", type=float, default=0.01, help="Termination learning rate as ratio of actor_lr (termination_lr = actor_lr * ratio)")
     parser.add_argument("--eval_frequency", type=int, default=5, help="Evaluate model every N training episodes")
     parser.add_argument("--eval_episodes", type=int, default=1, help="Number of episodes for evaluation")
     return parser.parse_args()
@@ -830,7 +831,7 @@ def main(args):
     # Separate parameters for different components
     termination_params = [p for n, p in oc.named_parameters() 
                          if n.startswith('terminations')]
-    actor_params = [oc.options_W, oc.options_b] + termination_params
+    policy_params = [oc.options_W, oc.options_b]  # Pure policy parameters (separated from termination)
     critic_params = [p for n, p in oc.named_parameters() 
                     if n.startswith('Q')]
     state_gnn_params = [p for n, p in oc.named_parameters() 
@@ -840,9 +841,11 @@ def main(args):
 
     # Use different learning rates for different components
     gnn_lr = args.actor_lr * 0.1  # Lower learning rate for GNN
+    termination_lr = args.actor_lr * args.termination_lr_ratio  # Differentiated learning rate for termination
     
     actor_optimizer = optim.Adam([
-        {"params": actor_params, "lr": args.actor_lr},
+        {"params": policy_params, "lr": args.actor_lr},  # Policy parameters with standard actor_lr
+        {"params": termination_params, "lr": termination_lr},  # Termination parameters with reduced lr
         {"params": state_gnn_params, "lr": gnn_lr},
         {"params": feature_params, "lr": args.actor_lr},
     ])
@@ -851,6 +854,19 @@ def main(args):
         {"params": state_gnn_params, "lr": gnn_lr},
         {"params": feature_params, "lr": args.critic_lr},
     ])
+    
+    # Log the learning rate configuration
+    logger.info(f"Learning rate configuration:")
+    logger.info(f"  Policy parameters: {args.actor_lr}")
+    logger.info(f"  Termination parameters: {termination_lr} (ratio: {args.termination_lr_ratio})")
+    logger.info(f"  Critic parameters: {args.critic_lr}")
+    logger.info(f"  StateGNN parameters: {gnn_lr}")
+    
+    # Log the update strategy
+    logger.info(f"Update strategy: SYNCHRONIZED")
+    logger.info(f"  Actor and Critic update together every {args.update_frequency} steps")
+    logger.info(f"  Buffer requirement: {args.batch_size} transitions")
+    logger.info(f"  Target network update every {args.freeze_interval} steps")
 
     # Replay buffer
     buffer = ReplayBuffer(capacity=100000)
@@ -974,33 +990,45 @@ def main(args):
             except Exception as e:
                 logger.error(f"Error pushing step transitions to buffer: {e}")
 
-            # Per-step actor updates: for each intra-option step do one actor update
+            # Accumulate actor losses for synchronous updates
+            accumulated_actor_losses = []
             logger.debug(f"Number of step transitions: {len(step_transitions)}")
             if len(step_transitions) > 0:
                 try:
                     for i, tr in enumerate(step_transitions):
-                        logger.debug(f"Processing step transition {i+1}/{len(step_transitions)}")
+                        logger.debug(f"Computing actor loss for step transition {i+1}/{len(step_transitions)}")
                         a_loss = actor_loss(
                             tr["obs"], tr["option"], tr["logp"], tr["entropy"], tr["reward"], tr["done"], tr["next_obs"], 
                             oc, oc_prime, args.gamma, args.termination_reg, args.entropy_reg
                         )
+                        accumulated_actor_losses.append(a_loss)
+                        logger.debug(f"Actor loss {i+1} computed: {a_loss.item()}")
+                except Exception as e:
+                    logger.error(f"Error computing actor losses: {e}")
+                    accumulated_actor_losses = []  # Clear in case of error
+
+            # Synchronous updates: both actor and critic update at the same frequency
+            should_update = len(buffer) > args.batch_size and (steps % args.update_frequency == 0)
+            logger.debug(f"Synchronous update check: buffer_size={len(buffer)}, batch_size={args.batch_size}, steps={steps}, should_update={should_update}")
+            if should_update:
+                try:
+                    # First: Actor updates (synchronized with critic)
+                    if len(accumulated_actor_losses) > 0:
+                        logger.debug(f"Performing synchronized actor updates with {len(accumulated_actor_losses)} losses")
+                        # Accumulate all actor losses and update once
+                        total_actor_loss = sum(accumulated_actor_losses) / len(accumulated_actor_losses)  # Average the losses
+                        
                         actor_optimizer.zero_grad()
-                        a_loss.backward()
+                        total_actor_loss.backward()
                         if args.grad_clip is not None and args.grad_clip > 0:
                             torch.nn.utils.clip_grad_norm_(oc.parameters(), max_norm=args.grad_clip)
                         actor_optimizer.step()
                         
                         # Record actor loss for plotting
-                        all_stats["actor_losses"].append(float(a_loss.item()))
-                        logger.debug(f"Actor update {i+1} completed, loss: {a_loss.item()}")
-                except Exception as e:
-                    logger.error(f"Error in actor updates: {e}")
-
-            # Critic updates on schedule (step-level replay like option-critic-pytorch)
-            should_update_critic = len(buffer) > args.batch_size and (steps % args.update_frequency == 0)
-            logger.debug(f"Critic update check: buffer_size={len(buffer)}, batch_size={args.batch_size}, steps={steps}, should_update={should_update_critic}")
-            if should_update_critic:
-                try:
+                        all_stats["actor_losses"].append(float(total_actor_loss.item()))
+                        logger.debug(f"Actor update completed, avg loss: {total_actor_loss.item()}")
+                    
+                    # Second: Critic updates (same as before)
                     logger.debug(f"Performing step-level critic update")
                     data_batch = buffer.sample(args.batch_size)  # Now sampling step-level transitions
                     logger.debug(f"Sampled batch with {args.batch_size} step-level transitions")
@@ -1015,11 +1043,13 @@ def main(args):
                     all_stats["critic_losses"].append(float(c_loss.item()))
                     logger.debug(f"Critic update completed, loss: {c_loss.item()}")
 
+                    # Update target network
                     if steps % args.freeze_interval == 0:
                         logger.debug(f"Updating target network at step {steps}")
                         oc_prime.load_state_dict(oc.state_dict())
+                        
                 except Exception as e:
-                    logger.error(f"Error in critic update: {e}")
+                    logger.error(f"Error in synchronized update: {e}")
                     import traceback
                     logger.error(f"Traceback: {traceback.format_exc()}")
 
