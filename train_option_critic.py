@@ -708,7 +708,7 @@ def parse_args():
     parser.add_argument("--eps_decay", type=int, default=int(1e3))
     parser.add_argument("--eps_test", type=float, default=0.05)
     parser.add_argument("--gamma", type=float, default=0.99)
-    parser.add_argument("--update_frequency", type=int, default=4)
+    parser.add_argument("--update_frequency", type=int, default=2)
     parser.add_argument("--freeze_interval", type=int, default=1000)
     parser.add_argument("--batch_size", type=int, default=256)
     parser.add_argument("--lr", type=float, default=1e-4)
@@ -716,14 +716,14 @@ def parse_args():
     parser.add_argument("--critic_lr", type=float, default=1e-4)
     parser.add_argument("--grad_clip", type=float, default=10.0)
     parser.add_argument("--device", type=str, default="cuda")
-    parser.add_argument("--epochs", type=int, default=50)
+    parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--hidden_dim", type=int, default=64) # 128
     parser.add_argument("--num_layers", type=int, default=3)  # 3 
     parser.add_argument("--termination_reg", type=float, default=0.01)
     parser.add_argument("--entropy_reg", type=float, default=0.01)
     parser.add_argument("--option_length_bonus", type=float, default=0.1, help="Bonus reward for longer options: reward += (step-1) * bonus")
     parser.add_argument("--termination_lr_ratio", type=float, default=0.01, help="Termination learning rate as ratio of actor_lr (termination_lr = actor_lr * ratio)")
-    parser.add_argument("--eval_frequency", type=int, default=5, help="Evaluate model every N training episodes")
+    parser.add_argument("--eval_frequency", type=int, default=10, help="Evaluate model every N training episodes")
     parser.add_argument("--eval_episodes", type=int, default=1, help="Number of episodes for evaluation")
     return parser.parse_args()
 
@@ -907,6 +907,15 @@ def main(args):
         "all_actions_SCWB": [] # For compatibility
     }
 
+    # Training history tracking for visualization
+    training_histories = {
+        "all_scores": [],      # Flattened list of all scores from all training episodes
+        "all_actions": [],     # Flattened list of all action sequences from training
+        "all_options": [],     # Flattened list of all option sequences from training
+        "all_option_instances": [], # Flattened list of all option instances from training
+        "all_actions_SCWB": [] # For compatibility
+    }
+
     for ep in range(args.epochs):
         logger.info(f"Starting episode {ep+1}/{args.epochs}")
         try:
@@ -925,6 +934,12 @@ def main(args):
             episode_score = 0.0
             last_pass_sections = None
             last_pass_saved_material = None
+            
+            # Training episode behavior tracking
+            episode_action_sequence = []
+            episode_option_sequence = []
+            episode_option_instances = []
+            current_option_instance_id = 0
             
         except Exception as e:
             logger.error(f"Failed to initialize episode {ep+1}: {e}")
@@ -960,6 +975,21 @@ def main(args):
                 logger.error(f"Error in rollout_option: {e}")
                 logger.error(f"Exception details:", exc_info=True)
                 break
+
+            # Collect actions and options from step transitions for training behavior visualization
+            for transition in step_transitions:
+                episode_action_sequence.append(transition["action"])
+                episode_option_sequence.append(curr_option)
+                # Record option instance info for this step
+                episode_option_instances.append({
+                    "option_index": curr_option,
+                    "instance_id": current_option_instance_id,
+                    "action_step": len(episode_action_sequence) - 1
+                })
+            
+            # Increment option instance ID when option terminates
+            if option_done:
+                current_option_instance_id += 1
 
             # logging stats
             all_stats["option_lengths"].append([o_stats["option_length"]])
@@ -1097,6 +1127,15 @@ def main(args):
             logger.debug(f"End of loop iteration {loop_iteration}, done={done}, steps={steps}")
 
         logger.info(f"Episode {ep+1} completed with {loop_iteration} iterations, {steps} steps")
+        
+        # Store training episode behavior data for visualization
+        if len(episode_action_sequence) > 0:
+            training_histories["all_scores"].append(episode_score)
+            training_histories["all_actions"].append(episode_action_sequence)
+            training_histories["all_options"].append(episode_option_sequence)
+            training_histories["all_option_instances"].append(episode_option_instances)
+            training_histories["all_actions_SCWB"].append([])  # Empty for compatibility
+            logger.debug(f"Training episode {ep+1} behavior data stored: {len(episode_action_sequence)} actions, score: {episode_score:.2f}")
         
         # Print episode termination probability summary
         try:
@@ -1314,9 +1353,65 @@ def main(args):
     except Exception as e:
         logger.warning(f"Failed plotting episode histories: {e}")
 
-    # Generate training behavior visualization using evaluation histories
+    # Generate training behavior visualization using training histories
     try:
-        logger.info("Generating training behavior visualization using evaluation histories...")
+        logger.info("Generating training behavior visualization using training histories...")
+        
+        if len(training_histories["all_scores"]) > 0:
+            # Create a Record-like object for compatibility with plot_test_behaviors
+            class TrainingRecord:
+                def __init__(self, training_histories):
+                    # For training visualization, we use training data as both training and testing
+                    self.training_record = {"score": training_histories["all_scores"]}
+                    self.testing_record = {
+                        "score": training_histories["all_scores"],
+                        "action": training_histories["all_actions"],
+                        "action_SCWB": training_histories["all_actions_SCWB"],
+                        "option": training_histories["all_options"],
+                        "option_instances": training_histories["all_option_instances"]
+                    }
+            
+            # Create record with training histories
+            training_record = TrainingRecord(training_histories)
+            
+            # Generate the behavior visualization for training episodes
+            logger.info("Generating training behavior visualization...")
+            
+            # Save training plot with different filename
+            original_plot_test_behaviors = plot_test_behaviors
+            def plot_training_behaviors(record, base_env, save_dir):
+                # Temporarily modify the save path to avoid overwriting evaluation plot
+                import matplotlib.pyplot as plt
+                from Visualization.plot import plot_test_behaviors as original_plot
+                
+                # Call the original plot function
+                original_plot(record, base_env, save_dir)
+                
+                # Rename the generated file from testing_behaviors.png to training_behaviors.png
+                import shutil
+                testing_path = save_dir / 'testing_behaviors.png'
+                training_path = save_dir / 'training_behaviors.png'
+                if testing_path.exists():
+                    shutil.move(str(testing_path), str(training_path))
+                    logger.info(f"Training behavior plot saved to: {training_path}")
+                    return training_path
+                else:
+                    logger.warning("Training behavior plot file not found after generation")
+                    return None
+            
+            plot_training_behaviors(training_record, base_env, ckpt_dir)
+            logger.info(f"Total training episodes plotted: {len(training_histories['all_scores'])}")
+        else:
+            logger.warning("No training histories available for visualization.")
+        
+    except Exception as e:
+        logger.error(f"Error in training behavior visualization: {e}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
+
+    # Generate evaluation behavior visualization using evaluation histories
+    try:
+        logger.info("Generating evaluation behavior visualization using evaluation histories...")
         
         if len(evaluation_histories["all_scores"]) > 0:
             # Create a Record-like object for compatibility with plot_test_behaviors
@@ -1368,9 +1463,13 @@ def main(args):
         else:
             logger.info("No best model was saved (no evaluations performed)")
             
+        if len(training_histories["all_scores"]) > 0:
+            logger.info(f"Training behavior visualization saved at: {ckpt_dir / 'training_behaviors.png'}")
+            logger.info(f"Training visualization includes {len(training_histories['all_scores'])} training episodes")
+            
         if len(evaluation_histories["all_scores"]) > 0:
             logger.info(f"Evaluation behavior visualization saved at: {ckpt_dir / 'testing_behaviors.png'}")
-            logger.info(f"Visualization includes {len(evaluation_histories['all_scores'])} evaluation episodes from training")
+            logger.info(f"Evaluation visualization includes {len(evaluation_histories['all_scores'])} evaluation episodes from training")
         
         # Loss history summary
         actor_losses = all_stats.get("actor_losses", [])
