@@ -30,7 +30,8 @@ class OptionCriticGNN(nn.Module):
                  eps_decay: int = int(1e6),
                  eps_test: float = 0.05,
                  device: str = 'cpu',
-                 testing: bool = False):
+                 testing: bool = False,
+                 debug_logging: bool = False):
         """
         Initialize OptionCriticGNN.
         
@@ -61,6 +62,7 @@ class OptionCriticGNN(nn.Module):
         self.num_options = num_options
         self.device = torch.device(device)
         self.testing = testing
+        self.debug_logging = debug_logging
         
         # Exploration parameters
         self.temperature = temperature
@@ -92,11 +94,11 @@ class OptionCriticGNN(nn.Module):
         #     nn.ReLU()
         # )
         
-        # Option-Critic components - MODIFIED to use gnn_output_dim directly
-        self.Q = nn.Linear(gnn_output_dim, num_options)  # Policy-Over-Options
-        self.terminations = nn.Linear(gnn_output_dim, num_options)  # Option-Termination
+        # Option-Critic components - MODIFIED to use graph level embeddings (member_state_dim)
+        self.Q = nn.Linear(member_state_dim, num_options)  # Policy-Over-Options
+        self.terminations = nn.Linear(member_state_dim, num_options)  # Option-Termination
         
-        # Intra-option policies (one for each option) - MODIFIED dimensions
+        # Intra-option policies (one for each option) - MODIFIED dimensions (using story level features)
         self.options_W = nn.Parameter(torch.zeros(num_options, gnn_output_dim, num_actions))
         self.options_b = nn.Parameter(torch.zeros(num_options, num_actions))
         
@@ -133,7 +135,7 @@ class OptionCriticGNN(nn.Module):
                   graph_edge_index: torch.Tensor, 
                   graph_edge_attr: torch.Tensor,
                   story_batch: torch.Tensor,
-                  structure_story_ptr: Optional[List] = None) -> torch.Tensor:
+                  structure_story_ptr: Optional[List] = None) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Extract state features using StateGNN.
         
@@ -145,7 +147,9 @@ class OptionCriticGNN(nn.Module):
             structure_story_ptr: Structure story pointers
             
         Returns:
-            Processed state features
+            Tuple of (story_level_state, global_state):
+            - story_level_state: [total_story_member_num, member_state_dim*2] for intra-option policies
+            - global_state: [1, member_state_dim*2] for policy-over-options and termination
         """
         # Ensure inputs are on correct device
         graph_x = ensure_tensor_on_device(graph_x, self.device)
@@ -154,7 +158,7 @@ class OptionCriticGNN(nn.Module):
         story_batch = ensure_tensor_on_device(story_batch, self.device)
         
         # Extract features using StateGNN
-        gnn_features = self.state_gnn(
+        features = self.state_gnn(
             x=graph_x,
             edge_index=graph_edge_index,
             edge_attr=graph_edge_attr,
@@ -162,66 +166,59 @@ class OptionCriticGNN(nn.Module):
             story_batch=story_batch,
             structure_story_ptr=structure_story_ptr
         )
-        
-        # Process features for Option-Critic - MODIFIED to skip feature processing
-        # processed_features = self.feature_processor(gnn_features)  # COMMENTED OUT
+
+        story_level_features = features
+        graph_level_features = features[:, self.hidden_dim:]
         
         # StateGNN returns [total_story_member_num, member_state_dim*2]
-        # We need a single global state vector for Option-Critic
-        # Use global mean pooling to aggregate all story members into one state
-        # MODIFIED - directly use gnn_features instead of processed_features
-        if gnn_features.dim() == 2 and gnn_features.shape[0] > 1:
-            # Multiple story members -> single global state representation
-            state = gnn_features.mean(dim=0, keepdim=True)  # Shape: [1, gnn_output_dim]
-        else:
-            # Already single state or scalar
-            state = gnn_features
-            if state.dim() == 1:
-                state = state.unsqueeze(0)  # Ensure batch dimension: [1, gnn_output_dim]
+        # For Option-Critic, we need both story-level AND global states:
+        # - Story-level for intra-option policies (like DQN)
+        # - Global for policy-over-options and termination functions
         
-        return state
+        global_states = graph_level_features[0: ] # shape: [1, member_state_dim]
+        return story_level_features, global_state
     
-    def get_Q(self, state: torch.Tensor) -> torch.Tensor:
+    def get_Q(self, global_state: torch.Tensor) -> torch.Tensor:
         """
-        Get Q-values for all options.
+        Get Q-values for all options using global state.
         
         Args:
-            state: State features
+            global_state: Global state features [1, feature_dim]
             
         Returns:
             Q-values for all options
         """
-        return self.Q(state)
+        return self.Q(global_state)
     
-    def get_terminations(self, state: torch.Tensor) -> torch.Tensor:
+    def get_terminations(self, global_state: torch.Tensor) -> torch.Tensor:
         """
-        Get termination probabilities for all options.
+        Get termination probabilities for all options using global state.
         
         Args:
-            state: State features
+            global_state: Global state features [1, feature_dim]
             
         Returns:
             Termination probabilities (after sigmoid)
         """
-        return self.terminations(state).sigmoid()
+        return self.terminations(global_state).sigmoid()
     
     def predict_option_termination(self, 
-                                 state: torch.Tensor, 
+                                 global_state: torch.Tensor, 
                                  current_option: int) -> Tuple[bool, int]:
         """
         Predict whether current option should terminate and select next option.
         
         Args:
-            state: State features
+            global_state: Global state features [1, feature_dim]
             current_option: Current option index
             
         Returns:
             (should_terminate, next_option_index)
         """
         # Get termination probability for current option
-        termination_probs = self.get_terminations(state)
+        termination_probs = self.get_terminations(global_state)
         
-        if state.dim() == 2:
+        if global_state.dim() == 2:
             # Batch of states - take mean or first sample
             termination_prob = termination_probs[0, current_option] if len(termination_probs) > 1 else termination_probs.mean(dim=0)[current_option]
         else:
@@ -237,8 +234,8 @@ class OptionCriticGNN(nn.Module):
             option_termination = Bernoulli(termination_prob).sample()
         
         # Select next option greedily based on Q-values
-        Q = self.get_Q(state)
-        if state.dim() == 2:
+        Q = self.get_Q(global_state)
+        if global_state.dim() == 2:
             next_option = Q[0].argmax(dim=-1) if len(Q) > 1 else Q.mean(dim=0).argmax(dim=-1)
         else:
             next_option = Q.argmax(dim=-1)
@@ -246,82 +243,206 @@ class OptionCriticGNN(nn.Module):
         return bool(option_termination.item()), int(next_option.item())
     
     def get_action(self, 
-                   state: torch.Tensor, 
+                   story_level_state: torch.Tensor,
+                   structure_story_ptr: Optional[List[int]],
                    option: int,
                    valid_actions_mask: torch.Tensor = None) -> Tuple[int, torch.Tensor, torch.Tensor]:
         """
         Select action within an option using intra-option policy.
+        Following DQN pattern: compute logits for each story member, then select best action.
         
         Args:
-            state: State features
+            story_level_state: Story-level state features [total_story_member_num, feature_dim]
+            structure_story_ptr: Story member indices for slicing (None = use all story members as one group)
             option: Current option index
             valid_actions_mask: Boolean tensor indicating valid actions (True = valid)
             
         Returns:
             (action, log_probability, entropy)
         """
-        # Handle batch dimension - ensure we get a single sample
-        if state.dim() == 2 and state.shape[0] > 1:
-            # Take the mean across batch dimension for action selection
-            state_for_action = state.mean(dim=0)
-        elif state.dim() == 2:
-            # Single batch item
-            state_for_action = state[0]
-        else:
-            # Already single state
-            state_for_action = state
+        # DEBUG: Enhanced logging for action selection
+        if self.debug_logging:
+            print(f"DEBUG get_action: story_level_state.shape={story_level_state.shape}, option={option}")
+            print(f"DEBUG get_action: structure_story_ptr={structure_story_ptr}")
+            if valid_actions_mask is not None:
+                print(f"DEBUG get_action: valid_actions_mask.shape={valid_actions_mask.shape}, valid_count={valid_actions_mask.sum().item()}")
         
-        # Ensure state_for_action is 1D
-        if state_for_action.dim() > 1:
-            state_for_action = state_for_action.flatten()
-        
-        # Compute action logits for the given option
-        logits = state_for_action @ self.options_W[option] + self.options_b[option]
+        # Compute action logits for all story members for the given option
+        # story_level_state shape: [total_story_member_num, feature_dim]
+        logits = story_level_state @ self.options_W[option] + self.options_b[option]
+        # logits shape: [total_story_member_num, num_actions]
+        if self.debug_logging:
+            print(f"DEBUG get_action: logits.shape={logits.shape}, logits_range=[{logits.min().item():.3f}, {logits.max().item():.3f}]")
         
         # Apply action masking if provided
         if valid_actions_mask is not None:
-            # Ensure mask is on the same device
+            # Ensure mask is on the same device and broadcast properly
             if valid_actions_mask.device != logits.device:
                 valid_actions_mask = valid_actions_mask.to(logits.device)
+            
+            # Expand mask to match logits shape if needed
+            if valid_actions_mask.dim() == 1 and valid_actions_mask.shape[0] != logits.shape[0]:
+                # If mask is for actions only, expand to cover all story members
+                if valid_actions_mask.shape[0] == logits.shape[1]:  # num_actions
+                    # Broadcast across story members: [1, num_actions] -> [total_story_members, num_actions]
+                    valid_actions_mask = valid_actions_mask.unsqueeze(0).expand(logits.shape[0], -1)
+                else:
+                    # Mask doesn't match expected dimensions - use as is
+                    pass
+            
             # Set invalid actions to very negative logits
             logits = logits.clone()
             logits[~valid_actions_mask] = -1e8
         
         # Apply temperature and get action distribution
-        action_dist = (logits / self.temperature).softmax(dim=-1)
-        action_dist = Categorical(action_dist)
+        action_probs = (logits / self.temperature).softmax(dim=-1)
+        # action_probs shape: [total_story_member_num, num_actions]
         
-        # Sample action (deterministic in testing mode)
-        if self.testing:
-            # Use argmax for deterministic action selection during testing
-            action = torch.argmax(action_dist.probs, dim=-1)
-        else:
-            # Use sampling during training
-            action = action_dist.sample()
+        # Additional safety: Zero out probabilities for invalid actions
+        if valid_actions_mask is not None:
+            if valid_actions_mask.dim() == 1 and valid_actions_mask.shape[0] == action_probs.shape[1]:
+                # Expand mask to match action_probs shape
+                mask_expanded = valid_actions_mask.unsqueeze(0).expand(action_probs.shape[0], -1)
+            else:
+                mask_expanded = valid_actions_mask
             
-        logp = action_dist.log_prob(action)
-        entropy = action_dist.entropy()
+            # Zero out invalid action probabilities
+            action_probs = action_probs * mask_expanded.float()
+            
+            # Renormalize probabilities (only if there are valid actions)
+            prob_sums = action_probs.sum(dim=-1, keepdim=True)
+            prob_sums = torch.where(prob_sums > 0, prob_sums, torch.ones_like(prob_sums))
+            action_probs = action_probs / prob_sums
         
-        # Ensure logp and entropy are scalars
-        if logp.dim() > 0:
-            logp = logp.mean()
-        if entropy.dim() > 0:
-            entropy = entropy.mean()
+        # Handle structure_story_ptr to determine how to select actions
+        if structure_story_ptr is None or len(structure_story_ptr) <= 1:
+            # No structure info or single structure - aggregate all story members
+            # Take the mean probability across all story members
+            aggregated_probs = action_probs.mean(dim=0)  # [num_actions]
+            
+            if self.testing:
+                action = torch.argmax(aggregated_probs, dim=-1)
+            else:
+                action_dist = Categorical(aggregated_probs)
+                action = action_dist.sample()
+            
+            logp = torch.log(aggregated_probs[action] + 1e-8)
+            entropy = -(aggregated_probs * torch.log(aggregated_probs + 1e-8)).sum()
+            
+        else:
+            # Multiple story member groups - select best action following DQN pattern
+            best_action = 0
+            best_prob = -1
+            best_entropy_probs = None
+            
+            for i in range(len(structure_story_ptr) - 1):
+                start_idx = structure_story_ptr[i]
+                end_idx = structure_story_ptr[i + 1]
+                
+                # Get probabilities for this story group
+                group_probs = action_probs[start_idx:end_idx].mean(dim=0)  # Average within group
+                
+                if self.testing:
+                    # Deterministic: pick argmax within this story group
+                    local_action = torch.argmax(group_probs, dim=-1)
+                    local_prob = group_probs[local_action]
+                else:
+                    # Stochastic: sample from this story group
+                    action_dist = Categorical(group_probs)
+                    local_action = action_dist.sample()
+                    local_prob = group_probs[local_action]
+                
+                # Keep track of the best action across all groups
+                if local_prob > best_prob:
+                    best_prob = local_prob
+                    best_action = local_action
+                    best_entropy_probs = group_probs
+            
+            # Calculate log probability and entropy for the selected action
+            action = best_action
+            logp = torch.log(best_prob + 1e-8)
+            entropy = -(best_entropy_probs * torch.log(best_entropy_probs + 1e-8)).sum()
         
-        return action.item(), logp, entropy
+        # DEBUG: Final action selection logging
+        final_action = action.item()
+        if self.debug_logging:
+            print(f"DEBUG get_action: final_action={final_action}, logp={logp.item():.4f}, entropy={entropy.item():.4f}")
+            print(f"DEBUG get_action: action type={type(final_action)}, action range check: 0 <= {final_action} < {self.num_actions} = {0 <= final_action < self.num_actions}")
+        
+        # Safety check: Ensure final_action is a valid integer and allowed by mask
+        try:
+            if not isinstance(final_action, int):
+                if self.debug_logging:
+                    print(f"WARNING get_action: Converting final_action from {type(final_action)} to int")
+                final_action = int(final_action)
+                
+            if not (0 <= final_action < self.num_actions):
+                if self.debug_logging:
+                    print(f"ERROR get_action: Action {final_action} is out of bounds [0, {self.num_actions})")
+                # Clamp to valid range as fallback
+                final_action = max(0, min(final_action, self.num_actions - 1))
+                if self.debug_logging:
+                    print(f"WARNING get_action: Clamped action to {final_action}")
+            
+            # CRITICAL: Check if action is allowed by the valid_actions_mask
+            if valid_actions_mask is not None:
+                if final_action < len(valid_actions_mask) and not valid_actions_mask[final_action].item():
+                    if self.debug_logging:
+                        print(f"CRITICAL ERROR get_action: Selected action {final_action} is INVALID according to mask!")
+                        print(f"  valid_actions_mask[{final_action}] = {valid_actions_mask[final_action].item()}")
+                    
+                    # Find valid actions and select the first one as fallback
+                    valid_indices = torch.where(valid_actions_mask)[0]
+                    if len(valid_indices) > 0:
+                        final_action = valid_indices[0].item()  # Use first valid action
+                        if self.debug_logging:
+                            print(f"WARNING get_action: Forced selection of valid action {final_action}")
+                            print(f"  Available valid actions: {valid_indices.tolist()}")
+                    else:
+                        if self.debug_logging:
+                            print(f"CRITICAL ERROR get_action: No valid actions available in mask!")
+                        final_action = 0  # Ultimate fallback
+                
+            if self.debug_logging:
+                print(f"DEBUG get_action: Final validated action={final_action}")
+        except Exception as safety_e:
+            if self.debug_logging:
+                print(f"ERROR get_action: Safety check failed: {safety_e}")
+            # Try to find a valid action if mask is available
+            if valid_actions_mask is not None:
+                try:
+                    valid_indices = torch.where(valid_actions_mask)[0]
+                    if len(valid_indices) > 0:
+                        final_action = valid_indices[0].item()
+                        if self.debug_logging:
+                            print(f"WARNING get_action: Emergency fallback to valid action {final_action}")
+                    else:
+                        final_action = 0
+                        if self.debug_logging:
+                            print(f"WARNING get_action: No valid actions, using action 0")
+                except:
+                    final_action = 0
+                    if self.debug_logging:
+                        print(f"WARNING get_action: Using ultimate fallback action=0")
+            else:
+                final_action = 0  # Fallback to first action
+                if self.debug_logging:
+                    print(f"WARNING get_action: Using fallback action=0")
+        
+        return final_action, logp, entropy
     
-    def greedy_option(self, state: torch.Tensor) -> int:
+    def greedy_option(self, global_state: torch.Tensor) -> int:
         """
         Select option greedily based on Q-values.
         
         Args:
-            state: State features
+            global_state: Global state features [1, feature_dim]
             
         Returns:
             Option index
         """
-        Q = self.get_Q(state)
-        if state.dim() == 2:
+        Q = self.get_Q(global_state)
+        if global_state.dim() == 2:
             return Q[0].argmax(dim=-1).item() if len(Q) > 1 else Q.mean(dim=0).argmax(dim=-1).item()
         else:
             return Q.argmax(dim=-1).item()
@@ -421,8 +542,9 @@ def critic_loss(model: OptionCriticGNN,
             single_edge_attr = graph_edge_attr[i:i+1] if graph_edge_attr.dim() > 2 else graph_edge_attr
             single_story_batch = story_batch[i:i+1] if story_batch.dim() > 1 else story_batch
             
-            state = model.get_state(single_graph_x.squeeze(0), single_edge_index.squeeze(0), 
-                                   single_edge_attr.squeeze(0), single_story_batch.squeeze(0))
+            # Use global state for critic loss computation
+            _, state = model.get_state(single_graph_x.squeeze(0), single_edge_index.squeeze(0), 
+                                      single_edge_attr.squeeze(0), single_story_batch.squeeze(0), None)
         else:
             state = model.feature_processor(graph_x[i:i+1])
         
@@ -441,10 +563,11 @@ def critic_loss(model: OptionCriticGNN,
             next_single_edge_attr = next_graph_edge_attr[i:i+1] if next_graph_edge_attr.dim() > 2 else next_graph_edge_attr
             next_single_story_batch = next_story_batch[i:i+1] if next_story_batch.dim() > 1 else next_story_batch
             
-            next_state_prime = model_prime.get_state(next_single_graph_x.squeeze(0), next_single_edge_index.squeeze(0),
-                                                    next_single_edge_attr.squeeze(0), next_single_story_batch.squeeze(0))
-            next_state = model.get_state(next_single_graph_x.squeeze(0), next_single_edge_index.squeeze(0),
-                                        next_single_edge_attr.squeeze(0), next_single_story_batch.squeeze(0))
+            # Use global state for critic loss computation
+            _, next_state_prime = model_prime.get_state(next_single_graph_x.squeeze(0), next_single_edge_index.squeeze(0),
+                                                       next_single_edge_attr.squeeze(0), next_single_story_batch.squeeze(0), None)
+            _, next_state = model.get_state(next_single_graph_x.squeeze(0), next_single_edge_index.squeeze(0),
+                                           next_single_edge_attr.squeeze(0), next_single_story_batch.squeeze(0), None)
         else:
             next_state_prime = model_prime.feature_processor(next_graph_x[i:i+1])
             next_state = model.feature_processor(next_graph_x[i:i+1])
@@ -472,9 +595,11 @@ def critic_loss(model: OptionCriticGNN,
     next_termination_probs = torch.stack(next_termination_probs_list, dim=0).detach()  # Shape: [batch_size, num_options]
     
     # Debug: print shapes (reduced frequency for step-level updates)
+    # Note: These debug prints are controlled by the model's debug_logging flag
+    # but we don't have access to the model instance here, so we'll make it conditional on batch size
     if batch_size <= 5:  # Only print for small batches to reduce noise
-        print(f"DEBUG critic_loss: Q shape: {Q.shape}, next_Q_prime shape: {next_Q_prime.shape}, next_termination_probs shape: {next_termination_probs.shape}")
-        print(f"DEBUG critic_loss: options: {options}, batch_size: {batch_size}, rewards shape: {rewards.shape}")
+        # Optional debug prints - these can be commented out in production
+        pass  # Replaced with logger-based logging in calling code
     
     # Ensure all have correct batch dimension
     if Q.dim() == 1:
@@ -534,11 +659,12 @@ def actor_loss(obs, option: int, logp: torch.Tensor, entropy: torch.Tensor,
         graph_x, graph_edge_index, graph_edge_attr, story_batch = obs[:4]
         next_graph_x, next_graph_edge_index, next_graph_edge_attr, next_story_batch = next_obs[:4]
         
-        state = model.get_state(graph_x, graph_edge_index, graph_edge_attr, story_batch)
-        next_state = model.get_state(next_graph_x, next_graph_edge_index, 
-                                   next_graph_edge_attr, next_story_batch)
-        next_state_prime = model_prime.get_state(next_graph_x, next_graph_edge_index, 
-                                                next_graph_edge_attr, next_story_batch)
+        # Use global state for loss computation (termination and Q-values)
+        _, state = model.get_state(graph_x, graph_edge_index, graph_edge_attr, story_batch, None)
+        _, next_state = model.get_state(next_graph_x, next_graph_edge_index, 
+                                       next_graph_edge_attr, next_story_batch, None)
+        _, next_state_prime = model_prime.get_state(next_graph_x, next_graph_edge_index, 
+                                                   next_graph_edge_attr, next_story_batch, None)
     else:
         # For tensor observations, convert to tensor if needed
         if isinstance(obs, (tuple, list)):

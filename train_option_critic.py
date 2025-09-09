@@ -157,12 +157,37 @@ def get_graph_data(structure, device):
     """
     graph = structure.graph
     story_batch = structure.aux["story_batch"].to(device)
+    
+    # Calculate structure_story_ptr for proper story-level processing
+    # This matches the DQN pattern for story member indexing
+    structure_story_ptr = None
+    if hasattr(structure.aux, 'story_xdir_beam_member'):
+        try:
+            # Count story members: x-beam, z-beam, outer-column, inner-column
+            story_members_lists = [
+                structure.aux.get("story_xdir_beam_member", []),
+                structure.aux.get("story_zdir_beam_member", []),  
+                structure.aux.get("story_outer_column_member", []),
+                structure.aux.get("story_inner_column_member", [])
+            ]
+            
+            structure_story_ptr = [0]
+            story_count = 0
+            for story_members_list in story_members_lists:
+                for story_members in story_members_list:
+                    story_count += 1
+            structure_story_ptr.append(story_count)
+            
+        except Exception:
+            # Fallback if aux structure is different
+            structure_story_ptr = None
+    
     return (
         graph.x.to(device),
         graph.edge_index.to(device),
         graph.edge_attr.to(device),
         story_batch,
-        None  # structure_story_ptr
+        structure_story_ptr
     )
 
 
@@ -170,7 +195,7 @@ def num_actions(structure) -> int:
     return len(structure.story_level_actions)
 
 
-def apply_primitive_action(base_env, structure, action: int):
+def apply_primitive_action(base_env, structure, action: int, logger=None):
     """
     Apply a primitive action using the base environment.
 
@@ -180,12 +205,43 @@ def apply_primitive_action(base_env, structure, action: int):
         is_minimum_section: bool, whether minimum section is reached
         fail_reason: str, fail reason string from base env
     """
-    structure, step_reward, done, fail_name, fail_reason = base_env.step(structure, action)
-
-    # Derive per-step pass/minimum-section states from base env outputs
-    is_minimum_section = bool(done and (fail_reason == "minimum_section"))
-    step_pass = not (done and (fail_reason != "minimum_section"))
-    return structure, float(step_reward), step_pass, is_minimum_section, fail_reason
+    if logger:
+        logger.debug(f"apply_primitive_action: Called with action={action}, type={type(action)}")
+        logger.debug(f"apply_primitive_action: base_env type={type(base_env)}")
+        logger.debug(f"apply_primitive_action: structure type={type(structure)}")
+    
+    try:
+        # Additional validation
+        if hasattr(structure, 'story_level_actions'):
+            if logger:
+                logger.debug(f"apply_primitive_action: structure has {len(structure.story_level_actions)} story_level_actions")
+        
+        # Call base environment step
+        if logger:
+            logger.debug(f"apply_primitive_action: Calling base_env.step(structure, {action})")
+        result = base_env.step(structure, action)
+        if logger:
+            logger.debug(f"apply_primitive_action: base_env.step returned {len(result)} items")
+        
+        structure, step_reward, done, fail_name, fail_reason = result
+        if logger:
+            logger.debug(f"apply_primitive_action: Unpacked result - step_reward={step_reward}, done={done}, fail_reason={fail_reason}")
+        
+        # Derive per-step pass/minimum-section states from base env outputs
+        is_minimum_section = bool(done and (fail_reason == "minimum_section"))
+        step_pass = not (done and (fail_reason != "minimum_section"))
+        
+        if logger:
+            logger.debug(f"apply_primitive_action: Returning - step_reward={float(step_reward)}, step_pass={step_pass}, is_minimum_section={is_minimum_section}")
+        return structure, float(step_reward), step_pass, is_minimum_section, fail_reason
+        
+    except Exception as e:
+        if logger:
+            logger.error(f"apply_primitive_action: Exception occurred: {e}")
+            logger.error(f"apply_primitive_action: Exception type: {type(e)}")
+            import traceback
+            logger.error(f"apply_primitive_action: Full traceback: {traceback.format_exc()}")
+        raise e
 
 
 def check_constraints_without_update(structure, base_env):
@@ -240,6 +296,17 @@ def rollout_option(structure, base_env, device, max_option_len, current_option: 
     length = 0
     termination_reason = None
     episode_done = False
+    
+    # DEBUG: Track termination_reason changes
+    def set_termination_reason(reason, location):
+        nonlocal termination_reason
+        if logger:
+            logger.debug(f"Setting termination_reason='{reason}' at location: {location}")
+        termination_reason = reason
+    
+    # Initialize variables that are used later
+    step_pass = True  # Default to True - will be updated if step fails
+    step_transitions = []  # list of dicts: {obs, action, logp, entropy, reward, done, next_obs, option}
 
     # Record pre-option material usage to compute saved amount for this option
     try:
@@ -249,9 +316,9 @@ def rollout_option(structure, base_env, device, max_option_len, current_option: 
 
     # initial state for intra-option policy
     graph_data = get_graph_data(structure, device)
-    state = oc_model.get_state(*graph_data)
-
-    step_transitions = []  # list of dicts: {obs, action, logp, entropy, reward, done, next_obs, option}
+    story_level_state, global_state = oc_model.get_state(*graph_data)
+    # Extract structure_story_ptr for action selection
+    structure_story_ptr = graph_data[4]  # 5th element from get_graph_data
 
     if logger:
         logger.debug(f"Starting rollout_option for option {current_option}, max_len={max_option_len}")
@@ -264,16 +331,12 @@ def rollout_option(structure, base_env, device, max_option_len, current_option: 
         safety_counter += 1
         if logger:
             logger.debug(f"rollout_option loop iteration {length+1}/{max_option_len}, safety_counter={safety_counter}")
-        else:
-            print(f"DEBUG: rollout_option loop iteration {length+1}/{max_option_len}, safety_counter={safety_counter}")
         
         # Safety check to prevent infinite loops
         if safety_counter > max_safety_iterations:
             if logger:
                 logger.error(f"rollout_option exceeded safety counter ({max_safety_iterations}), forcing termination")
-            else:
-                print(f"ERROR: rollout_option exceeded safety counter ({max_safety_iterations}), forcing termination")
-            termination_reason = "safety_timeout"
+            set_termination_reason("safety_timeout", "safety_counter_exceeded")
             break
         
         # Create valid actions mask
@@ -327,7 +390,7 @@ def rollout_option(structure, base_env, device, max_option_len, current_option: 
             else:
                 print(f"DEBUG: {log_msg}")
                 
-            action, logp, entropy = oc_model.get_action(state, current_option, valid_mask)
+            action, logp, entropy = oc_model.get_action(story_level_state, structure_story_ptr, current_option, valid_mask)
             entropies.append(float(entropy.detach().cpu().numpy()))
             
             log_msg = f"Got action {action}, entropy: {entropy.item()}"
@@ -335,12 +398,59 @@ def rollout_option(structure, base_env, device, max_option_len, current_option: 
                 logger.debug(log_msg)
             else:
                 print(f"DEBUG: {log_msg}")
+                
+            # DEBUG: Action validation checks
+            if logger:
+                logger.debug(f"Action validation checks:")
+                logger.debug(f"  action = {action}, type = {type(action)}")
+                logger.debug(f"  action is integer: {isinstance(action, int)}")
+                
+                # Validate action bounds and restriction status
+                try:
+                    num_story_members = len(structure.aux.get('story_xdir_beam_member', [])) + len(structure.aux.get('story_zdir_beam_member', [])) + len(structure.aux.get('story_outer_column_member', [])) + len(structure.aux.get('story_inner_column_member', []))
+                    logger.debug(f"  structure has {num_story_members} story members")
+                    logger.debug(f"  structure has {len(structure.story_level_actions)} story-level actions")
+                    logger.debug(f"  action bounds check: 0 <= {action} < {len(structure.story_level_actions)} = {0 <= action < len(structure.story_level_actions)}")
+                    
+                    # Check if the selected action is in the valid mask
+                    if valid_mask is not None:
+                        action_is_valid = valid_mask[action].item() if action < len(valid_mask) else False
+                        logger.debug(f"  action in valid_mask: {action_is_valid}")
+                        
+                        if not action_is_valid:
+                            logger.error(f"CRITICAL: Selected action {action} is INVALID according to valid_mask!")
+                            logger.error(f"  valid_mask[{action}] = {valid_mask[action].item() if action < len(valid_mask) else 'out_of_bounds'}")
+                            
+                            # Find valid actions
+                            valid_action_indices = torch.where(valid_mask)[0].tolist()
+                            logger.error(f"  Available valid actions: {valid_action_indices}")
+                    
+                    # Check restriction reasons
+                    already_minimum = set(getattr(structure, 'already_minimum_section_story_indexes', []) or [])
+                    restricted_actions = set()
+                    if hasattr(structure, 'restrict_action_space'):
+                        restricted = structure.restrict_action_space()
+                        if restricted is not None:
+                            restricted_actions.update(restricted)
+                    
+                    if action in already_minimum:
+                        logger.error(f"  Action {action} is in already_minimum: {already_minimum}")
+                    if action in restricted_actions:
+                        logger.error(f"  Action {action} is in restricted_actions: {restricted_actions}")
+                        
+                    if hasattr(structure, 'get_valid_actions'):
+                        valid_actions = structure.get_valid_actions()
+                        logger.debug(f"  structure valid actions: {valid_actions}")
+                        logger.debug(f"  action in valid actions: {action in valid_actions}")
+                        
+                except Exception as struct_e:
+                    logger.warning(f"Could not validate structure info: {struct_e}")
         except Exception as e:
             if logger:
                 logger.error(f"Failed to get action: {e}")
             else:
                 print(f"ERROR: Failed to get action: {e}")
-            termination_reason = "action_error"
+            set_termination_reason("action_error", "get_action_failed")
             break
 
         log_msg = f"Applying primitive action {action}"
@@ -350,7 +460,47 @@ def rollout_option(structure, base_env, device, max_option_len, current_option: 
             print(f"DEBUG: {log_msg}")
             
         try:
-            structure, step_reward, step_pass, is_min_section, fail_reason = apply_primitive_action(base_env, structure, action)
+            if logger:
+                logger.debug(f"Calling apply_primitive_action with action={action}, structure type={type(structure)}")
+                
+                # Enhanced pre-call validation
+                logger.debug(f"Pre-call validation:")
+                logger.debug(f"  - action type: {type(action)}")
+                logger.debug(f"  - action value: {action}")
+                logger.debug(f"  - action is integer: {isinstance(action, int)}")
+                logger.debug(f"  - base_env type: {type(base_env)}")
+                logger.debug(f"  - base_env has step method: {hasattr(base_env, 'step')}")
+            
+            # Validate structure
+            try:
+                if logger:
+                    logger.debug(f"  - structure story_level_actions length: {len(structure.story_level_actions)}")
+                    logger.debug(f"  - action bounds valid: {0 <= action < len(structure.story_level_actions)}")
+                
+                # Check if action is within valid bounds
+                if not (0 <= action < len(structure.story_level_actions)):
+                    error_msg = f"Action {action} is out of bounds [0, {len(structure.story_level_actions)})"
+                    if logger:
+                        logger.error(error_msg)
+                    raise ValueError(f"Invalid action index: {action}")
+                    
+                # Ensure action is integer
+                if not isinstance(action, int):
+                    if logger:
+                        logger.warning(f"Converting action from {type(action)} to int")
+                    action = int(action)
+                    if logger:
+                        logger.debug(f"  - converted action: {action}")
+                    
+            except Exception as val_e:
+                if logger:
+                    logger.error(f"Pre-call validation failed: {val_e}")
+                raise val_e
+            
+            # Call with enhanced error capture
+            if logger:
+                logger.debug(f"Calling base_env.step(structure, {action})")
+            structure, step_reward, step_pass, is_min_section, fail_reason = apply_primitive_action(base_env, structure, action, logger)
             
             # Apply option length bonus: reward += (step_number - 1) * bonus
             # length is 0-indexed, so length equals (step_number - 1)
@@ -361,23 +511,41 @@ def rollout_option(structure, base_env, device, max_option_len, current_option: 
             log_msg = f"Action applied - original_reward: {original_reward}, length_bonus: {length_bonus}, final_reward: {step_reward}, pass: {step_pass}, min_section: {is_min_section}, fail_reason: {fail_reason}"
             if logger:
                 logger.debug(log_msg)
-            else:
-                print(f"DEBUG: {log_msg}")
+                logger.debug("Action application completed successfully")
         except Exception as e:
-            print(f"ERROR: Failed to apply primitive action: {e}")
-            termination_reason = "action_apply_error"
+            if logger:
+                logger.error(f"Failed to apply primitive action: {e}")
+                logger.error(f"Exception type: {type(e)}")
+                import traceback
+                logger.error(f"Full traceback: {traceback.format_exc()}")
+                logger.error(f"Action details - action={action}, type={type(action)}")
+                logger.error(f"Structure details - type={type(structure)}")
+                
+                # Try to get more structure information for debugging
+                try:
+                    logger.error(f"Structure attributes: {[attr for attr in dir(structure) if not attr.startswith('_')]}")
+                    if hasattr(structure, 'story_level_actions'):
+                        logger.error(f"Structure story_level_actions length: {len(structure.story_level_actions)}")
+                    if hasattr(structure, 'aux'):
+                        logger.error(f"Structure aux keys: {list(structure.aux.keys()) if structure.aux else 'None'}")
+                except Exception as debug_e:
+                    logger.error(f"Could not get structure debug info: {debug_e}")
+                
+            set_termination_reason("action_apply_error", "apply_primitive_action_failed")
             step_reward = -1 # -1000
             step_pass = False
             is_min_section = False
             fail_reason = "action_apply_error"
         # Don't accumulate rewards at option level anymore
         length += 1
-        print(f"DEBUG: Updated length to {length}, step_reward: {step_reward}")
+        if logger:
+            logger.debug(f"Updated length to {length}, step_reward: {step_reward}")
 
         # minimum section: force terminate option and episode
         if is_min_section:
-            print(f"DEBUG: Minimum section reached, terminating option and episode")
-            termination_reason = "minimum_section"
+            if logger:
+                logger.debug("Minimum section reached, terminating option and episode")
+            set_termination_reason("minimum_section", "is_min_section_true")
             episode_done = True
             try:
                 next_graph_data = get_graph_data(structure, device)
@@ -392,24 +560,31 @@ def rollout_option(structure, base_env, device, max_option_len, current_option: 
                     "next_obs": next_graph_data,
                     "option": current_option,  # Add option to each step transition
                 })
-                print(f"DEBUG: Added final step transition, breaking from loop")
+                if logger:
+                    logger.debug("Added final step transition, breaking from loop")
             except Exception as e:
-                print(f"ERROR: Failed to create step transition: {e}")
+                if logger:
+                    logger.error(f"Failed to create step transition: {e}")
             break
 
         # compute next state for termination prediction
-        print(f"DEBUG: Computing next state for termination prediction")
+        if logger:
+            logger.debug("Computing next state for termination prediction")
         try:
             next_graph_data = get_graph_data(structure, device)
-            next_state = oc_model.get_state(*next_graph_data)
-            print(f"DEBUG: Successfully computed next state")
+            next_story_level_state, next_global_state = oc_model.get_state(*next_graph_data)
+            next_state = next_global_state  # Use global state for termination prediction
+            if logger:
+                logger.debug("Successfully computed next state")
         except Exception as e:
-            print(f"ERROR: Failed to compute next state: {e}")
-            termination_reason = "state_error"
+            if logger:
+                logger.error(f"Failed to compute next state: {e}")
+            set_termination_reason("state_error", "next_state_computation_failed")
             break
 
         # record step transition
-        print(f"DEBUG: Recording step transition")
+        if logger:
+            logger.debug("Recording step transition")
         try:
             step_transitions.append({
                 "obs": graph_data,
@@ -422,12 +597,15 @@ def rollout_option(structure, base_env, device, max_option_len, current_option: 
                 "next_obs": next_graph_data,
                 "option": current_option,  # Add option to each step transition
             })
-            print(f"DEBUG: Step transition recorded, total transitions: {len(step_transitions)}")
+            if logger:
+                logger.debug(f"Step transition recorded, total transitions: {len(step_transitions)}")
         except Exception as e:
-            print(f"ERROR: Failed to record step transition: {e}")
+            if logger:
+                logger.error(f"Failed to record step transition: {e}")
 
         # option termination by beta
-        print(f"DEBUG: Checking option termination by beta")
+        if logger:
+            logger.debug("Checking option termination by beta")
         try:
             # Get termination probabilities for logging
             termination_probs = oc_model.get_terminations(next_state)
@@ -442,7 +620,8 @@ def rollout_option(structure, base_env, device, max_option_len, current_option: 
                 
                 # Print each option's termination probability clearly
                 term_probs_str = ", ".join([f"β{i}: {prob:.4f}" for i, prob in enumerate(term_probs_display)])
-                print(f"TERMINATION_PROBS Step {length+1}: [{term_probs_str}] | Current Option {current_option}: β{current_option}={term_probs_display[current_option]:.4f} → {'TERMINATE' if option_termination else 'CONTINUE'}")
+                if logger:
+                    logger.debug(f"TERMINATION_PROBS Step {length+1}: [{term_probs_str}] | Current Option {current_option}: β{current_option}={term_probs_display[current_option]:.4f} → {'TERMINATE' if option_termination else 'CONTINUE'}")
             
             # Log termination probability prediction
             try:
@@ -454,48 +633,60 @@ def rollout_option(structure, base_env, device, max_option_len, current_option: 
                     context="rollout_option"
                 )
             except Exception as log_e:
-                print(f"WARNING: Failed to log termination probability: {log_e}")
+                if logger:
+                    logger.warning(f"Failed to log termination probability: {log_e}")
             
             if option_termination:
-                print(f"==> Option {current_option} TERMINATED by β={term_probs_display[current_option]:.4f} at step {length}")
-                termination_reason = "beta"
-                state = next_state
+                if logger:
+                    logger.debug(f"==> Option {current_option} TERMINATED by β={term_probs_display[current_option]:.4f} at step {length}")
+                set_termination_reason("beta", "option_termination_true")
+                # Update state for potential next iteration (though loop will break)
+                story_level_state, global_state = next_story_level_state, next_global_state 
                 graph_data = next_graph_data
                 break
         except Exception as e:
-            print(f"ERROR: Failed option termination prediction: {e}")
-            termination_reason = "beta_error"
+            if logger:
+                logger.error(f"Failed option termination prediction: {e}")
+            set_termination_reason("beta_error", "termination_prediction_failed")
             break
 
         # continue the option
-        print(f"DEBUG: Continuing option, updating state")
-        state = next_state
+        if logger:
+            logger.debug("Continuing option, updating state")
+        story_level_state, global_state = next_story_level_state, next_global_state
         graph_data = next_graph_data
-        print(f"DEBUG: State updated, continuing to next iteration")
+        if logger:
+            logger.debug("State updated, continuing to next iteration")
 
     # if not terminated by beta/minimum_section, it hits max length
-    print(f"DEBUG: Exited rollout loop with length={length}, max_len={max_option_len}, termination_reason={termination_reason}")
+    if logger:
+        logger.debug(f"Exited rollout loop with length={length}, max_len={max_option_len}, termination_reason={termination_reason}")
     option_done = True
     if termination_reason is None:
-        termination_reason = "max_len"
-        print(f"DEBUG: Set termination reason to max_len")
+        set_termination_reason("max_len", "loop_completed_naturally")
+        if logger:
+            logger.debug("Set termination reason to max_len")
 
     # Check constraint compliance and apply penalty to last step if failed
     # Note: step_pass refers to the last evaluated step
     passed = step_pass if length > 0 else True
-    print(f"DEBUG: Final step_pass check: step_pass={step_pass}, length={length}, passed={passed}")
+    if logger:
+        logger.debug(f"Final step_pass check: step_pass={step_pass}, length={length}, passed={passed}")
     
     if not passed:
-        print(f"DEBUG: Option failed, applying penalty to last step")
+        if logger:
+            logger.debug("Option failed, applying penalty to last step")
         episode_done = True
         # Apply penalty reward to the last step that caused the failure
         if len(step_transitions) > 0:
             step_transitions[-1]["reward"] = -1 # -1000.0
             step_transitions[-1]["original_reward"] = -1 # -1000.0
             step_transitions[-1]["done"] = True
-            print(f"DEBUG: Updated last step transition with penalty reward")
+            if logger:
+                logger.debug("Updated last step transition with penalty reward")
     
-    print(f"DEBUG: Option execution completed, passed={passed}")
+    if logger:
+        logger.debug(f"Option execution completed, passed={passed}")
 
     # Compute option-level saved material (before vs after this option)
     try:
@@ -515,8 +706,9 @@ def rollout_option(structure, base_env, device, max_option_len, current_option: 
         "story_level_sections": list(getattr(structure, 'story_level_sections', [])),
     }
 
-    next_state = state  # latest state
-    print(f"DEBUG: rollout_option returning - option_done: {option_done}, episode_done: {episode_done}, termination_reason: {termination_reason}, num_transitions: {len(step_transitions)}")
+    next_state = global_state  # latest global state for return
+    if logger:
+        logger.debug(f"rollout_option returning - option_done: {option_done}, episode_done: {episode_done}, termination_reason: {termination_reason}, num_transitions: {len(step_transitions)}")
     return structure, next_state, option_done, episode_done, stats, step_transitions, termination_reason
 
 
@@ -620,11 +812,11 @@ def evaluate_model(base_env, oc_model, device, num_episodes, max_option_len, log
                         if not done:
                             try:
                                 current_graph_data = get_graph_data(structure, device)
-                                state = oc_model.get_state(*current_graph_data)
+                                _, global_state = oc_model.get_state(*current_graph_data)
                                 
                                 # Get termination probabilities for logging
-                                termination_probs = oc_model.get_terminations(state)
-                                option_termination, greedy_option = oc_model.predict_option_termination(state, curr_option)
+                                termination_probs = oc_model.get_terminations(global_state)
+                                option_termination, greedy_option = oc_model.predict_option_termination(global_state, curr_option)
                                 
                                 # Log termination probability prediction
                                 try:
@@ -809,6 +1001,7 @@ def main(args):
         eps_test=args.eps_test,
         device=device,
         testing=False,
+        debug_logging=True,  # Enable debug logging for training model
     )
     oc_prime = OptionCriticGNN(
         node_feature_dim=node_feature_dim,
@@ -825,6 +1018,7 @@ def main(args):
         eps_test=args.eps_test,
         device=device,
         testing=True,
+        debug_logging=False,  # Disable debug logging for target model
     )
     oc_prime.load_state_dict(oc.state_dict())
 
@@ -1086,11 +1280,11 @@ def main(args):
             logger.debug(f"Getting next state and option termination prediction")
             try:
                 current_graph_data = get_graph_data(structure, device)
-                state = oc.get_state(*current_graph_data)
+                _, global_state = oc.get_state(*current_graph_data)
                 
                 # Get termination probabilities for logging
-                termination_probs = oc.get_terminations(state)
-                option_termination, greedy_option = oc.predict_option_termination(state, curr_option)
+                termination_probs = oc.get_terminations(global_state)
+                option_termination, greedy_option = oc.predict_option_termination(global_state, curr_option)
                 
                 # Print termination probabilities for monitoring in main loop
                 if hasattr(termination_probs, 'shape'):
