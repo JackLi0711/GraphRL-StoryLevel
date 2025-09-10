@@ -75,16 +75,12 @@ class TerminationProbabilityLogger:
         
         # Track for episode stats
         if termination_decision:
-            try:
-                # termination_probs should now be a list after conversion above
-                if isinstance(termination_probs, (list, np.ndarray)) and len(termination_probs) > option:
-                    term_prob = float(termination_probs[option])
-                else:
-                    term_prob = 0.0
-                    print(f"DEBUG: Cannot extract termination prob for option {option} from {termination_probs}")
-            except (ValueError, TypeError, IndexError) as e:
-                print(f"WARNING: Error extracting episode termination probability: {e}, using 0.0")
+            # termination_probs should now be a list after conversion above
+            if isinstance(termination_probs, (list, np.ndarray)) and len(termination_probs) > option:
+                term_prob = float(termination_probs[option])
+            else:
                 term_prob = 0.0
+                print(f"DEBUG: Cannot extract termination prob for option {option} from {termination_probs}")
             
             self.episode_terminations.append({
                 "option": int(option),
@@ -98,16 +94,12 @@ class TerminationProbabilityLogger:
             self.stats["global_stats"]["total_terminations"] += 1
         
         # Update average termination probability
-        try:
-            # termination_probs should now be a list after conversion above
-            if isinstance(termination_probs, (list, np.ndarray)) and len(termination_probs) > option:
-                current_prob = float(termination_probs[option])
-            else:
-                current_prob = 0.0
-                print(f"DEBUG: Cannot extract termination prob for option {option} from {termination_probs}")
-        except (ValueError, TypeError, IndexError) as e:
-            print(f"WARNING: Error extracting termination probability: {e}, using 0.0")
+        # termination_probs should now be a list after conversion above
+        if isinstance(termination_probs, (list, np.ndarray)) and len(termination_probs) > option:
+            current_prob = float(termination_probs[option])
+        else:
             current_prob = 0.0
+            print(f"DEBUG: Cannot extract termination prob for option {option} from {termination_probs}")
         
         total_preds = self.stats["global_stats"]["total_predictions"]
         prev_avg = self.stats["global_stats"]["avg_termination_prob"]
@@ -128,12 +120,9 @@ class TerminationProbabilityLogger:
     
     def save_stats(self):
         """Save statistics to JSON file."""
-        try:
-            with open(self.save_path, 'w') as f:
-                json.dump(self.stats, f, indent=2, default=str)
-            print(f"Termination probability stats saved to {self.save_path}")
-        except Exception as e:
-            print(f"Error saving termination probability stats: {e}")
+        with open(self.save_path, 'w') as f:
+            json.dump(self.stats, f, indent=2, default=str)
+        print(f"Termination probability stats saved to {self.save_path}")
     
     def print_summary(self):
         """Print a summary of collected statistics."""
@@ -162,25 +151,20 @@ def get_graph_data(structure, device):
     # This matches the DQN pattern for story member indexing
     structure_story_ptr = None
     if hasattr(structure.aux, 'story_xdir_beam_member'):
-        try:
-            # Count story members: x-beam, z-beam, outer-column, inner-column
-            story_members_lists = [
-                structure.aux.get("story_xdir_beam_member", []),
-                structure.aux.get("story_zdir_beam_member", []),  
-                structure.aux.get("story_outer_column_member", []),
-                structure.aux.get("story_inner_column_member", [])
-            ]
-            
-            structure_story_ptr = [0]
-            story_count = 0
-            for story_members_list in story_members_lists:
-                for story_members in story_members_list:
-                    story_count += 1
-            structure_story_ptr.append(story_count)
-            
-        except Exception:
-            # Fallback if aux structure is different
-            structure_story_ptr = None
+        # Count story members: x-beam, z-beam, outer-column, inner-column
+        story_members_lists = [
+            structure.aux.get("story_xdir_beam_member", []),
+            structure.aux.get("story_zdir_beam_member", []),  
+            structure.aux.get("story_outer_column_member", []),
+            structure.aux.get("story_inner_column_member", [])
+        ]
+        
+        structure_story_ptr = [0]
+        story_count = 0
+        for story_members_list in story_members_lists:
+            for story_members in story_members_list:
+                story_count += 1
+        structure_story_ptr.append(story_count)
     
     return (
         graph.x.to(device),
@@ -210,38 +194,29 @@ def apply_primitive_action(base_env, structure, action: int, logger=None):
         logger.debug(f"apply_primitive_action: base_env type={type(base_env)}")
         logger.debug(f"apply_primitive_action: structure type={type(structure)}")
     
-    try:
-        # Additional validation
-        if hasattr(structure, 'story_level_actions'):
-            if logger:
-                logger.debug(f"apply_primitive_action: structure has {len(structure.story_level_actions)} story_level_actions")
-        
-        # Call base environment step
+    # Additional validation
+    if hasattr(structure, 'story_level_actions'):
         if logger:
-            logger.debug(f"apply_primitive_action: Calling base_env.step(structure, {action})")
-        result = base_env.step(structure, action)
-        if logger:
-            logger.debug(f"apply_primitive_action: base_env.step returned {len(result)} items")
-        
-        structure, step_reward, done, fail_name, fail_reason = result
-        if logger:
-            logger.debug(f"apply_primitive_action: Unpacked result - step_reward={step_reward}, done={done}, fail_reason={fail_reason}")
-        
-        # Derive per-step pass/minimum-section states from base env outputs
-        is_minimum_section = bool(done and (fail_reason == "minimum_section"))
-        step_pass = not (done and (fail_reason != "minimum_section"))
-        
-        if logger:
-            logger.debug(f"apply_primitive_action: Returning - step_reward={float(step_reward)}, step_pass={step_pass}, is_minimum_section={is_minimum_section}")
-        return structure, float(step_reward), step_pass, is_minimum_section, fail_reason
-        
-    except Exception as e:
-        if logger:
-            logger.error(f"apply_primitive_action: Exception occurred: {e}")
-            logger.error(f"apply_primitive_action: Exception type: {type(e)}")
-            import traceback
-            logger.error(f"apply_primitive_action: Full traceback: {traceback.format_exc()}")
-        raise e
+            logger.debug(f"apply_primitive_action: structure has {len(structure.story_level_actions)} story_level_actions")
+    
+    # Call base environment step
+    if logger:
+        logger.debug(f"apply_primitive_action: Calling base_env.step(structure, {action})")
+    result = base_env.step(structure, action)
+    if logger:
+        logger.debug(f"apply_primitive_action: base_env.step returned {len(result)} items")
+    
+    structure, step_reward, done, fail_name, fail_reason = result
+    if logger:
+        logger.debug(f"apply_primitive_action: Unpacked result - step_reward={step_reward}, done={done}, fail_reason={fail_reason}")
+    
+    # Derive per-step pass/minimum-section states from base env outputs
+    is_minimum_section = bool(done and (fail_reason == "minimum_section"))
+    step_pass = not (done and (fail_reason != "minimum_section"))
+    
+    if logger:
+        logger.debug(f"apply_primitive_action: Returning - step_reward={float(step_reward)}, step_pass={step_pass}, is_minimum_section={is_minimum_section}")
+    return structure, float(step_reward), step_pass, is_minimum_section, fail_reason
 
 
 def check_constraints_without_update(structure, base_env):
@@ -309,10 +284,7 @@ def rollout_option(structure, base_env, device, max_option_len, current_option: 
     step_transitions = []  # list of dicts: {obs, action, logp, entropy, reward, done, next_obs, option}
 
     # Record pre-option material usage to compute saved amount for this option
-    try:
-        pre_option_material_usage = float(structure.calculate_material_usage())
-    except Exception:
-        pre_option_material_usage = None
+    pre_option_material_usage = float(structure.calculate_material_usage())
 
     # initial state for intra-option policy
     graph_data = get_graph_data(structure, device)
@@ -340,8 +312,83 @@ def rollout_option(structure, base_env, device, max_option_len, current_option: 
             break
         
         # Create valid actions mask
-        try:
-            # Get all restricted actions
+        # Get all restricted actions
+        already_minimum = set(getattr(structure, 'already_minimum_section_story_indexes', []) or [])
+        restricted_actions = set()
+        if hasattr(structure, 'restrict_action_space'):
+            restricted = structure.restrict_action_space()
+            if restricted is not None:
+                restricted_actions.update(restricted)
+        
+        # Combine all invalid actions
+        invalid_actions = already_minimum | restricted_actions
+        log_msg = f"Already minimum: {already_minimum}, Restricted: {restricted_actions}"
+        if logger:
+            logger.debug(log_msg)
+        else:
+            print(f"DEBUG: {log_msg}")
+            
+        log_msg = f"Total invalid actions: {invalid_actions}"
+        if logger:
+            logger.debug(log_msg)
+        else:
+            print(f"DEBUG: {log_msg}")
+        
+        # Create mask tensor (True = valid action)
+        num_actions = len(structure.story_level_actions)
+        valid_mask = torch.ones(num_actions, dtype=torch.bool, device=device)
+        for invalid_action in invalid_actions:
+            if 0 <= invalid_action < num_actions:
+                valid_mask[invalid_action] = False
+        
+        log_msg = f"Valid actions mask: {valid_mask.sum().item()}/{num_actions} actions available"
+        if logger:
+            logger.debug(log_msg)
+        else:
+            print(f"DEBUG: {log_msg}")
+
+        # intra-option action with valid actions mask
+        log_msg = f"Getting action for option {current_option}"
+        if logger:
+            logger.debug(log_msg)
+        else:
+            print(f"DEBUG: {log_msg}")
+            
+        action, logp, entropy = oc_model.get_action(story_level_state, structure_story_ptr, current_option, valid_mask)
+        entropies.append(float(entropy.detach().cpu().numpy()))
+        
+        log_msg = f"Got action {action}, entropy: {entropy.item()}"
+        if logger:
+            logger.debug(log_msg)
+        else:
+            print(f"DEBUG: {log_msg}")
+            
+        # DEBUG: Action validation checks
+        if logger:
+            logger.debug(f"Action validation checks:")
+            logger.debug(f"  action = {action}, type = {type(action)}")
+            logger.debug(f"  action is integer: {isinstance(action, int)}")
+            
+            # Validate action bounds and restriction status
+            num_story_members = len(structure.aux.get('story_xdir_beam_member', [])) + len(structure.aux.get('story_zdir_beam_member', [])) + len(structure.aux.get('story_outer_column_member', [])) + len(structure.aux.get('story_inner_column_member', []))
+            logger.debug(f"  structure has {num_story_members} story members")
+            logger.debug(f"  structure has {len(structure.story_level_actions)} story-level actions")
+            logger.debug(f"  action bounds check: 0 <= {action} < {len(structure.story_level_actions)} = {0 <= action < len(structure.story_level_actions)}")
+            
+            # Check if the selected action is in the valid mask
+            if valid_mask is not None:
+                action_is_valid = valid_mask[action].item() if action < len(valid_mask) else False
+                logger.debug(f"  action in valid_mask: {action_is_valid}")
+                
+                if not action_is_valid:
+                    logger.error(f"CRITICAL: Selected action {action} is INVALID according to valid_mask!")
+                    logger.error(f"  valid_mask[{action}] = {valid_mask[action].item() if action < len(valid_mask) else 'out_of_bounds'}")
+                    
+                    # Find valid actions
+                    valid_action_indices = torch.where(valid_mask)[0].tolist()
+                    logger.error(f"  Available valid actions: {valid_action_indices}")
+            
+            # Check restriction reasons
             already_minimum = set(getattr(structure, 'already_minimum_section_story_indexes', []) or [])
             restricted_actions = set()
             if hasattr(structure, 'restrict_action_space'):
@@ -349,109 +396,15 @@ def rollout_option(structure, base_env, device, max_option_len, current_option: 
                 if restricted is not None:
                     restricted_actions.update(restricted)
             
-            # Combine all invalid actions
-            invalid_actions = already_minimum | restricted_actions
-            log_msg = f"Already minimum: {already_minimum}, Restricted: {restricted_actions}"
-            if logger:
-                logger.debug(log_msg)
-            else:
-                print(f"DEBUG: {log_msg}")
+            if action in already_minimum:
+                logger.error(f"  Action {action} is in already_minimum: {already_minimum}")
+            if action in restricted_actions:
+                logger.error(f"  Action {action} is in restricted_actions: {restricted_actions}")
                 
-            log_msg = f"Total invalid actions: {invalid_actions}"
-            if logger:
-                logger.debug(log_msg)
-            else:
-                print(f"DEBUG: {log_msg}")
-            
-            # Create mask tensor (True = valid action)
-            num_actions = len(structure.story_level_actions)
-            valid_mask = torch.ones(num_actions, dtype=torch.bool, device=device)
-            for invalid_action in invalid_actions:
-                if 0 <= invalid_action < num_actions:
-                    valid_mask[invalid_action] = False
-            
-            log_msg = f"Valid actions mask: {valid_mask.sum().item()}/{num_actions} actions available"
-            if logger:
-                logger.debug(log_msg)
-            else:
-                print(f"DEBUG: {log_msg}")
-        except Exception as e:
-            if logger:
-                logger.error(f"Failed to create valid actions mask: {e}")
-            else:
-                print(f"ERROR: Failed to create valid actions mask: {e}")
-            valid_mask = None
-
-        # intra-option action with valid actions mask
-        try:
-            log_msg = f"Getting action for option {current_option}"
-            if logger:
-                logger.debug(log_msg)
-            else:
-                print(f"DEBUG: {log_msg}")
-                
-            action, logp, entropy = oc_model.get_action(story_level_state, structure_story_ptr, current_option, valid_mask)
-            entropies.append(float(entropy.detach().cpu().numpy()))
-            
-            log_msg = f"Got action {action}, entropy: {entropy.item()}"
-            if logger:
-                logger.debug(log_msg)
-            else:
-                print(f"DEBUG: {log_msg}")
-                
-            # DEBUG: Action validation checks
-            if logger:
-                logger.debug(f"Action validation checks:")
-                logger.debug(f"  action = {action}, type = {type(action)}")
-                logger.debug(f"  action is integer: {isinstance(action, int)}")
-                
-                # Validate action bounds and restriction status
-                try:
-                    num_story_members = len(structure.aux.get('story_xdir_beam_member', [])) + len(structure.aux.get('story_zdir_beam_member', [])) + len(structure.aux.get('story_outer_column_member', [])) + len(structure.aux.get('story_inner_column_member', []))
-                    logger.debug(f"  structure has {num_story_members} story members")
-                    logger.debug(f"  structure has {len(structure.story_level_actions)} story-level actions")
-                    logger.debug(f"  action bounds check: 0 <= {action} < {len(structure.story_level_actions)} = {0 <= action < len(structure.story_level_actions)}")
-                    
-                    # Check if the selected action is in the valid mask
-                    if valid_mask is not None:
-                        action_is_valid = valid_mask[action].item() if action < len(valid_mask) else False
-                        logger.debug(f"  action in valid_mask: {action_is_valid}")
-                        
-                        if not action_is_valid:
-                            logger.error(f"CRITICAL: Selected action {action} is INVALID according to valid_mask!")
-                            logger.error(f"  valid_mask[{action}] = {valid_mask[action].item() if action < len(valid_mask) else 'out_of_bounds'}")
-                            
-                            # Find valid actions
-                            valid_action_indices = torch.where(valid_mask)[0].tolist()
-                            logger.error(f"  Available valid actions: {valid_action_indices}")
-                    
-                    # Check restriction reasons
-                    already_minimum = set(getattr(structure, 'already_minimum_section_story_indexes', []) or [])
-                    restricted_actions = set()
-                    if hasattr(structure, 'restrict_action_space'):
-                        restricted = structure.restrict_action_space()
-                        if restricted is not None:
-                            restricted_actions.update(restricted)
-                    
-                    if action in already_minimum:
-                        logger.error(f"  Action {action} is in already_minimum: {already_minimum}")
-                    if action in restricted_actions:
-                        logger.error(f"  Action {action} is in restricted_actions: {restricted_actions}")
-                        
-                    if hasattr(structure, 'get_valid_actions'):
-                        valid_actions = structure.get_valid_actions()
-                        logger.debug(f"  structure valid actions: {valid_actions}")
-                        logger.debug(f"  action in valid actions: {action in valid_actions}")
-                        
-                except Exception as struct_e:
-                    logger.warning(f"Could not validate structure info: {struct_e}")
-        except Exception as e:
-            if logger:
-                logger.error(f"Failed to get action: {e}")
-            else:
-                print(f"ERROR: Failed to get action: {e}")
-            set_termination_reason("action_error", "get_action_failed")
-            break
+            if hasattr(structure, 'get_valid_actions'):
+                valid_actions = structure.get_valid_actions()
+                logger.debug(f"  structure valid actions: {valid_actions}")
+                logger.debug(f"  action in valid actions: {action in valid_actions}")
 
         log_msg = f"Applying primitive action {action}"
         if logger:
@@ -459,83 +412,52 @@ def rollout_option(structure, base_env, device, max_option_len, current_option: 
         else:
             print(f"DEBUG: {log_msg}")
             
-        try:
-            if logger:
-                logger.debug(f"Calling apply_primitive_action with action={action}, structure type={type(structure)}")
-                
-                # Enhanced pre-call validation
-                logger.debug(f"Pre-call validation:")
-                logger.debug(f"  - action type: {type(action)}")
-                logger.debug(f"  - action value: {action}")
-                logger.debug(f"  - action is integer: {isinstance(action, int)}")
-                logger.debug(f"  - base_env type: {type(base_env)}")
-                logger.debug(f"  - base_env has step method: {hasattr(base_env, 'step')}")
+        if logger:
+            logger.debug(f"Calling apply_primitive_action with action={action}, structure type={type(structure)}")
             
-            # Validate structure
-            try:
-                if logger:
-                    logger.debug(f"  - structure story_level_actions length: {len(structure.story_level_actions)}")
-                    logger.debug(f"  - action bounds valid: {0 <= action < len(structure.story_level_actions)}")
-                
-                # Check if action is within valid bounds
-                if not (0 <= action < len(structure.story_level_actions)):
-                    error_msg = f"Action {action} is out of bounds [0, {len(structure.story_level_actions)})"
-                    if logger:
-                        logger.error(error_msg)
-                    raise ValueError(f"Invalid action index: {action}")
-                    
-                # Ensure action is integer
-                if not isinstance(action, int):
-                    if logger:
-                        logger.warning(f"Converting action from {type(action)} to int")
-                    action = int(action)
-                    if logger:
-                        logger.debug(f"  - converted action: {action}")
-                    
-            except Exception as val_e:
-                if logger:
-                    logger.error(f"Pre-call validation failed: {val_e}")
-                raise val_e
-            
-            # Call with enhanced error capture
+            # Enhanced pre-call validation
+            logger.debug(f"Pre-call validation:")
+            logger.debug(f"  - action type: {type(action)}")
+            logger.debug(f"  - action value: {action}")
+            logger.debug(f"  - action is integer: {isinstance(action, int)}")
+            logger.debug(f"  - base_env type: {type(base_env)}")
+            logger.debug(f"  - base_env has step method: {hasattr(base_env, 'step')}")
+        
+        # Validate structure
+        if logger:
+            logger.debug(f"  - structure story_level_actions length: {len(structure.story_level_actions)}")
+            logger.debug(f"  - action bounds valid: {0 <= action < len(structure.story_level_actions)}")
+        
+        # Check if action is within valid bounds
+        if not (0 <= action < len(structure.story_level_actions)):
+            error_msg = f"Action {action} is out of bounds [0, {len(structure.story_level_actions)})"
             if logger:
-                logger.debug(f"Calling base_env.step(structure, {action})")
-            structure, step_reward, step_pass, is_min_section, fail_reason = apply_primitive_action(base_env, structure, action, logger)
+                logger.error(error_msg)
+            raise ValueError(f"Invalid action index: {action}")
             
-            # Apply option length bonus: reward += (step_number - 1) * bonus
-            # length is 0-indexed, so length equals (step_number - 1)
-            length_bonus = length * option_length_bonus
-            original_reward = step_reward  # Store original reward before adding bonus
-            step_reward += length_bonus
-            
-            log_msg = f"Action applied - original_reward: {original_reward}, length_bonus: {length_bonus}, final_reward: {step_reward}, pass: {step_pass}, min_section: {is_min_section}, fail_reason: {fail_reason}"
+        # Ensure action is integer
+        if not isinstance(action, int):
             if logger:
-                logger.debug(log_msg)
-                logger.debug("Action application completed successfully")
-        except Exception as e:
+                logger.warning(f"Converting action from {type(action)} to int")
+            action = int(action)
             if logger:
-                logger.error(f"Failed to apply primitive action: {e}")
-                logger.error(f"Exception type: {type(e)}")
-                import traceback
-                logger.error(f"Full traceback: {traceback.format_exc()}")
-                logger.error(f"Action details - action={action}, type={type(action)}")
-                logger.error(f"Structure details - type={type(structure)}")
-                
-                # Try to get more structure information for debugging
-                try:
-                    logger.error(f"Structure attributes: {[attr for attr in dir(structure) if not attr.startswith('_')]}")
-                    if hasattr(structure, 'story_level_actions'):
-                        logger.error(f"Structure story_level_actions length: {len(structure.story_level_actions)}")
-                    if hasattr(structure, 'aux'):
-                        logger.error(f"Structure aux keys: {list(structure.aux.keys()) if structure.aux else 'None'}")
-                except Exception as debug_e:
-                    logger.error(f"Could not get structure debug info: {debug_e}")
-                
-            set_termination_reason("action_apply_error", "apply_primitive_action_failed")
-            step_reward = -1 # -1000
-            step_pass = False
-            is_min_section = False
-            fail_reason = "action_apply_error"
+                logger.debug(f"  - converted action: {action}")
+        
+        # Call with enhanced error capture
+        if logger:
+            logger.debug(f"Calling base_env.step(structure, {action})")
+        structure, step_reward, step_pass, is_min_section, fail_reason = apply_primitive_action(base_env, structure, action, logger)
+        
+        # Apply option length bonus: reward += (step_number - 1) * bonus
+        # length is 0-indexed, so length equals (step_number - 1)
+        length_bonus = length * option_length_bonus
+        original_reward = step_reward  # Store original reward before adding bonus
+        step_reward += length_bonus
+        
+        log_msg = f"Action applied - original_reward: {original_reward}, length_bonus: {length_bonus}, final_reward: {step_reward}, pass: {step_pass}, min_section: {is_min_section}, fail_reason: {fail_reason}"
+        if logger:
+            logger.debug(log_msg)
+            logger.debug("Action application completed successfully")
         # Don't accumulate rewards at option level anymore
         length += 1
         if logger:
@@ -547,45 +469,7 @@ def rollout_option(structure, base_env, device, max_option_len, current_option: 
                 logger.debug("Minimum section reached, terminating option and episode")
             set_termination_reason("minimum_section", "is_min_section_true")
             episode_done = True
-            try:
-                next_graph_data = get_graph_data(structure, device)
-                step_transitions.append({
-                    "obs": graph_data,
-                    "action": action,
-                    "logp": logp.detach().clone(),
-                    "entropy": entropy.detach().clone(),
-                    "reward": float(step_reward),
-                    "original_reward": float(original_reward),
-                    "done": True,
-                    "next_obs": next_graph_data,
-                    "option": current_option,  # Add option to each step transition
-                })
-                if logger:
-                    logger.debug("Added final step transition, breaking from loop")
-            except Exception as e:
-                if logger:
-                    logger.error(f"Failed to create step transition: {e}")
-            break
-
-        # compute next state for termination prediction
-        if logger:
-            logger.debug("Computing next state for termination prediction")
-        try:
             next_graph_data = get_graph_data(structure, device)
-            next_story_level_state, next_global_state = oc_model.get_state(*next_graph_data)
-            next_state = next_global_state  # Use global state for termination prediction
-            if logger:
-                logger.debug("Successfully computed next state")
-        except Exception as e:
-            if logger:
-                logger.error(f"Failed to compute next state: {e}")
-            set_termination_reason("state_error", "next_state_computation_failed")
-            break
-
-        # record step transition
-        if logger:
-            logger.debug("Recording step transition")
-        try:
             step_transitions.append({
                 "obs": graph_data,
                 "action": action,
@@ -593,61 +477,75 @@ def rollout_option(structure, base_env, device, max_option_len, current_option: 
                 "entropy": entropy.detach().clone(),
                 "reward": float(step_reward),
                 "original_reward": float(original_reward),
-                "done": False,
+                "done": True,
                 "next_obs": next_graph_data,
                 "option": current_option,  # Add option to each step transition
             })
             if logger:
-                logger.debug(f"Step transition recorded, total transitions: {len(step_transitions)}")
-        except Exception as e:
-            if logger:
-                logger.error(f"Failed to record step transition: {e}")
+                logger.debug("Added final step transition, breaking from loop")
+            break
+
+        # compute next state for termination prediction
+        if logger:
+            logger.debug("Computing next state for termination prediction")
+        next_graph_data = get_graph_data(structure, device)
+        next_story_level_state, next_global_state = oc_model.get_state(*next_graph_data)
+        next_state = next_global_state  # Use global state for termination prediction
+        if logger:
+            logger.debug("Successfully computed next state")
+
+        # record step transition
+        if logger:
+            logger.debug("Recording step transition")
+        step_transitions.append({
+            "obs": graph_data,
+            "action": action,
+            "logp": logp.detach().clone(),
+            "entropy": entropy.detach().clone(),
+            "reward": float(step_reward),
+            "original_reward": float(original_reward),
+            "done": False,
+            "next_obs": next_graph_data,
+            "option": current_option,  # Add option to each step transition
+        })
+        if logger:
+            logger.debug(f"Step transition recorded, total transitions: {len(step_transitions)}")
 
         # option termination by beta
         if logger:
             logger.debug("Checking option termination by beta")
-        try:
-            # Get termination probabilities for logging
-            termination_probs = oc_model.get_terminations(next_state)
-            option_termination, _ = oc_model.predict_option_termination(next_state, current_option)
+        # Get termination probabilities for logging
+        termination_probs = oc_model.get_terminations(next_state)
+        option_termination, _ = oc_model.predict_option_termination(next_state, current_option)
+        
+        # Print termination probabilities for monitoring
+        if hasattr(termination_probs, 'shape'):
+            if termination_probs.dim() > 1:
+                term_probs_display = termination_probs.mean(dim=0).detach().cpu().numpy()
+            else:
+                term_probs_display = termination_probs.detach().cpu().numpy()
             
-            # Print termination probabilities for monitoring
-            if hasattr(termination_probs, 'shape'):
-                if termination_probs.dim() > 1:
-                    term_probs_display = termination_probs.mean(dim=0).detach().cpu().numpy()
-                else:
-                    term_probs_display = termination_probs.detach().cpu().numpy()
-                
-                # Print each option's termination probability clearly
-                term_probs_str = ", ".join([f"β{i}: {prob:.4f}" for i, prob in enumerate(term_probs_display)])
-                if logger:
-                    logger.debug(f"TERMINATION_PROBS Step {length+1}: [{term_probs_str}] | Current Option {current_option}: β{current_option}={term_probs_display[current_option]:.4f} → {'TERMINATE' if option_termination else 'CONTINUE'}")
-            
-            # Log termination probability prediction
-            try:
-                termination_logger.log_termination_prediction(
-                    option=current_option,
-                    termination_probs=termination_probs,
-                    termination_decision=option_termination,
-                    step=length,
-                    context="rollout_option"
-                )
-            except Exception as log_e:
-                if logger:
-                    logger.warning(f"Failed to log termination probability: {log_e}")
-            
-            if option_termination:
-                if logger:
-                    logger.debug(f"==> Option {current_option} TERMINATED by β={term_probs_display[current_option]:.4f} at step {length}")
-                set_termination_reason("beta", "option_termination_true")
-                # Update state for potential next iteration (though loop will break)
-                story_level_state, global_state = next_story_level_state, next_global_state 
-                graph_data = next_graph_data
-                break
-        except Exception as e:
+            # Print each option's termination probability clearly
+            term_probs_str = ", ".join([f"β{i}: {prob:.4f}" for i, prob in enumerate(term_probs_display)])
             if logger:
-                logger.error(f"Failed option termination prediction: {e}")
-            set_termination_reason("beta_error", "termination_prediction_failed")
+                logger.debug(f"TERMINATION_PROBS Step {length+1}: [{term_probs_str}] | Current Option {current_option}: β{current_option}={term_probs_display[current_option]:.4f} → {'TERMINATE' if option_termination else 'CONTINUE'}")
+        
+        # Log termination probability prediction
+        termination_logger.log_termination_prediction(
+            option=current_option,
+            termination_probs=termination_probs,
+            termination_decision=option_termination,
+            step=length,
+            context="rollout_option"
+        )
+        
+        if option_termination:
+            if logger:
+                logger.debug(f"==> Option {current_option} TERMINATED by β={term_probs_display[current_option]:.4f} at step {length}")
+            set_termination_reason("beta", "option_termination_true")
+            # Update state for potential next iteration (though loop will break)
+            story_level_state, global_state = next_story_level_state, next_global_state 
+            graph_data = next_graph_data
             break
 
         # continue the option
@@ -689,11 +587,8 @@ def rollout_option(structure, base_env, device, max_option_len, current_option: 
         logger.debug(f"Option execution completed, passed={passed}")
 
     # Compute option-level saved material (before vs after this option)
-    try:
-        post_option_material_usage = float(structure.calculate_material_usage())
-        option_saved_material = float(max(0.0, (pre_option_material_usage - post_option_material_usage))) if pre_option_material_usage is not None else float("nan")
-    except Exception:
-        option_saved_material = float("nan")
+    post_option_material_usage = float(structure.calculate_material_usage())
+    option_saved_material = float(max(0.0, (pre_option_material_usage - post_option_material_usage)))
 
     stats = {
         "option_length": length,
@@ -750,111 +645,90 @@ def evaluate_model(base_env, oc_model, device, num_episodes, max_option_len, log
     original_testing = oc_model.testing
     oc_model.testing = True
     
-    try:
-        for ep in range(num_episodes):
-            logger.info(f"Evaluation episode {ep+1}/{num_episodes}")
+    for ep in range(num_episodes):
+        logger.info(f"Evaluation episode {ep+1}/{num_episodes}")
+        
+        structure = base_env.reset(testing=True)
+        done = False
+        option_termination = True
+        curr_option = 0
+        greedy_option = 0
+        episode_score = 0.0
+        episode_option_count = 0
+        
+        # Track action and option sequences for this episode
+        episode_action_sequence = []
+        episode_option_sequence = []
+        current_episode_option_instances = []  # Track option instances with termination info for this episode
+        current_option_instance_id = 0  # Unique ID for each option instance
+        
+        while not done :
+            if option_termination:
+                # Always use greedy option selection during evaluation
+                curr_option = greedy_option
             
-            try:
-                structure = base_env.reset(testing=True)
-                done = False
-                option_termination = True
-                curr_option = 0
-                greedy_option = 0
-                episode_score = 0.0
-                episode_option_count = 0
+            structure, next_state, option_done, episode_done, o_stats, step_transitions, termination_reason = rollout_option(
+                structure, base_env, device, max_option_len, curr_option, oc_model, None, logger, 0.0
+            )
+            
+            # Collect actions and options from step transitions
+            for transition in step_transitions:
+                episode_action_sequence.append(transition["action"])
+                episode_option_sequence.append(curr_option)
+                # Record option instance info for this step
+                current_episode_option_instances.append({
+                    "option_index": curr_option,
+                    "instance_id": current_option_instance_id,
+                    "action_step": len(episode_action_sequence) - 1
+                })
+            
+            # Accumulate score only from successful options (using original reward without length bonus)
+            if bool(o_stats.get("passed", False)):
+                option_total_reward = sum(tr["original_reward"] for tr in step_transitions)
+                episode_score += float(option_total_reward)
+            
+            episode_option_count += 1
+            
+            # Check if episode completed successfully
+            if termination_reason == "minimum_section":
+                successful_episodes += 1
+                logger.info(f"Episode {ep+1} reached minimum section successfully")
+            
+            done = episode_done
+            
+            # If the option terminated (for any reason), increment instance ID for next option
+            if option_done:
+                current_option_instance_id += 1
+            
+            # Update option termination for next iteration
+            if not done:
+                current_graph_data = get_graph_data(structure, device)
+                _, global_state = oc_model.get_state(*current_graph_data)
                 
-                # Track action and option sequences for this episode
-                episode_action_sequence = []
-                episode_option_sequence = []
-                current_episode_option_instances = []  # Track option instances with termination info for this episode
-                current_option_instance_id = 0  # Unique ID for each option instance
+                # Get termination probabilities for logging
+                termination_probs = oc_model.get_terminations(global_state)
+                option_termination, greedy_option = oc_model.predict_option_termination(global_state, curr_option)
                 
-                while not done :
-                    if option_termination:
-                        # Always use greedy option selection during evaluation
-                        curr_option = greedy_option
-                    
-                    try:
-                        structure, next_state, option_done, episode_done, o_stats, step_transitions, termination_reason = rollout_option(
-                            structure, base_env, device, max_option_len, curr_option, oc_model, None, logger, 0.0
-                        )
-                        
-                        # Collect actions and options from step transitions
-                        for transition in step_transitions:
-                            episode_action_sequence.append(transition["action"])
-                            episode_option_sequence.append(curr_option)
-                            # Record option instance info for this step
-                            current_episode_option_instances.append({
-                                "option_index": curr_option,
-                                "instance_id": current_option_instance_id,
-                                "action_step": len(episode_action_sequence) - 1
-                            })
-                        
-                        # Accumulate score only from successful options (using original reward without length bonus)
-                        if bool(o_stats.get("passed", False)):
-                            option_total_reward = sum(tr["original_reward"] for tr in step_transitions)
-                            episode_score += float(option_total_reward)
-                        
-                        episode_option_count += 1
-                        
-                        # Check if episode completed successfully
-                        if termination_reason == "minimum_section":
-                            successful_episodes += 1
-                            logger.info(f"Episode {ep+1} reached minimum section successfully")
-                        
-                        done = episode_done
-                        
-                        # If the option terminated (for any reason), increment instance ID for next option
-                        if option_done:
-                            current_option_instance_id += 1
-                        
-                        # Update option termination for next iteration
-                        if not done:
-                            try:
-                                current_graph_data = get_graph_data(structure, device)
-                                _, global_state = oc_model.get_state(*current_graph_data)
-                                
-                                # Get termination probabilities for logging
-                                termination_probs = oc_model.get_terminations(global_state)
-                                option_termination, greedy_option = oc_model.predict_option_termination(global_state, curr_option)
-                                
-                                # Log termination probability prediction
-                                try:
-                                    termination_logger.log_termination_prediction(
-                                        option=curr_option,
-                                        termination_probs=termination_probs,
-                                        termination_decision=option_termination,
-                                        episode=ep,
-                                        step=episode_option_count,
-                                        context="evaluation_loop"
-                                    )
-                                except Exception as log_e:
-                                    print(f"WARNING: Failed to log termination probability in evaluation: {log_e}")
-                                    
-                            except Exception as e:
-                                logger.error(f"Error in option termination prediction during eval: {e}")
-                                option_termination = True
-                                greedy_option = 0
-                        
-                    except Exception as e:
-                        logger.error(f"Error in rollout_option during evaluation: {e}")
-                        break
-                
-                episode_scores.append(episode_score)
-                episode_lengths.append(episode_option_count)
-                episode_actions.append(episode_action_sequence)
-                episode_options.append(episode_option_sequence)
-                episode_option_instances.append(current_episode_option_instances)  # Store option instance data for this episode
-                episode_actions_SCWB.append([])  # Empty for compatibility
-                logger.info(f"Episode {ep+1} completed: score={episode_score:.2f}, length={episode_option_count}, actions={len(episode_action_sequence)}")
-                
-            except Exception as e:
-                logger.error(f"Error in evaluation episode {ep+1}: {e}")
-                continue
+                # Log termination probability prediction
+                termination_logger.log_termination_prediction(
+                    option=curr_option,
+                    termination_probs=termination_probs,
+                    termination_decision=option_termination,
+                    episode=ep,
+                    step=episode_option_count,
+                    context="evaluation_loop"
+                )
+        
+        episode_scores.append(episode_score)
+        episode_lengths.append(episode_option_count)
+        episode_actions.append(episode_action_sequence)
+        episode_options.append(episode_option_sequence)
+        episode_option_instances.append(current_episode_option_instances)  # Store option instance data for this episode
+        episode_actions_SCWB.append([])  # Empty for compatibility
+        logger.info(f"Episode {ep+1} completed: score={episode_score:.2f}, length={episode_option_count}, actions={len(episode_action_sequence)}")
     
-    finally:
-        # Restore original testing mode
-        oc_model.testing = original_testing
+    # Restore original testing mode
+    oc_model.testing = original_testing
     
     # Calculate metrics
     avg_score = float(np.mean(episode_scores)) if episode_scores else 0.0
@@ -1112,33 +986,27 @@ def main(args):
 
     for ep in range(args.epochs):
         logger.info(f"Starting episode {ep+1}/{args.epochs}")
-        try:
-            structure = base_env.reset(testing=False)
-            logger.debug(f"Environment reset successful for episode {ep+1}")
-            
-            done = False
-            option_termination = True
-            curr_option = 0
-            greedy_option = 0
-            steps = 0
+        structure = base_env.reset(testing=False)
+        logger.debug(f"Environment reset successful for episode {ep+1}")
+        
+        done = False
+        option_termination = True
+        curr_option = 0
+        greedy_option = 0
+        steps = 0
 
-            episode_opt_lengths = []
-            episode_termination_counter = {"beta": 0, "max_len": 0, "minimum_section": 0}
-            episode_entropies = []
-            episode_score = 0.0
-            last_pass_sections = None
-            last_pass_saved_material = None
-            
-            # Training episode behavior tracking
-            episode_action_sequence = []
-            episode_option_sequence = []
-            episode_option_instances = []
-            current_option_instance_id = 0
-            
-        except Exception as e:
-            logger.error(f"Failed to initialize episode {ep+1}: {e}")
-            logger.error(f"Exception details:", exc_info=True)
-            continue
+        episode_opt_lengths = []
+        episode_termination_counter = {"beta": 0, "max_len": 0, "minimum_section": 0}
+        episode_entropies = []
+        episode_score = 0.0
+        last_pass_sections = None
+        last_pass_saved_material = None
+        
+        # Training episode behavior tracking
+        episode_action_sequence = []
+        episode_option_sequence = []
+        episode_option_instances = []
+        current_option_instance_id = 0
 
         logger.info(f"Starting episode {ep+1} main loop")
         loop_iteration = 0
@@ -1162,13 +1030,8 @@ def main(args):
                 logger.debug(f"Selected option: {curr_option} (greedy_option: {greedy_option})")
 
             logger.debug(f"Calling rollout_option with curr_option={curr_option}")
-            try:
-                structure, next_state, option_done, episode_done, o_stats, step_transitions, termination_reason = rollout_option(structure, base_env, device, args.max_option_len, curr_option, oc, epsilon, logger, args.option_length_bonus)
-                logger.debug(f"rollout_option returned: option_done={option_done}, episode_done={episode_done}, termination_reason={termination_reason}")
-            except Exception as e:
-                logger.error(f"Error in rollout_option: {e}")
-                logger.error(f"Exception details:", exc_info=True)
-                break
+            structure, next_state, option_done, episode_done, o_stats, step_transitions, termination_reason = rollout_option(structure, base_env, device, args.max_option_len, curr_option, oc, epsilon, logger, args.option_length_bonus)
+            logger.debug(f"rollout_option returned: option_done={option_done}, episode_done={episode_done}, termination_reason={termination_reason}")
 
             # Collect actions and options from step transitions for training behavior visualization
             for transition in step_transitions:
@@ -1207,114 +1070,93 @@ def main(args):
 
             # Push step-level transitions to buffer (like option-critic-pytorch)
             logger.debug(f"Pushing {len(step_transitions)} step transitions to buffer, buffer size before: {len(buffer)}")
-            try:
-                for tr in step_transitions:
-                    buffer.push(tr["obs"], tr["option"], tr["reward"], tr["next_obs"], tr["done"])
-                logger.debug(f"Buffer size after push: {len(buffer)}")
-            except Exception as e:
-                logger.error(f"Error pushing step transitions to buffer: {e}")
+            for tr in step_transitions:
+                buffer.push(tr["obs"], tr["option"], tr["reward"], tr["next_obs"], tr["done"])
+            logger.debug(f"Buffer size after push: {len(buffer)}")
 
             # Accumulate actor losses for synchronous updates
             accumulated_actor_losses = []
             logger.debug(f"Number of step transitions: {len(step_transitions)}")
             if len(step_transitions) > 0:
-                try:
-                    for i, tr in enumerate(step_transitions):
-                        logger.debug(f"Computing actor loss for step transition {i+1}/{len(step_transitions)}")
-                        a_loss = actor_loss(
-                            tr["obs"], tr["option"], tr["logp"], tr["entropy"], tr["reward"], tr["done"], tr["next_obs"], 
-                            oc, oc_prime, args.gamma, args.termination_reg, args.entropy_reg
-                        )
-                        accumulated_actor_losses.append(a_loss)
-                        logger.debug(f"Actor loss {i+1} computed: {a_loss.item()}")
-                except Exception as e:
-                    logger.error(f"Error computing actor losses: {e}")
-                    accumulated_actor_losses = []  # Clear in case of error
+                for i, tr in enumerate(step_transitions):
+                    logger.debug(f"Computing actor loss for step transition {i+1}/{len(step_transitions)}")
+                    a_loss = actor_loss(
+                        tr["obs"], tr["option"], tr["logp"], tr["entropy"], tr["reward"], tr["done"], tr["next_obs"], 
+                        oc, oc_prime, args.gamma, args.termination_reg, args.entropy_reg
+                    )
+                    accumulated_actor_losses.append(a_loss)
+                    logger.debug(f"Actor loss {i+1} computed: {a_loss.item()}")
 
             # Synchronous updates: both actor and critic update at the same frequency
             should_update = len(buffer) > args.batch_size and (steps % args.update_frequency == 0)
             logger.debug(f"Synchronous update check: buffer_size={len(buffer)}, batch_size={args.batch_size}, steps={steps}, should_update={should_update}")
             if should_update:
-                try:
-                    # First: Actor updates (synchronized with critic)
-                    if len(accumulated_actor_losses) > 0:
-                        logger.debug(f"Performing synchronized actor updates with {len(accumulated_actor_losses)} losses")
-                        # Accumulate all actor losses and update once
-                        total_actor_loss = sum(accumulated_actor_losses) / len(accumulated_actor_losses)  # Average the losses
-                        
-                        actor_optimizer.zero_grad()
-                        total_actor_loss.backward()
-                        if args.grad_clip is not None and args.grad_clip > 0:
-                            torch.nn.utils.clip_grad_norm_(oc.parameters(), max_norm=args.grad_clip)
-                        actor_optimizer.step()
-                        
-                        # Record actor loss for plotting
-                        all_stats["actor_losses"].append(float(total_actor_loss.item()))
-                        logger.debug(f"Actor update completed, avg loss: {total_actor_loss.item()}")
+                # First: Actor updates (synchronized with critic)
+                if len(accumulated_actor_losses) > 0:
+                    logger.debug(f"Performing synchronized actor updates with {len(accumulated_actor_losses)} losses")
+                    # Accumulate all actor losses and update once
+                    total_actor_loss = sum(accumulated_actor_losses) / len(accumulated_actor_losses)  # Average the losses
                     
-                    # Second: Critic updates (same as before)
-                    logger.debug(f"Performing step-level critic update")
-                    data_batch = buffer.sample(args.batch_size)  # Now sampling step-level transitions
-                    logger.debug(f"Sampled batch with {args.batch_size} step-level transitions")
-                    c_loss = critic_loss(oc, oc_prime, data_batch, args.gamma)
-                    critic_optimizer.zero_grad()
-                    c_loss.backward()
+                    actor_optimizer.zero_grad()
+                    total_actor_loss.backward()
                     if args.grad_clip is not None and args.grad_clip > 0:
                         torch.nn.utils.clip_grad_norm_(oc.parameters(), max_norm=args.grad_clip)
-                    critic_optimizer.step()
+                    actor_optimizer.step()
                     
-                    # Record critic loss for plotting
-                    all_stats["critic_losses"].append(float(c_loss.item()))
-                    logger.debug(f"Critic update completed, loss: {c_loss.item()}")
+                    # Record actor loss for plotting
+                    all_stats["actor_losses"].append(float(total_actor_loss.item()))
+                    logger.debug(f"Actor update completed, avg loss: {total_actor_loss.item()}")
+                
+                # Second: Critic updates (same as before)
+                logger.debug(f"Performing step-level critic update")
+                data_batch = buffer.sample(args.batch_size)  # Now sampling step-level transitions
+                logger.debug(f"Sampled batch with {args.batch_size} step-level transitions")
+                c_loss = critic_loss(oc, oc_prime, data_batch, args.gamma)
+                critic_optimizer.zero_grad()
+                c_loss.backward()
+                if args.grad_clip is not None and args.grad_clip > 0:
+                    torch.nn.utils.clip_grad_norm_(oc.parameters(), max_norm=args.grad_clip)
+                critic_optimizer.step()
+                
+                # Record critic loss for plotting
+                all_stats["critic_losses"].append(float(c_loss.item()))
+                logger.debug(f"Critic update completed, loss: {c_loss.item()}")
 
-                    # Update target network
-                    if steps % args.freeze_interval == 0:
-                        logger.debug(f"Updating target network at step {steps}")
-                        oc_prime.load_state_dict(oc.state_dict())
-                        
-                except Exception as e:
-                    logger.error(f"Error in synchronized update: {e}")
-                    import traceback
-                    logger.error(f"Traceback: {traceback.format_exc()}")
+                # Update target network
+                if steps % args.freeze_interval == 0:
+                    logger.debug(f"Updating target network at step {steps}")
+                    oc_prime.load_state_dict(oc.state_dict())
 
             logger.debug(f"Getting next state and option termination prediction")
-            try:
-                current_graph_data = get_graph_data(structure, device)
-                _, global_state = oc.get_state(*current_graph_data)
+            current_graph_data = get_graph_data(structure, device)
+            _, global_state = oc.get_state(*current_graph_data)
+            
+            # Get termination probabilities for logging
+            termination_probs = oc.get_terminations(global_state)
+            option_termination, greedy_option = oc.predict_option_termination(global_state, curr_option)
+            
+            # Print termination probabilities for monitoring in main loop
+            if hasattr(termination_probs, 'shape'):
+                if termination_probs.dim() > 1:
+                    term_probs_display = termination_probs.mean(dim=0).detach().cpu().numpy()
+                else:
+                    term_probs_display = termination_probs.detach().cpu().numpy()
                 
-                # Get termination probabilities for logging
-                termination_probs = oc.get_terminations(global_state)
-                option_termination, greedy_option = oc.predict_option_termination(global_state, curr_option)
-                
-                # Print termination probabilities for monitoring in main loop
-                if hasattr(termination_probs, 'shape'):
-                    if termination_probs.dim() > 1:
-                        term_probs_display = termination_probs.mean(dim=0).detach().cpu().numpy()
-                    else:
-                        term_probs_display = termination_probs.detach().cpu().numpy()
-                    
-                    # Print each option's termination probability clearly
-                    term_probs_str = ", ".join([f"β{i}: {prob:.4f}" for i, prob in enumerate(term_probs_display)])
-                    print(f"MAIN_LOOP Ep{ep+1}-Loop{loop_iteration}: [{term_probs_str}] | Current Option {curr_option}: β{curr_option}={term_probs_display[curr_option]:.4f} → {'TERMINATE' if option_termination else 'CONTINUE'} → Next Option: {greedy_option}")
-                
-                # Log termination probability prediction
-                try:
-                    termination_logger.log_termination_prediction(
-                        option=curr_option,
-                        termination_probs=termination_probs,
-                        termination_decision=option_termination,
-                        episode=ep,
-                        step=loop_iteration,
-                        context="main_training_loop"
-                    )
-                except Exception as log_e:
-                    logger.warning(f"Failed to log termination probability in main loop: {log_e}")
-                
-                logger.debug(f"Option termination prediction: {option_termination}, greedy_option: {greedy_option}")
-            except Exception as e:
-                logger.error(f"Error in option termination prediction: {e}")
-                option_termination = True  # Force termination on error
-                greedy_option = 0
+                # Print each option's termination probability clearly
+                term_probs_str = ", ".join([f"β{i}: {prob:.4f}" for i, prob in enumerate(term_probs_display)])
+                print(f"MAIN_LOOP Ep{ep+1}-Loop{loop_iteration}: [{term_probs_str}] | Current Option {curr_option}: β{curr_option}={term_probs_display[curr_option]:.4f} → {'TERMINATE' if option_termination else 'CONTINUE'} → Next Option: {greedy_option}")
+            
+            # Log termination probability prediction
+            termination_logger.log_termination_prediction(
+                option=curr_option,
+                termination_probs=termination_probs,
+                termination_decision=option_termination,
+                episode=ep,
+                step=loop_iteration,
+                context="main_training_loop"
+            )
+            
+            logger.debug(f"Option termination prediction: {option_termination}, greedy_option: {greedy_option}")
             
             done = episode_done
             steps += 1
@@ -1332,350 +1174,308 @@ def main(args):
             logger.debug(f"Training episode {ep+1} behavior data stored: {len(episode_action_sequence)} actions, score: {episode_score:.2f}")
         
         # Print episode termination probability summary
-        try:
-            if len(termination_logger.episode_terminations) > 0:
-                avg_term_prob = np.mean([t["termination_prob"] for t in termination_logger.episode_terminations])
-                num_terminations = len(termination_logger.episode_terminations)
-                print(f"EPISODE_SUMMARY: Episode {ep+1}, Terminations: {num_terminations}, Avg β: {avg_term_prob:.4f}")
-            else:
-                print(f"EPISODE_SUMMARY: Episode {ep+1}, No terminations recorded")
-        except Exception as e:
-            logger.warning(f"Failed to compute episode termination summary: {e}")
+        if len(termination_logger.episode_terminations) > 0:
+            avg_term_prob = np.mean([t["termination_prob"] for t in termination_logger.episode_terminations])
+            num_terminations = len(termination_logger.episode_terminations)
+            print(f"EPISODE_SUMMARY: Episode {ep+1}, Terminations: {num_terminations}, Avg β: {avg_term_prob:.4f}")
+        else:
+            print(f"EPISODE_SUMMARY: Episode {ep+1}, No terminations recorded")
         
         # Mark episode end for termination probability logging
-        try:
-            termination_logger.end_episode()
-        except Exception as e:
-            logger.warning(f"Failed to end episode in termination logger: {e}")
+        termination_logger.end_episode()
         
         # episode-level aggregates
-        try:
-            all_stats["episode_rewards"].append(float(np.sum([t[2] if isinstance(t, (list, tuple)) and len(t) > 2 else 0.0 for t in []])))  # placeholder, kept for compatibility
-            # Calculate episode reward from step rewards
-            episode_total_reward = sum(tr["reward"] for tr in step_transitions)
-            all_stats["episode_rewards"][-1] = float(episode_total_reward) if len(all_stats["episode_rewards"]) > 0 else float(episode_total_reward)
-            all_stats["episode_score"].append(float(episode_score))
-            all_stats["last_pass_sections"].append(last_pass_sections)
-            all_stats["last_pass_saved_material"].append(float(last_pass_saved_material) if last_pass_saved_material is not None else None)
-            all_stats["episode_option_lengths_mean"].append(float(np.mean(episode_opt_lengths)) if len(episode_opt_lengths) > 0 else 0.0)
-            all_stats["episode_termination_counts"].append(episode_termination_counter)
-            all_stats["episode_entropy_mean"].append(float(np.mean(episode_entropies)) if len(episode_entropies) > 0 else float("nan"))
-            logger.debug(f"Episode {ep+1} stats updated successfully")
-        except Exception as e:
-            logger.error(f"Failed to update episode {ep+1} stats: {e}")
+        all_stats["episode_rewards"].append(float(np.sum([t[2] if isinstance(t, (list, tuple)) and len(t) > 2 else 0.0 for t in []])))  # placeholder, kept for compatibility
+        # Calculate episode reward from step rewards
+        episode_total_reward = sum(tr["reward"] for tr in step_transitions)
+        all_stats["episode_rewards"][-1] = float(episode_total_reward) if len(all_stats["episode_rewards"]) > 0 else float(episode_total_reward)
+        all_stats["episode_score"].append(float(episode_score))
+        all_stats["last_pass_sections"].append(last_pass_sections)
+        all_stats["last_pass_saved_material"].append(float(last_pass_saved_material) if last_pass_saved_material is not None else None)
+        all_stats["episode_option_lengths_mean"].append(float(np.mean(episode_opt_lengths)) if len(episode_opt_lengths) > 0 else 0.0)
+        all_stats["episode_termination_counts"].append(episode_termination_counter)
+        all_stats["episode_entropy_mean"].append(float(np.mean(episode_entropies)) if len(episode_entropies) > 0 else float("nan"))
+        logger.debug(f"Episode {ep+1} stats updated successfully")
 
         # Periodic evaluation
         if (ep + 1) % args.eval_frequency == 0:
             logger.info(f"Starting evaluation after episode {ep+1}")
-            try:
-                avg_score, avg_episode_length, success_rate, eval_history = evaluate_model(
-                    base_env, oc, device, args.eval_episodes, args.max_option_len, logger, seed=42
-                )
+            avg_score, avg_episode_length, success_rate, eval_history = evaluate_model(
+                base_env, oc, device, args.eval_episodes, args.max_option_len, logger, seed=42
+            )
+            
+            # Store evaluation results
+            all_stats["eval_scores"].append(float(avg_score))
+            all_stats["eval_success_rates"].append(float(success_rate))
+            all_stats["eval_episode_lengths"].append(float(avg_episode_length))
+            
+            # Collect evaluation histories for visualization
+            evaluation_histories["all_scores"].extend(eval_history["scores"])
+            evaluation_histories["all_actions"].extend(eval_history["actions"])
+            evaluation_histories["all_options"].extend(eval_history["options"])
+            evaluation_histories["all_option_instances"].extend(eval_history["option_instances"])
+            evaluation_histories["all_actions_SCWB"].extend(eval_history["actions_SCWB"])
+            
+            logger.info(f"Episode {ep+1} evaluation: score={avg_score:.2f}, success_rate={success_rate:.1f}%")
+            logger.info(f"Total evaluation episodes collected so far: {len(evaluation_histories['all_scores'])}")
+            
+            # Check if this is the best model so far
+            if avg_score > best_model_score:
+                best_model_score = avg_score
+                logger.info(f"New best model found! Score: {avg_score:.2f} (previous best: {best_model_score:.2f})")
                 
-                # Store evaluation results
-                all_stats["eval_scores"].append(float(avg_score))
-                all_stats["eval_success_rates"].append(float(success_rate))
-                all_stats["eval_episode_lengths"].append(float(avg_episode_length))
+                # Save best model
+                torch.save(oc.state_dict(), best_model_path)
                 
-                # Collect evaluation histories for visualization
-                evaluation_histories["all_scores"].extend(eval_history["scores"])
-                evaluation_histories["all_actions"].extend(eval_history["actions"])
-                evaluation_histories["all_options"].extend(eval_history["options"])
-                evaluation_histories["all_option_instances"].extend(eval_history["option_instances"])
-                evaluation_histories["all_actions_SCWB"].extend(eval_history["actions_SCWB"])
+                # Save best model info
+                best_model_info = {
+                    "episode": ep + 1,
+                    "score": float(avg_score),
+                    "success_rate": float(success_rate),
+                    "avg_episode_length": float(avg_episode_length),
+                    "timestamp": str(datetime.datetime.now()),
+                    "hyperparameters": vars(args)
+                }
                 
-                logger.info(f"Episode {ep+1} evaluation: score={avg_score:.2f}, success_rate={success_rate:.1f}%")
-                logger.info(f"Total evaluation episodes collected so far: {len(evaluation_histories['all_scores'])}")
-                
-                # Check if this is the best model so far
-                if avg_score > best_model_score:
-                    best_model_score = avg_score
-                    logger.info(f"New best model found! Score: {avg_score:.2f} (previous best: {best_model_score:.2f})")
+                with open(best_model_info_path, "w", encoding="utf-8") as f:
+                    json.dump(best_model_info, f, ensure_ascii=False, indent=2)
                     
-                    # Save best model
-                    try:
-                        torch.save(oc.state_dict(), best_model_path)
-                        
-                        # Save best model info
-                        best_model_info = {
-                            "episode": ep + 1,
-                            "score": float(avg_score),
-                            "success_rate": float(success_rate),
-                            "avg_episode_length": float(avg_episode_length),
-                            "timestamp": str(datetime.datetime.now()),
-                            "hyperparameters": vars(args)
-                        }
-                        
-                        with open(best_model_info_path, "w", encoding="utf-8") as f:
-                            json.dump(best_model_info, f, ensure_ascii=False, indent=2)
-                            
-                        logger.info(f"Best model saved to {best_model_path}")
-                        
-                    except Exception as e:
-                        logger.error(f"Failed to save best model: {e}")
-                
-            except Exception as e:
-                logger.error(f"Evaluation failed at episode {ep+1}: {e}")
+                logger.info(f"Best model saved to {best_model_path}")
 
         # persist stats every episode
-        try:
-            with open(stats_path, "w", encoding="utf-8") as f:
-                json.dump(all_stats, f, ensure_ascii=False, indent=2)
-            logger.debug(f"Stats saved to {stats_path}")
-        except Exception as e:
-            logger.warning(f"Failed saving stats: {e}")
+        with open(stats_path, "w", encoding="utf-8") as f:
+            json.dump(all_stats, f, ensure_ascii=False, indent=2)
+        logger.debug(f"Stats saved to {stats_path}")
 
 
     # Plot episode-level histories: episode_score and last_pass_saved_material
-    try:
-        def _safe_nanify(arr):
-            return [float('nan') if (v is None) else float(v) for v in arr]
+    def _safe_nanify(arr):
+        return [float('nan') if (v is None) else float(v) for v in arr]
 
-        # Episode Score curve
-        scores = all_stats.get("episode_score", [])
-        if len(scores) > 0:
-            plt.figure(figsize=(10, 5))
-            plt.plot(range(1, len(scores)+1), scores, label='Episode Score', color='#1f77b4')
-            if len(scores) >= 10:
-                import numpy as _np
-                w = min(20, max(3, len(scores)//10))
-                mv = _np.convolve(scores, _np.ones(w)/w, mode='valid')
-                plt.plot(range(w, len(scores)+1), mv, label=f'Moving Avg ({w})', color='#ff7f0e')
-            plt.xlabel('Episode')
-            plt.ylabel('Score')
-            plt.title('Episode Score History')
-            plt.grid(True, alpha=0.3)
-            plt.legend()
-            plt.tight_layout()
-            plt.savefig(ckpt_dir / 'episode_score.png', dpi=200)
-            plt.close()
+    # Episode Score curve
+    scores = all_stats.get("episode_score", [])
+    if len(scores) > 0:
+        plt.figure(figsize=(10, 5))
+        plt.plot(range(1, len(scores)+1), scores, label='Episode Score', color='#1f77b4')
+        if len(scores) >= 10:
+            import numpy as _np
+            w = min(20, max(3, len(scores)//10))
+            mv = _np.convolve(scores, _np.ones(w)/w, mode='valid')
+            plt.plot(range(w, len(scores)+1), mv, label=f'Moving Avg ({w})', color='#ff7f0e')
+        plt.xlabel('Episode')
+        plt.ylabel('Score')
+        plt.title('Episode Score History')
+        plt.grid(True, alpha=0.3)
+        plt.legend()
+        plt.tight_layout()
+        plt.savefig(ckpt_dir / 'episode_score.png', dpi=200)
+        plt.close()
 
-        # Last passing design saved material per episode
-        last_saved = _safe_nanify(all_stats.get("last_pass_saved_material", []))
-        if len(last_saved) > 0:
-            plt.figure(figsize=(10, 5))
-            plt.plot(range(1, len(last_saved)+1), last_saved, label='Last Passed Option Saved Material', color='#2ca02c')
-            plt.xlabel('Episode')
-            plt.ylabel('Saved Material (m^3)')
-            plt.title('Last Passing Design Saved Material History')
-            plt.grid(True, alpha=0.3)
-            plt.legend()
-            plt.tight_layout()
-            plt.savefig(ckpt_dir / 'last_pass_saved_material.png', dpi=200)
-            plt.close()
+    # Last passing design saved material per episode
+    last_saved = _safe_nanify(all_stats.get("last_pass_saved_material", []))
+    if len(last_saved) > 0:
+        plt.figure(figsize=(10, 5))
+        plt.plot(range(1, len(last_saved)+1), last_saved, label='Last Passed Option Saved Material', color='#2ca02c')
+        plt.xlabel('Episode')
+        plt.ylabel('Saved Material (m^3)')
+        plt.title('Last Passing Design Saved Material History')
+        plt.grid(True, alpha=0.3)
+        plt.legend()
+        plt.tight_layout()
+        plt.savefig(ckpt_dir / 'last_pass_saved_material.png', dpi=200)
+        plt.close()
 
-        # Evaluation metrics
-        eval_scores = all_stats.get("eval_scores", [])
-        if len(eval_scores) > 0:
-            eval_episodes = [i * args.eval_frequency for i in range(1, len(eval_scores) + 1)]
-            
-            plt.figure(figsize=(15, 5))
-            
-            # Evaluation scores
-            plt.subplot(1, 3, 1)
-            plt.plot(eval_episodes, eval_scores, 'o-', label='Evaluation Score', color='#d62728')
+    # Evaluation metrics
+    eval_scores = all_stats.get("eval_scores", [])
+    if len(eval_scores) > 0:
+        eval_episodes = [i * args.eval_frequency for i in range(1, len(eval_scores) + 1)]
+        
+        plt.figure(figsize=(15, 5))
+        
+        # Evaluation scores
+        plt.subplot(1, 3, 1)
+        plt.plot(eval_episodes, eval_scores, 'o-', label='Evaluation Score', color='#d62728')
+        plt.xlabel('Training Episode')
+        plt.ylabel('Average Score')
+        plt.title('Evaluation Score History')
+        plt.grid(True, alpha=0.3)
+        plt.legend()
+        
+        # Success rates
+        eval_success_rates = all_stats.get("eval_success_rates", [])
+        if len(eval_success_rates) > 0:
+            plt.subplot(1, 3, 2)
+            plt.plot(eval_episodes, eval_success_rates, 'o-', label='Success Rate', color='#ff7f0e')
             plt.xlabel('Training Episode')
-            plt.ylabel('Average Score')
-            plt.title('Evaluation Score History')
+            plt.ylabel('Success Rate (%)')
+            plt.title('Evaluation Success Rate History')
             plt.grid(True, alpha=0.3)
             plt.legend()
-            
-            # Success rates
-            eval_success_rates = all_stats.get("eval_success_rates", [])
-            if len(eval_success_rates) > 0:
-                plt.subplot(1, 3, 2)
-                plt.plot(eval_episodes, eval_success_rates, 'o-', label='Success Rate', color='#ff7f0e')
-                plt.xlabel('Training Episode')
-                plt.ylabel('Success Rate (%)')
-                plt.title('Evaluation Success Rate History')
-                plt.grid(True, alpha=0.3)
-                plt.legend()
-            
-            # Episode lengths
-            eval_episode_lengths = all_stats.get("eval_episode_lengths", [])
-            if len(eval_episode_lengths) > 0:
-                plt.subplot(1, 3, 3)
-                plt.plot(eval_episodes, eval_episode_lengths, 'o-', label='Avg Episode Length', color='#9467bd')
-                plt.xlabel('Training Episode')
-                plt.ylabel('Average Episode Length')
-                plt.title('Evaluation Episode Length History')
-                plt.grid(True, alpha=0.3)
-                plt.legend()
-            
-            plt.tight_layout()
-            plt.savefig(ckpt_dir / 'evaluation_metrics.png', dpi=200)
-            plt.close()
+        
+        # Episode lengths
+        eval_episode_lengths = all_stats.get("eval_episode_lengths", [])
+        if len(eval_episode_lengths) > 0:
+            plt.subplot(1, 3, 3)
+            plt.plot(eval_episodes, eval_episode_lengths, 'o-', label='Avg Episode Length', color='#9467bd')
+            plt.xlabel('Training Episode')
+            plt.ylabel('Average Episode Length')
+            plt.title('Evaluation Episode Length History')
+            plt.grid(True, alpha=0.3)
+            plt.legend()
+        
+        plt.tight_layout()
+        plt.savefig(ckpt_dir / 'evaluation_metrics.png', dpi=200)
+        plt.close()
 
-        # Loss histories
-        actor_losses = all_stats.get("actor_losses", [])
-        critic_losses = all_stats.get("critic_losses", [])
-        if len(actor_losses) > 0 or len(critic_losses) > 0:
-            plt.figure(figsize=(15, 5))
-            
-            # Actor loss
-            if len(actor_losses) > 0:
-                plt.subplot(1, 2, 1)
-                plt.plot(range(1, len(actor_losses)+1), actor_losses, alpha=0.6, label='Actor Loss', color='#e377c2')
-                if len(actor_losses) >= 20:
-                    w = min(50, max(10, len(actor_losses)//20))
-                    mv = np.convolve(actor_losses, np.ones(w)/w, mode='valid')
-                    plt.plot(range(w, len(actor_losses)+1), mv, label=f'Moving Avg ({w})', color='#8c564b', linewidth=2)
-                plt.xlabel('Update Step')
-                plt.ylabel('Loss')
-                plt.title('Actor Loss History')
-                plt.grid(True, alpha=0.3)
-                plt.legend()
-            
-            # Critic loss
-            if len(critic_losses) > 0:
-                plt.subplot(1, 2, 2)
-                plt.plot(range(1, len(critic_losses)+1), critic_losses, alpha=0.6, label='Critic Loss', color='#17becf')
-                if len(critic_losses) >= 20:
-                    w = min(50, max(10, len(critic_losses)//20))
-                    mv = np.convolve(critic_losses, np.ones(w)/w, mode='valid')
-                    plt.plot(range(w, len(critic_losses)+1), mv, label=f'Moving Avg ({w})', color='#bcbd22', linewidth=2)
-                plt.xlabel('Update Step')
-                plt.ylabel('Loss')
-                plt.title('Critic Loss History')
-                plt.grid(True, alpha=0.3)
-                plt.legend()
-            
-            plt.tight_layout()
-            plt.savefig(ckpt_dir / 'loss_history.png', dpi=200)
-            plt.close()
-
-    except Exception as e:
-        logger.warning(f"Failed plotting episode histories: {e}")
+    # Loss histories
+    actor_losses = all_stats.get("actor_losses", [])
+    critic_losses = all_stats.get("critic_losses", [])
+    if len(actor_losses) > 0 or len(critic_losses) > 0:
+        plt.figure(figsize=(15, 5))
+        
+        # Actor loss
+        if len(actor_losses) > 0:
+            plt.subplot(1, 2, 1)
+            plt.plot(range(1, len(actor_losses)+1), actor_losses, alpha=0.6, label='Actor Loss', color='#e377c2')
+            if len(actor_losses) >= 20:
+                w = min(50, max(10, len(actor_losses)//20))
+                mv = np.convolve(actor_losses, np.ones(w)/w, mode='valid')
+                plt.plot(range(w, len(actor_losses)+1), mv, label=f'Moving Avg ({w})', color='#8c564b', linewidth=2)
+            plt.xlabel('Update Step')
+            plt.ylabel('Loss')
+            plt.title('Actor Loss History')
+            plt.grid(True, alpha=0.3)
+            plt.legend()
+        
+        # Critic loss
+        if len(critic_losses) > 0:
+            plt.subplot(1, 2, 2)
+            plt.plot(range(1, len(critic_losses)+1), critic_losses, alpha=0.6, label='Critic Loss', color='#17becf')
+            if len(critic_losses) >= 20:
+                w = min(50, max(10, len(critic_losses)//20))
+                mv = np.convolve(critic_losses, np.ones(w)/w, mode='valid')
+                plt.plot(range(w, len(critic_losses)+1), mv, label=f'Moving Avg ({w})', color='#bcbd22', linewidth=2)
+            plt.xlabel('Update Step')
+            plt.ylabel('Loss')
+            plt.title('Critic Loss History')
+            plt.grid(True, alpha=0.3)
+            plt.legend()
+        
+        plt.tight_layout()
+        plt.savefig(ckpt_dir / 'loss_history.png', dpi=200)
+        plt.close()
 
     # Generate training behavior visualization using training histories
-    try:
-        logger.info("Generating training behavior visualization using training histories...")
+    logger.info("Generating training behavior visualization using training histories...")
+    
+    if len(training_histories["all_scores"]) > 0:
+        # Create a Record-like object for compatibility with plot_test_behaviors
+        class TrainingRecord:
+            def __init__(self, training_histories):
+                # For training visualization, we use training data as both training and testing
+                self.training_record = {"score": training_histories["all_scores"]}
+                self.testing_record = {
+                    "score": training_histories["all_scores"],
+                    "action": training_histories["all_actions"],
+                    "action_SCWB": training_histories["all_actions_SCWB"],
+                    "option": training_histories["all_options"],
+                    "option_instances": training_histories["all_option_instances"]
+                }
         
-        if len(training_histories["all_scores"]) > 0:
-            # Create a Record-like object for compatibility with plot_test_behaviors
-            class TrainingRecord:
-                def __init__(self, training_histories):
-                    # For training visualization, we use training data as both training and testing
-                    self.training_record = {"score": training_histories["all_scores"]}
-                    self.testing_record = {
-                        "score": training_histories["all_scores"],
-                        "action": training_histories["all_actions"],
-                        "action_SCWB": training_histories["all_actions_SCWB"],
-                        "option": training_histories["all_options"],
-                        "option_instances": training_histories["all_option_instances"]
-                    }
-            
-            # Create record with training histories
-            training_record = TrainingRecord(training_histories)
-            
-            # Generate the behavior visualization for training episodes
-            logger.info("Generating training behavior visualization...")
-            
-            # Save training plot with different filename
-            original_plot_test_behaviors = plot_test_behaviors
-            def plot_training_behaviors(record, base_env, save_dir):
-                # Temporarily modify the save path to avoid overwriting evaluation plot
-                import matplotlib.pyplot as plt
-                from Visualization.plot import plot_test_behaviors as original_plot
-                
-                # Call the original plot function
-                original_plot(record, base_env, save_dir)
-                
-                # Rename the generated file from testing_behaviors.png to training_behaviors.png
-                import shutil
-                testing_path = save_dir / 'testing_behaviors.png'
-                training_path = save_dir / 'training_behaviors.png'
-                if testing_path.exists():
-                    shutil.move(str(testing_path), str(training_path))
-                    logger.info(f"Training behavior plot saved to: {training_path}")
-                    return training_path
-                else:
-                    logger.warning("Training behavior plot file not found after generation")
-                    return None
-            
-            plot_training_behaviors(training_record, base_env, ckpt_dir)
-            logger.info(f"Total training episodes plotted: {len(training_histories['all_scores'])}")
-        else:
-            logger.warning("No training histories available for visualization.")
+        # Create record with training histories
+        training_record = TrainingRecord(training_histories)
         
-    except Exception as e:
-        logger.error(f"Error in training behavior visualization: {e}")
-        import traceback
-        logger.error(f"Traceback: {traceback.format_exc()}")
+        # Generate the behavior visualization for training episodes
+        logger.info("Generating training behavior visualization...")
+        
+        # Save training plot with different filename
+        original_plot_test_behaviors = plot_test_behaviors
+        def plot_training_behaviors(record, base_env, save_dir):
+            # Temporarily modify the save path to avoid overwriting evaluation plot
+            import matplotlib.pyplot as plt
+            from Visualization.plot import plot_test_behaviors as original_plot
+            
+            # Call the original plot function
+            original_plot(record, base_env, save_dir)
+            
+            # Rename the generated file from testing_behaviors.png to training_behaviors.png
+            import shutil
+            testing_path = save_dir / 'testing_behaviors.png'
+            training_path = save_dir / 'training_behaviors.png'
+            if testing_path.exists():
+                shutil.move(str(testing_path), str(training_path))
+                logger.info(f"Training behavior plot saved to: {training_path}")
+                return training_path
+            else:
+                logger.warning("Training behavior plot file not found after generation")
+                return None
+        
+        plot_training_behaviors(training_record, base_env, ckpt_dir)
+        logger.info(f"Total training episodes plotted: {len(training_histories['all_scores'])}")
+    else:
+        logger.warning("No training histories available for visualization.")
 
     # Generate evaluation behavior visualization using evaluation histories
-    try:
-        logger.info("Generating evaluation behavior visualization using evaluation histories...")
+    logger.info("Generating evaluation behavior visualization using evaluation histories...")
+    
+    if len(evaluation_histories["all_scores"]) > 0:
+        # Create a Record-like object for compatibility with plot_test_behaviors
+        class EvaluationRecord:
+            def __init__(self, training_scores, evaluation_histories):
+                self.training_record = {"score": training_scores}
+                self.testing_record = {
+                    "score": evaluation_histories["all_scores"],
+                    "action": evaluation_histories["all_actions"],
+                    "action_SCWB": evaluation_histories["all_actions_SCWB"],
+                    "option": evaluation_histories["all_options"],
+                    "option_instances": evaluation_histories["all_option_instances"]
+                }
         
-        if len(evaluation_histories["all_scores"]) > 0:
-            # Create a Record-like object for compatibility with plot_test_behaviors
-            class EvaluationRecord:
-                def __init__(self, training_scores, evaluation_histories):
-                    self.training_record = {"score": training_scores}
-                    self.testing_record = {
-                        "score": evaluation_histories["all_scores"],
-                        "action": evaluation_histories["all_actions"],
-                        "action_SCWB": evaluation_histories["all_actions_SCWB"],
-                        "option": evaluation_histories["all_options"],
-                        "option_instances": evaluation_histories["all_option_instances"]
-                    }
-            
-            # Create record with training scores from all_stats
-            training_scores = all_stats.get("episode_score", [])
-            eval_record = EvaluationRecord(training_scores, evaluation_histories)
-            
-            # Generate the behavior visualization
-            logger.info("Generating evaluation behavior visualization...")
-            plot_test_behaviors(eval_record, base_env, ckpt_dir)
-            logger.info(f"Evaluation behavior plot saved to: {ckpt_dir / 'testing_behaviors.png'}")
-            logger.info(f"Total evaluation episodes plotted: {len(evaluation_histories['all_scores'])}")
-        else:
-            logger.warning("No evaluation histories available for visualization. Make sure eval_frequency is set properly.")
+        # Create record with training scores from all_stats
+        training_scores = all_stats.get("episode_score", [])
+        eval_record = EvaluationRecord(training_scores, evaluation_histories)
         
-    except Exception as e:
-        logger.error(f"Error in evaluation behavior visualization: {e}")
-        import traceback
-        logger.error(f"Traceback: {traceback.format_exc()}")
+        # Generate the behavior visualization
+        logger.info("Generating evaluation behavior visualization...")
+        plot_test_behaviors(eval_record, base_env, ckpt_dir)
+        logger.info(f"Evaluation behavior plot saved to: {ckpt_dir / 'testing_behaviors.png'}")
+        logger.info(f"Total evaluation episodes plotted: {len(evaluation_histories['all_scores'])}")
+    else:
+        logger.warning("No evaluation histories available for visualization. Make sure eval_frequency is set properly.")
 
     # Final summary with best model information
-    try:
-        logger.info("Training completed!")
+    logger.info("Training completed!")
+    
+    # Save and summarize termination probability statistics
+    termination_logger.save_stats()
+    termination_logger.print_summary()
+    logger.info(f"Termination probability statistics saved to: {termination_logger.save_path}")
+    
+    if best_model_path.exists():
+        logger.info(f"Best model saved at: {best_model_path}")
+        logger.info(f"Best model score: {best_model_score:.2f}")
+        logger.info(f"Best model info saved at: {best_model_info_path}")
+        logger.info(f"To run inference with the best model, use: python inference_best_model.py --checkpoint_dir {ckpt_dir}")
+    else:
+        logger.info("No best model was saved (no evaluations performed)")
         
-        # Save and summarize termination probability statistics
-        try:
-            termination_logger.save_stats()
-            termination_logger.print_summary()
-            logger.info(f"Termination probability statistics saved to: {termination_logger.save_path}")
-        except Exception as e:
-            logger.warning(f"Failed to save termination probability statistics: {e}")
+    if len(training_histories["all_scores"]) > 0:
+        logger.info(f"Training behavior visualization saved at: {ckpt_dir / 'training_behaviors.png'}")
+        logger.info(f"Training visualization includes {len(training_histories['all_scores'])} training episodes")
         
-        if best_model_path.exists():
-            logger.info(f"Best model saved at: {best_model_path}")
-            logger.info(f"Best model score: {best_model_score:.2f}")
-            logger.info(f"Best model info saved at: {best_model_info_path}")
-            logger.info(f"To run inference with the best model, use: python inference_best_model.py --checkpoint_dir {ckpt_dir}")
-        else:
-            logger.info("No best model was saved (no evaluations performed)")
-            
-        if len(training_histories["all_scores"]) > 0:
-            logger.info(f"Training behavior visualization saved at: {ckpt_dir / 'training_behaviors.png'}")
-            logger.info(f"Training visualization includes {len(training_histories['all_scores'])} training episodes")
-            
-        if len(evaluation_histories["all_scores"]) > 0:
-            logger.info(f"Evaluation behavior visualization saved at: {ckpt_dir / 'testing_behaviors.png'}")
-            logger.info(f"Evaluation visualization includes {len(evaluation_histories['all_scores'])} evaluation episodes from training")
-        
-        # Loss history summary
-        actor_losses = all_stats.get("actor_losses", [])
-        critic_losses = all_stats.get("critic_losses", [])
-        if len(actor_losses) > 0 or len(critic_losses) > 0:
-            logger.info(f"Loss history visualization saved at: {ckpt_dir / 'loss_history.png'}")
-            if len(actor_losses) > 0:
-                logger.info(f"Total actor updates: {len(actor_losses)}, final actor loss: {actor_losses[-1]:.4f}")
-            if len(critic_losses) > 0:
-                logger.info(f"Total critic updates: {len(critic_losses)}, final critic loss: {critic_losses[-1]:.4f}")
-    except Exception as e:
-        logger.error(f"Error in final summary: {e}")
+    if len(evaluation_histories["all_scores"]) > 0:
+        logger.info(f"Evaluation behavior visualization saved at: {ckpt_dir / 'testing_behaviors.png'}")
+        logger.info(f"Evaluation visualization includes {len(evaluation_histories['all_scores'])} evaluation episodes from training")
+    
+    # Loss history summary
+    actor_losses = all_stats.get("actor_losses", [])
+    critic_losses = all_stats.get("critic_losses", [])
+    if len(actor_losses) > 0 or len(critic_losses) > 0:
+        logger.info(f"Loss history visualization saved at: {ckpt_dir / 'loss_history.png'}")
+        if len(actor_losses) > 0:
+            logger.info(f"Total actor updates: {len(actor_losses)}, final actor loss: {actor_losses[-1]:.4f}")
+        if len(critic_losses) > 0:
+            logger.info(f"Total critic updates: {len(critic_losses)}, final critic loss: {critic_losses[-1]:.4f}")
 
 
 def load_best_model(checkpoint_dir, model_args=None):
@@ -1697,32 +1497,27 @@ def load_best_model(checkpoint_dir, model_args=None):
         print(f"Best model not found in {checkpoint_dir}")
         return None, None
     
-    try:
-        # Load model info
-        with open(best_model_info_path, "r", encoding="utf-8") as f:
-            best_model_info = json.load(f)
-        
-        print(f"Loading best model from episode {best_model_info['episode']}")
-        print(f"  Score: {best_model_info['score']:.2f}")
-        print(f"  Success Rate: {best_model_info['success_rate']:.1f}%")
-        print(f"  Saved at: {best_model_info['timestamp']}")
-        
-        # Use provided args or get from saved hyperparameters
-        if model_args is None:
-            model_args = argparse.Namespace(**best_model_info['hyperparameters'])
-        
-        # Create model with same architecture
-        device = torch.device(model_args.device if hasattr(model_args, 'device') else 'cuda')
-        
-        # You would need to reconstruct the model here with proper parameters
-        # This is a template - you'd need to adapt based on your model creation code
-        # For now, returning info only as model reconstruction needs environment setup
-        
-        return best_model_path, best_model_info
-        
-    except Exception as e:
-        print(f"Error loading best model: {e}")
-        return None, None
+    # Load model info
+    with open(best_model_info_path, "r", encoding="utf-8") as f:
+        best_model_info = json.load(f)
+    
+    print(f"Loading best model from episode {best_model_info['episode']}")
+    print(f"  Score: {best_model_info['score']:.2f}")
+    print(f"  Success Rate: {best_model_info['success_rate']:.1f}%")
+    print(f"  Saved at: {best_model_info['timestamp']}")
+    
+    # Use provided args or get from saved hyperparameters
+    if model_args is None:
+        model_args = argparse.Namespace(**best_model_info['hyperparameters'])
+    
+    # Create model with same architecture
+    device = torch.device(model_args.device if hasattr(model_args, 'device') else 'cuda')
+    
+    # You would need to reconstruct the model here with proper parameters
+    # This is a template - you'd need to adapt based on your model creation code
+    # For now, returning info only as model reconstruction needs environment setup
+    
+    return best_model_path, best_model_info
 
 if __name__ == "__main__":
     args = parse_args()
@@ -2178,35 +1973,28 @@ def main():
     episode_stats = []
     
     for episode in range(args.num_episodes):
-        try:
-            # Train one episode
-            episode_info = train_episode(env, agent)
-            episode_stats.append(episode_info)
+        # Train one episode
+        episode_info = train_episode(env, agent)
+        episode_stats.append(episode_info)
+        
+        # Logging
+        if episode % args.log_freq == 0 or episode == args.num_episodes - 1:
+            agent_stats = agent.get_statistics()
+            print(f"\nEpisode {episode + 1}/{args.num_episodes}")
+            print(f"  Episode Reward: {episode_info['episode_reward']:.2f}")
+            print(f"  Episode Steps: {episode_info['episode_steps']}")
+            print(f"  Options Used: {episode_info['num_options_used']}")
+            print(f"  Avg Option Length: {episode_info['avg_option_length']:.2f}")
+            print(f"  Agent Epsilon: {agent_stats['epsilon']:.4f}")
+            print(f"  Buffer Size: {agent_stats['buffer_size']}")
+            print(f"  Avg Recent Reward: {agent_stats['avg_episode_reward']:.2f}")
             
-            # Logging
-            if episode % args.log_freq == 0 or episode == args.num_episodes - 1:
-                agent_stats = agent.get_statistics()
-                print(f"\nEpisode {episode + 1}/{args.num_episodes}")
-                print(f"  Episode Reward: {episode_info['episode_reward']:.2f}")
-                print(f"  Episode Steps: {episode_info['episode_steps']}")
-                print(f"  Options Used: {episode_info['num_options_used']}")
-                print(f"  Avg Option Length: {episode_info['avg_option_length']:.2f}")
-                print(f"  Agent Epsilon: {agent_stats['epsilon']:.4f}")
-                print(f"  Buffer Size: {agent_stats['buffer_size']}")
-                print(f"  Avg Recent Reward: {agent_stats['avg_episode_reward']:.2f}")
-                
-                if episode_info['final_info']:
-                    print(f"  Final Info: {episode_info['final_info']}")
-            
-            # Save model
-            if (episode + 1) % args.save_freq == 0 or episode == args.num_episodes - 1:
-                save_model_and_logs(agent, args, episode + 1, episode_stats)
-                
-        except Exception as e:
-            print(f"Error in episode {episode + 1}: {e}")
-            import traceback
-            traceback.print_exc()
-            continue
+            if episode_info['final_info']:
+                print(f"  Final Info: {episode_info['final_info']}")
+        
+        # Save model
+        if (episode + 1) % args.save_freq == 0 or episode == args.num_episodes - 1:
+            save_model_and_logs(agent, args, episode + 1, episode_stats)
     
     print("\nTraining completed!")
     print(f"Final model saved to: {args.save_dir}")

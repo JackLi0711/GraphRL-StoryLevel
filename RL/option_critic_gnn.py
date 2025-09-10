@@ -176,7 +176,7 @@ class OptionCriticGNN(nn.Module):
         # - Global for policy-over-options and termination functions
         
         global_states = graph_level_features[0: ] # shape: [1, member_state_dim]
-        return story_level_features, global_state
+        return story_level_features, graph_level_features
     
     def get_Q(self, global_state: torch.Tensor) -> torch.Tensor:
         """
@@ -711,15 +711,24 @@ def actor_loss(obs, option: int, logp: torch.Tensor, entropy: torch.Tensor,
         next_Q_max = next_Q_prime.max(dim=-1)[0]
     
     # Compute target
+    print(f'done {done}')
+    print(f'next_option_term_prob {next_option_term_prob.shape}')
+    print(f'next_Q_prime {next_Q_prime.shape}')
+    print(f'next_Q_max {next_Q_max.shape}')
+    print(f'Q {Q.shape}')
+    print(f'Q_max {Q_max.shape}')
+    print(f'option_term_prob {option_term_prob.shape}')
+    print(f'Q[option] {Q[:, option].shape}')
+
     gt = reward + (1 - done) * gamma * \
-        ((1 - next_option_term_prob) * next_Q_prime[option] + 
+        ((1 - next_option_term_prob) * next_Q_prime[:, option] + 
          next_option_term_prob * next_Q_max)
     
     # Termination loss
-    termination_loss = option_term_prob * (Q[option].detach() - Q_max.detach() + termination_reg) * (1 - done)
+    termination_loss = option_term_prob * (Q[:, option].detach() - Q_max.detach() + termination_reg) * (1 - done)
     
     # Policy gradient loss with entropy regularization
-    advantage = gt.detach() - Q[option]
+    advantage = gt.detach() - Q[:, option]
     policy_loss = -logp * advantage - entropy_reg * entropy
     
     # Ensure all components are scalars
