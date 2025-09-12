@@ -751,6 +751,8 @@ def evaluate_model(base_env, oc_model, device, num_episodes, max_option_len, log
         "success_rate": success_rate
     }
     
+    # Note: Test behavior visualization will be generated externally after collecting evaluation histories
+    
     return avg_score, avg_episode_length, success_rate, eval_history
 
 
@@ -771,15 +773,15 @@ def parse_args():
     parser.add_argument("--temperature", type=float, default=1.0)
     parser.add_argument("--eps_start", type=float, default=1.0)
     parser.add_argument("--eps_min", type=float, default=0.1)
-    parser.add_argument("--eps_decay", type=int, default=int(1e3))
+    parser.add_argument("--eps_decay", type=int, default=int(5e3))
     parser.add_argument("--eps_test", type=float, default=0.05)
     parser.add_argument("--gamma", type=float, default=0.99)
     parser.add_argument("--update_frequency", type=int, default=2)
-    parser.add_argument("--freeze_interval", type=int, default=1000)
+    parser.add_argument("--freeze_interval", type=int, default=512) # 512
     parser.add_argument("--batch_size", type=int, default=256)
-    parser.add_argument("--lr", type=float, default=1e-4)
-    parser.add_argument("--actor_lr", type=float, default=1e-4)
-    parser.add_argument("--critic_lr", type=float, default=1e-4)
+    parser.add_argument("--lr", type=float, default=1e-3) # 1e-4
+    parser.add_argument("--actor_lr", type=float, default=1e-3) # 1e-4
+    parser.add_argument("--critic_lr", type=float, default=1e-3) # 1e-4
     parser.add_argument("--grad_clip", type=float, default=10.0)
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument("--epochs", type=int, default=100)
@@ -1172,6 +1174,49 @@ def main(args):
             training_histories["all_option_instances"].append(episode_option_instances)
             training_histories["all_actions_SCWB"].append([])  # Empty for compatibility
             logger.debug(f"Training episode {ep+1} behavior data stored: {len(episode_action_sequence)} actions, score: {episode_score:.2f}")
+            
+            # Generate training behavior visualization after each episode
+            logger.info(f"Generating training behavior visualization after episode {ep+1}...")
+            
+            # Create a Record-like object for compatibility with plot_test_behaviors
+            class TrainingRecord:
+                def __init__(self, training_histories):
+                    # For training visualization, we use training data as both training and testing
+                    self.training_record = {"score": training_histories["all_scores"]}
+                    self.testing_record = {
+                        "score": training_histories["all_scores"],
+                        "action": training_histories["all_actions"],
+                        "action_SCWB": training_histories["all_actions_SCWB"],
+                        "option": training_histories["all_options"],
+                        "option_instances": training_histories["all_option_instances"]
+                    }
+            
+            # Create record with current training histories
+            training_record = TrainingRecord(training_histories)
+            
+            # Generate the behavior visualization for training episodes
+            def plot_training_behaviors_episode(record, base_env, save_dir, episode_num):
+                # Save training plot with episode-specific filename
+                import matplotlib.pyplot as plt
+                from Visualization.plot import plot_test_behaviors as original_plot
+                
+                # Call the original plot function
+                original_plot(record, base_env, save_dir)
+                
+                # Rename the generated file to include episode number
+                import shutil
+                testing_path = save_dir / 'testing_behaviors.png'
+                training_path = save_dir / f'training_behaviors.png'
+                if testing_path.exists():
+                    shutil.move(str(testing_path), str(training_path))
+                    logger.info(f"Training behavior plot saved to: {training_path}")
+                    return training_path
+                else:
+                    logger.warning(f"Training behavior plot file not found after generation for episode {episode_num}")
+                    return None
+            
+            plot_training_behaviors_episode(training_record, base_env, ckpt_dir, ep+1)
+            logger.debug(f"Training episodes plotted so far: {len(training_histories['all_scores'])}")
         
         # Print episode termination probability summary
         if len(termination_logger.episode_terminations) > 0:
@@ -1218,6 +1263,183 @@ def main(args):
             
             logger.info(f"Episode {ep+1} evaluation: score={avg_score:.2f}, success_rate={success_rate:.1f}%")
             logger.info(f"Total evaluation episodes collected so far: {len(evaluation_histories['all_scores'])}")
+            
+            # Generate test behavior visualization after collecting evaluation histories
+            logger.info(f"Generating test behavior visualization after inference (episode {ep+1})...")
+            logger.debug(f"Using accumulated evaluation histories with {len(evaluation_histories['all_scores'])} total episodes")
+            
+            # Create a Record-like object for compatibility with plot_test_behaviors
+            class EvaluationRecord:
+                def __init__(self, accumulated_histories):
+                    # Use accumulated evaluation data for visualization
+                    self.training_record = {"score": accumulated_histories["all_scores"]}
+                    self.testing_record = {
+                        "score": accumulated_histories["all_scores"],
+                        "action": accumulated_histories["all_actions"],
+                        "action_SCWB": accumulated_histories["all_actions_SCWB"],
+                        "option": accumulated_histories["all_options"],
+                        "option_instances": accumulated_histories["all_option_instances"]
+                    }
+            
+            # Create record with accumulated evaluation histories
+            eval_record = EvaluationRecord(evaluation_histories)
+            
+            # Generate the behavior visualization for evaluation episodes using accumulated data
+            def plot_test_behaviors_inference_accumulated(record, base_env, save_dir, episode_num):
+                # Save test plot with episode-specific filename directly
+                import matplotlib.pyplot as plt
+                import numpy as np
+                from matplotlib.patches import Rectangle
+                import os
+                import traceback
+                
+                try:
+                    logger.debug(f"Starting test behavior plot generation for episode {episode_num}")
+                    
+                    # Get data from record
+                    train_scores = record.training_record["score"]
+                    test_scores = record.testing_record["score"]
+                    test_actions, test_actions_SCWB = record.testing_record["action"], record.testing_record["action_SCWB"]
+                    test_options = record.testing_record["option"]
+                    test_option_instances = record.testing_record.get("option_instances", None)
+                    
+                    logger.debug(f"Test data summary - scores: {len(test_scores)}, actions: {len(test_actions)}, options: {len(test_options)}")
+                    
+                    # Validate base_env and story_num
+                    if not hasattr(base_env, '_testing_structure') or not hasattr(base_env._testing_structure, 'story_num'):
+                        logger.error(f"Invalid base_env structure for episode {episode_num}")
+                        return None
+                    
+                    story_num = base_env._testing_structure.story_num
+                    logger.debug(f"Story number: {story_num}")
+                    
+                    # If there is no test data, skip plotting
+                    if len(test_scores) == 0 or len(test_actions) == 0:
+                        logger.warning(f"No test data to plot for episode {episode_num} - scores: {len(test_scores)}, actions: {len(test_actions)}")
+                        return None
+                    
+                    # Create action types mapping
+                    action_types = []
+                    logger.debug(f"Processing {len(test_actions)} action sequences")
+                    for i, action in enumerate(test_actions):
+                        types = []
+                        for a in action:
+                            if a < story_num: action_type = "xdir-beam"
+                            elif a < story_num*2: action_type = "zdir-beam"
+                            elif a < story_num*3: action_type = "out-col"
+                            else: action_type = "in-col"
+                            types.append(action_type)
+                        action_types.append(types)
+                        if i < 3:  # Only log first 3 episodes to avoid spam
+                            logger.debug(f"Episode {i+1}: {len(action)} actions, {len(types)} action types")
+                    
+                    logger.debug(f"Action types mapping completed for all {len(action_types)} episodes")
+                    
+                    # Create episode mapping
+                    if len(train_scores) > 0:
+                        test_episodes = np.linspace(1, len(train_scores), num=len(test_scores))
+                    else:
+                        test_episodes = np.arange(1, len(test_scores)+1, 1)
+                    
+                    color_mapping = {'xdir-beam': 'dodgerblue', 'zdir-beam': 'yellowgreen', 'out-col': 'orange', 'in-col': 'red'}
+                    
+                    # Create the plot
+                    fig, ax1 = plt.subplots(figsize=(12, 8))
+                    
+                    # Plot action bars
+                    for i, types in enumerate(action_types):
+                        for j, action_type in enumerate(types):
+                            color = color_mapping[action_type]
+                            count = 1
+                            ax1.bar(test_episodes[i], count, color=color, width=3, bottom=j, zorder=1)
+                    
+                    # Add option boundaries (simplified version)
+                    for i, (actions, options) in enumerate(zip(test_actions, test_options)):
+                        if len(options) == 0:
+                            continue
+                        
+                        current_option = options[0]
+                        option_start = 0
+                        
+                        for j in range(1, len(options)):
+                            if options[j] != current_option or j == len(options) - 1:
+                                option_end = j if options[j] != current_option else j + 1
+                                
+                                rect_x = test_episodes[i] - 1.5
+                                rect_width = 3
+                                rect_y = option_start
+                                rect_height = option_end - option_start
+                                
+                                rect = Rectangle((rect_x, rect_y), rect_width, rect_height, 
+                                               linewidth=3, edgecolor='black', facecolor='none', 
+                                               zorder=3, linestyle='-')
+                                ax1.add_patch(rect)
+                                
+                                ax1.text(rect_x + rect_width/2, rect_y + rect_height/2, 
+                                        f'O{current_option}', ha='center', va='center', 
+                                        fontsize=8, fontweight='bold', color='black', zorder=4,
+                                        bbox=dict(boxstyle="round,pad=0.1", facecolor='white', alpha=0.8))
+                                
+                                if j < len(options):
+                                    current_option = options[j]
+                                option_start = j
+                    
+                    # Set up the plot
+                    ax1.set_xlabel("episode", fontsize=16)
+                    ax1.set_ylabel("action index", fontsize=16)
+                    ax1.set_title(f"Accumulated Test Episodes Behavior (up to training episode {episode_num})", fontsize=18, fontweight='bold')
+                    ax1.grid(True, alpha=0.3)
+                    
+                    # Add second y-axis for scores
+                    ax2 = ax1.twinx()
+                    ax2.plot(test_episodes, test_scores, 'ko-', linewidth=2, markersize=4, label="test reward", zorder=2)
+                    ax2.set_ylabel("cumulative reward", fontsize=16)
+                
+                    # Add legend
+                    legend_labels = ['xdir-beam', 'zdir-beam', 'out-col', 'in-col']
+                    legend_colors = ['dodgerblue', 'yellowgreen', 'orange', 'red']
+                    ax1.legend(labels=legend_labels, loc='upper left', fontsize=14, 
+                              handles=[plt.Line2D([0], [0], color=color, linewidth=4) for color in legend_colors])
+                    ax2.legend(loc='upper right', fontsize=14)
+                    
+                    plt.tight_layout()
+                    
+                    # Save with unique filename directly
+                    test_inference_path = save_dir / f'test_behaviors_inference_ep{episode_num}.png'
+                    logger.debug(f"Attempting to save plot to: {test_inference_path}")
+                    
+                    # Ensure save directory exists
+                    save_dir.mkdir(parents=True, exist_ok=True)
+                    
+                    plt.savefig(test_inference_path, dpi=1000)
+                    plt.close()
+                    
+                    # Verify file was created successfully
+                    if test_inference_path.exists():
+                        file_size = os.path.getsize(test_inference_path)
+                        logger.info(f"Test behavior plot successfully saved to: {test_inference_path} (size: {file_size} bytes)")
+                        return test_inference_path
+                    else:
+                        logger.error(f"Failed to create test behavior plot file: {test_inference_path}")
+                        return None
+                        
+                except Exception as e:
+                    logger.error(f"Error generating test behavior plot for episode {episode_num}: {str(e)}")
+                    logger.error(f"Traceback: {traceback.format_exc()}")
+                    # Clean up any partial plots
+                    try:
+                        plt.close('all')
+                    except:
+                        pass
+                    return None
+            
+            # Generate the plot with accumulated data
+            result_path = plot_test_behaviors_inference_accumulated(eval_record, base_env, ckpt_dir, ep+1)
+            if result_path:
+                logger.debug(f"Test episodes plotted successfully: {len(evaluation_histories['all_scores'])} accumulated episodes")
+            else:
+                logger.warning(f"Failed to plot test episodes for episode {ep+1}")
+                logger.debug(f"Evaluation histories summary: {len(evaluation_histories['all_scores'])} scores, {len(evaluation_histories['all_actions'])} actions")
             
             # Check if this is the best model so far
             if avg_score > best_model_score:
@@ -1365,83 +1587,7 @@ def main(args):
         plt.savefig(ckpt_dir / 'loss_history.png', dpi=200)
         plt.close()
 
-    # Generate training behavior visualization using training histories
-    logger.info("Generating training behavior visualization using training histories...")
-    
-    if len(training_histories["all_scores"]) > 0:
-        # Create a Record-like object for compatibility with plot_test_behaviors
-        class TrainingRecord:
-            def __init__(self, training_histories):
-                # For training visualization, we use training data as both training and testing
-                self.training_record = {"score": training_histories["all_scores"]}
-                self.testing_record = {
-                    "score": training_histories["all_scores"],
-                    "action": training_histories["all_actions"],
-                    "action_SCWB": training_histories["all_actions_SCWB"],
-                    "option": training_histories["all_options"],
-                    "option_instances": training_histories["all_option_instances"]
-                }
-        
-        # Create record with training histories
-        training_record = TrainingRecord(training_histories)
-        
-        # Generate the behavior visualization for training episodes
-        logger.info("Generating training behavior visualization...")
-        
-        # Save training plot with different filename
-        original_plot_test_behaviors = plot_test_behaviors
-        def plot_training_behaviors(record, base_env, save_dir):
-            # Temporarily modify the save path to avoid overwriting evaluation plot
-            import matplotlib.pyplot as plt
-            from Visualization.plot import plot_test_behaviors as original_plot
-            
-            # Call the original plot function
-            original_plot(record, base_env, save_dir)
-            
-            # Rename the generated file from testing_behaviors.png to training_behaviors.png
-            import shutil
-            testing_path = save_dir / 'testing_behaviors.png'
-            training_path = save_dir / 'training_behaviors.png'
-            if testing_path.exists():
-                shutil.move(str(testing_path), str(training_path))
-                logger.info(f"Training behavior plot saved to: {training_path}")
-                return training_path
-            else:
-                logger.warning("Training behavior plot file not found after generation")
-                return None
-        
-        plot_training_behaviors(training_record, base_env, ckpt_dir)
-        logger.info(f"Total training episodes plotted: {len(training_histories['all_scores'])}")
-    else:
-        logger.warning("No training histories available for visualization.")
-
-    # Generate evaluation behavior visualization using evaluation histories
-    logger.info("Generating evaluation behavior visualization using evaluation histories...")
-    
-    if len(evaluation_histories["all_scores"]) > 0:
-        # Create a Record-like object for compatibility with plot_test_behaviors
-        class EvaluationRecord:
-            def __init__(self, training_scores, evaluation_histories):
-                self.training_record = {"score": training_scores}
-                self.testing_record = {
-                    "score": evaluation_histories["all_scores"],
-                    "action": evaluation_histories["all_actions"],
-                    "action_SCWB": evaluation_histories["all_actions_SCWB"],
-                    "option": evaluation_histories["all_options"],
-                    "option_instances": evaluation_histories["all_option_instances"]
-                }
-        
-        # Create record with training scores from all_stats
-        training_scores = all_stats.get("episode_score", [])
-        eval_record = EvaluationRecord(training_scores, evaluation_histories)
-        
-        # Generate the behavior visualization
-        logger.info("Generating evaluation behavior visualization...")
-        plot_test_behaviors(eval_record, base_env, ckpt_dir)
-        logger.info(f"Evaluation behavior plot saved to: {ckpt_dir / 'testing_behaviors.png'}")
-        logger.info(f"Total evaluation episodes plotted: {len(evaluation_histories['all_scores'])}")
-    else:
-        logger.warning("No evaluation histories available for visualization. Make sure eval_frequency is set properly.")
+    # Note: Behavior visualizations are now generated per episode/inference rather than in batch
 
     # Final summary with best model information
     logger.info("Training completed!")
@@ -1459,13 +1605,10 @@ def main(args):
     else:
         logger.info("No best model was saved (no evaluations performed)")
         
-    if len(training_histories["all_scores"]) > 0:
-        logger.info(f"Training behavior visualization saved at: {ckpt_dir / 'training_behaviors.png'}")
-        logger.info(f"Training visualization includes {len(training_histories['all_scores'])} training episodes")
-        
-    if len(evaluation_histories["all_scores"]) > 0:
-        logger.info(f"Evaluation behavior visualization saved at: {ckpt_dir / 'testing_behaviors.png'}")
-        logger.info(f"Evaluation visualization includes {len(evaluation_histories['all_scores'])} evaluation episodes from training")
+    logger.info(f"Behavior visualizations have been generated per episode during training")
+    logger.info(f"Training episodes processed: {len(training_histories['all_scores'])}")
+    logger.info(f"Evaluation episodes processed: {len(evaluation_histories['all_scores'])}")
+    logger.info(f"Check checkpoint directory for individual episode behavior plots: {ckpt_dir}")
     
     # Loss history summary
     actor_losses = all_stats.get("actor_losses", [])
