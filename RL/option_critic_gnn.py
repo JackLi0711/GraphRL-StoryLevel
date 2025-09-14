@@ -225,13 +225,8 @@ class OptionCriticGNN(nn.Module):
             # Single state
             termination_prob = termination_probs[current_option]
         
-        # Sample termination decision (deterministic in testing mode)
-        if self.testing:
-            # Use threshold-based deterministic decision during testing
-            option_termination = termination_prob > 0.5
-        else:
-            # Use probabilistic sampling during training
-            option_termination = Bernoulli(termination_prob).sample()
+        # Always use probabilistic sampling for consistency between training and inference
+        option_termination = Bernoulli(termination_prob).sample()
         
         # Select next option greedily based on Q-values
         Q = self.get_Q(global_state)
@@ -320,11 +315,9 @@ class OptionCriticGNN(nn.Module):
             # Take the mean probability across all story members
             aggregated_probs = action_probs.mean(dim=0)  # [num_actions]
             
-            if self.testing:
-                action = torch.argmax(aggregated_probs, dim=-1)
-            else:
-                action_dist = Categorical(aggregated_probs)
-                action = action_dist.sample()
+            # Always use stochastic sampling for consistency between training and inference
+            action_dist = Categorical(aggregated_probs)
+            action = action_dist.sample()
             
             logp = torch.log(aggregated_probs[action] + 1e-8)
             entropy = -(aggregated_probs * torch.log(aggregated_probs + 1e-8)).sum()
@@ -342,15 +335,10 @@ class OptionCriticGNN(nn.Module):
                 # Get probabilities for this story group
                 group_probs = action_probs[start_idx:end_idx].mean(dim=0)  # Average within group
                 
-                if self.testing:
-                    # Deterministic: pick argmax within this story group
-                    local_action = torch.argmax(group_probs, dim=-1)
-                    local_prob = group_probs[local_action]
-                else:
-                    # Stochastic: sample from this story group
-                    action_dist = Categorical(group_probs)
-                    local_action = action_dist.sample()
-                    local_prob = group_probs[local_action]
+                # Always use stochastic sampling for consistency between training and inference
+                action_dist = Categorical(group_probs)
+                local_action = action_dist.sample()
+                local_prob = group_probs[local_action]
                 
                 # Keep track of the best action across all groups
                 if local_prob > best_prob:

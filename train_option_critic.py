@@ -634,6 +634,7 @@ def evaluate_model(base_env, oc_model, device, num_episodes, max_option_len, log
     np.random.seed(seed)
     
     episode_scores = []
+    episode_total_rewards = []
     episode_lengths = []
     episode_actions = []  # Collect action sequences
     episode_options = []  # Collect option sequences
@@ -654,6 +655,7 @@ def evaluate_model(base_env, oc_model, device, num_episodes, max_option_len, log
         curr_option = 0
         greedy_option = 0
         episode_score = 0.0
+        episode_total_reward = 0.0
         episode_option_count = 0
         
         # Track action and option sequences for this episode
@@ -664,8 +666,12 @@ def evaluate_model(base_env, oc_model, device, num_episodes, max_option_len, log
         
         while not done :
             if option_termination:
-                # Always use greedy option selection during evaluation
-                curr_option = greedy_option
+                # Use epsilon-greedy option selection for consistency with training
+                epsilon = oc_model.epsilon
+                if np.random.rand() < epsilon:
+                    curr_option = np.random.choice(oc_model.num_options)
+                else:
+                    curr_option = greedy_option
             
             structure, next_state, option_done, episode_done, o_stats, step_transitions, termination_reason = rollout_option(
                 structure, base_env, device, max_option_len, curr_option, oc_model, None, logger, 0.0
@@ -686,6 +692,9 @@ def evaluate_model(base_env, oc_model, device, num_episodes, max_option_len, log
             if bool(o_stats.get("passed", False)):
                 option_total_reward = sum(tr["original_reward"] for tr in step_transitions)
                 episode_score += float(option_total_reward)
+
+                option_total_real_reward = sum(tr["reward"] for tr in step_transitions)
+                episode_total_reward += float(option_total_real_reward)
             
             episode_option_count += 1
             
@@ -720,6 +729,7 @@ def evaluate_model(base_env, oc_model, device, num_episodes, max_option_len, log
                 )
         
         episode_scores.append(episode_score)
+        episode_total_rewards.append(episode_total_reward)
         episode_lengths.append(episode_option_count)
         episode_actions.append(episode_action_sequence)
         episode_options.append(episode_option_sequence)
@@ -759,7 +769,7 @@ def evaluate_model(base_env, oc_model, device, num_episodes, max_option_len, log
 def parse_args():
     parser = argparse.ArgumentParser()
     # env
-    parser.add_argument("--structure_shape", type=str, default="fixed")
+    parser.add_argument("--structure_shape", type=str, default="random")
     parser.add_argument("--add_structure_geometry", action="store_true", default=True)
     parser.add_argument("--add_response_features", action="store_true", default=True)
     parser.add_argument("--reward_type", type=str, default="material")
@@ -768,31 +778,31 @@ def parse_args():
     parser.add_argument("--check_acceleration", action="store_true", default=False)
     parser.add_argument("--check_displacement", action="store_true", default=True)
     # OC
-    parser.add_argument("--num_options", type=int, default=8)
+    parser.add_argument("--num_options", type=int, default=4)
     parser.add_argument("--max_option_len", type=int, default=16)
     parser.add_argument("--temperature", type=float, default=1.0)
     parser.add_argument("--eps_start", type=float, default=1.0)
     parser.add_argument("--eps_min", type=float, default=0.1)
-    parser.add_argument("--eps_decay", type=int, default=int(5e3))
+    parser.add_argument("--eps_decay", type=int, default=int(1e4))
     parser.add_argument("--eps_test", type=float, default=0.05)
     parser.add_argument("--gamma", type=float, default=0.99)
     parser.add_argument("--update_frequency", type=int, default=2)
     parser.add_argument("--freeze_interval", type=int, default=512) # 512
     parser.add_argument("--batch_size", type=int, default=256)
-    parser.add_argument("--lr", type=float, default=1e-3) # 1e-4
-    parser.add_argument("--actor_lr", type=float, default=1e-3) # 1e-4
-    parser.add_argument("--critic_lr", type=float, default=1e-3) # 1e-4
+    parser.add_argument("--lr", type=float, default=1e-4) # 1e-4
+    parser.add_argument("--actor_lr", type=float, default=1e-4) # 1e-4
+    parser.add_argument("--critic_lr", type=float, default=1e-4) # 1e-4
     parser.add_argument("--grad_clip", type=float, default=10.0)
     parser.add_argument("--device", type=str, default="cuda")
-    parser.add_argument("--epochs", type=int, default=100)
-    parser.add_argument("--hidden_dim", type=int, default=64) # 128
+    parser.add_argument("--epochs", type=int, default=300)
+    parser.add_argument("--hidden_dim", type=int, default=128) # 128
     parser.add_argument("--num_layers", type=int, default=3)  # 3 
     parser.add_argument("--termination_reg", type=float, default=0.01)
     parser.add_argument("--entropy_reg", type=float, default=0.01)
-    parser.add_argument("--option_length_bonus", type=float, default=0.1, help="Bonus reward for longer options: reward += (step-1) * bonus")
+    parser.add_argument("--option_length_bonus", type=float, default=0.005, help="Bonus reward for longer options: reward += (step-1) * bonus")
     parser.add_argument("--termination_lr_ratio", type=float, default=0.01, help="Termination learning rate as ratio of actor_lr (termination_lr = actor_lr * ratio)")
     parser.add_argument("--eval_frequency", type=int, default=10, help="Evaluate model every N training episodes")
-    parser.add_argument("--eval_episodes", type=int, default=1, help="Number of episodes for evaluation")
+    parser.add_argument("--eval_episodes", type=int, default=10, help="Number of episodes for evaluation")
     return parser.parse_args()
 
 
@@ -1001,6 +1011,7 @@ def main(args):
         episode_termination_counter = {"beta": 0, "max_len": 0, "minimum_section": 0}
         episode_entropies = []
         episode_score = 0.0
+        episode_total_reward = 0.0
         last_pass_sections = None
         last_pass_saved_material = None
         
@@ -1067,6 +1078,10 @@ def main(args):
             if bool(o_stats.get("passed", False)):
                 option_total_reward = sum(tr["original_reward"] for tr in step_transitions)
                 episode_score += float(option_total_reward)
+
+                option_total_real_reward = sum(tr["reward"] for tr in step_transitions)
+                episode_total_reward += float(option_total_real_reward)
+
                 last_pass_sections = o_stats.get("story_level_sections", last_pass_sections)
                 last_pass_saved_material = o_stats.get("option_saved_material", last_pass_saved_material)
 
@@ -1232,7 +1247,6 @@ def main(args):
         # episode-level aggregates
         all_stats["episode_rewards"].append(float(np.sum([t[2] if isinstance(t, (list, tuple)) and len(t) > 2 else 0.0 for t in []])))  # placeholder, kept for compatibility
         # Calculate episode reward from step rewards
-        episode_total_reward = sum(tr["reward"] for tr in step_transitions)
         all_stats["episode_rewards"][-1] = float(episode_total_reward) if len(all_stats["episode_rewards"]) > 0 else float(episode_total_reward)
         all_stats["episode_score"].append(float(episode_score))
         all_stats["last_pass_sections"].append(last_pass_sections)
