@@ -69,7 +69,7 @@ class Environment:
             z_span_len = 8000
             x_span_lens = [x_span_len for i in range(x_span_num)]
             z_span_lens = [z_span_len for i in range(z_span_num)]
-            story_num = 6
+            story_num = 7
             story_height = 3200
         elif self.structure_shape == "random":
             x_span_num = 3  # original: 3
@@ -176,7 +176,7 @@ class Environment:
                 z_span_len = 8000
                 x_span_lens = [x_span_len for i in range(x_span_num)]
                 z_span_lens = [z_span_len for i in range(z_span_num)]
-                story_num = 6
+                story_num = 7
                 story_height = 3200
 
             elif self.structure_shape == "small_random":

@@ -769,7 +769,7 @@ def evaluate_model(base_env, oc_model, device, num_episodes, max_option_len, log
 def parse_args():
     parser = argparse.ArgumentParser()
     # env
-    parser.add_argument("--structure_shape", type=str, default="random")
+    parser.add_argument("--structure_shape", type=str, default="fixed")
     parser.add_argument("--add_structure_geometry", action="store_true", default=True)
     parser.add_argument("--add_response_features", action="store_true", default=True)
     parser.add_argument("--reward_type", type=str, default="material")
@@ -783,7 +783,7 @@ def parse_args():
     parser.add_argument("--temperature", type=float, default=1.0)
     parser.add_argument("--eps_start", type=float, default=1.0)
     parser.add_argument("--eps_min", type=float, default=0.1)
-    parser.add_argument("--eps_decay", type=int, default=int(1e4))
+    parser.add_argument("--eps_decay", type=int, default=int(3e4))
     parser.add_argument("--eps_test", type=float, default=0.05)
     parser.add_argument("--gamma", type=float, default=0.99)
     parser.add_argument("--update_frequency", type=int, default=2)
