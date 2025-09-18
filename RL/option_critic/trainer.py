@@ -464,6 +464,9 @@ class OptionCriticTrainer:
         # Generate test behavior visualization after evaluation
         self.plot_test_behaviors(episode_num, eval_history)
 
+        # Generate option preview visualization for best episode
+        self.generate_option_preview_visualization(episode_num, eval_history)
+
         return avg_score, avg_episode_length, success_rate
 
     def train(self):
@@ -616,6 +619,76 @@ class OptionCriticTrainer:
             except:
                 pass
             return None
+
+    def generate_option_preview_visualization(self, episode_num, eval_history):
+        """
+        Generate option preview visualization for the best episode in this evaluation round.
+
+        Args:
+            episode_num: Current training episode number
+            eval_history: Evaluation history containing episode data
+        """
+        # Check if option preview is enabled and should run this round
+        if not getattr(self.args, 'enable_option_preview', True):
+            return None
+
+        preview_frequency = getattr(self.args, 'option_preview_frequency', 10)
+        if (episode_num + 1) % preview_frequency != 0:
+            return None
+
+        # Find best episode from evaluation
+        if not eval_history.get('scores'):
+            self.logger.warning("No scores found in eval_history")
+            return None
+
+        best_episode_idx = np.argmax(eval_history['scores'])
+        best_episode_score = eval_history['scores'][best_episode_idx]
+
+        # Prepare best episode data
+        best_episode_data = {
+            'actions': eval_history['actions'][best_episode_idx],
+            'options': eval_history['options'][best_episode_idx] if 'options' in eval_history else [],
+            'option_instances': eval_history['option_instances'][best_episode_idx] if 'option_instances' in eval_history else []
+        }
+
+        # Check if we have the required option data
+        if not best_episode_data.get('option_instances'):
+            self.logger.warning("No option_instances data found, skipping option preview visualization")
+            return None
+
+        episode_info = {
+            'episode_number': best_episode_idx,
+            'round_number': episode_num + 1,
+            'score': best_episode_score,
+            'avg_score': eval_history.get('avg_score', best_episode_score)
+        }
+
+        self.logger.info(f"Generating option preview for round {episode_num+1}, best episode {best_episode_idx} with score {best_episode_score:.2f}")
+
+        # Import and call visualization function
+        from Visualization.visualize import visualize_option_preview_process
+
+        # Create a mock agent that works with the visualization
+        # The visualize_option_preview_process expects a DeepQAgent but we have OptionCriticGNN
+        mock_agent = type('MockAgent', (), {
+            'device': self.device,
+            'gnn': self.oc,  # Pass the entire OptionCriticGNN model as 'gnn'
+            'online_q_network': None,  # OptionCriticGNN doesn't have this
+            'target_q_network': None   # OptionCriticGNN doesn't have this
+        })()
+
+        # Call visualization function
+        visualize_option_preview_process(
+            agent=mock_agent,
+            env=self.base_env,
+            logger=self.logger,
+            save_model_path=self.best_model_path,
+            episode_data=best_episode_data,
+            episode_info=episode_info,
+            save_base_dir=self.ckpt_dir
+        )
+
+        return True
 
     def _save_episode_stats(self):
         """Save episode statistics to oc_stats.json (like original implementation)."""

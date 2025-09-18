@@ -49,4 +49,8 @@ def parse_args():
     parser.add_argument("--eval_frequency", type=int, default=1, help="Evaluate model every N training episodes")
     parser.add_argument("--eval_episodes", type=int, default=3, help="Number of episodes for evaluation")
 
+    # Option preview visualization settings
+    parser.add_argument("--enable_option_preview", action="store_true", default=True, help="Enable option preview visualization")
+    parser.add_argument("--option_preview_frequency", type=int, default=1, help="Generate option preview every N evaluation rounds")
+
     return parser.parse_args()
