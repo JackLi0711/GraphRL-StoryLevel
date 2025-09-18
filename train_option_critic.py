@@ -978,13 +978,14 @@ def main(args):
     best_model_path = ckpt_dir / "best_model.pt"
     best_model_info_path = ckpt_dir / "best_model_info.json"
 
-    # Evaluation history tracking for visualization
+    # Evaluation history tracking for visualization - modified to track only best episode per round
     evaluation_histories = {
-        "all_scores": [],      # Flattened list of all scores from all evaluation episodes
-        "all_actions": [],     # Flattened list of all action sequences
-        "all_options": [],     # Flattened list of all option sequences
-        "all_option_instances": [], # Flattened list of all option instances with termination info
-        "all_actions_SCWB": [] # For compatibility
+        "round_best_scores": [],      # Average scores for each evaluation round
+        "round_best_actions": [],     # Action sequence of best episode in each round
+        "round_best_options": [],     # Option sequence of best episode in each round
+        "round_best_option_instances": [], # Option instances of best episode in each round
+        "round_best_actions_SCWB": [], # For compatibility
+        "round_numbers": []           # Training episode numbers when evaluations occurred
     }
 
     # Training history tracking for visualization
@@ -1268,31 +1269,33 @@ def main(args):
             all_stats["eval_success_rates"].append(float(success_rate))
             all_stats["eval_episode_lengths"].append(float(avg_episode_length))
             
-            # Collect evaluation histories for visualization
-            evaluation_histories["all_scores"].extend(eval_history["scores"])
-            evaluation_histories["all_actions"].extend(eval_history["actions"])
-            evaluation_histories["all_options"].extend(eval_history["options"])
-            evaluation_histories["all_option_instances"].extend(eval_history["option_instances"])
-            evaluation_histories["all_actions_SCWB"].extend(eval_history["actions_SCWB"])
+            # Find the best episode in this evaluation round and collect only its data for visualization
+            best_episode_idx = eval_history["scores"].index(max(eval_history["scores"]))
+            evaluation_histories["round_best_scores"].append(avg_score)  # Store average score for this round
+            evaluation_histories["round_best_actions"].append(eval_history["actions"][best_episode_idx])
+            evaluation_histories["round_best_options"].append(eval_history["options"][best_episode_idx])
+            evaluation_histories["round_best_option_instances"].append(eval_history["option_instances"][best_episode_idx])
+            evaluation_histories["round_best_actions_SCWB"].append(eval_history["actions_SCWB"][best_episode_idx])
+            evaluation_histories["round_numbers"].append(ep + 1)  # Store training episode number
             
             logger.info(f"Episode {ep+1} evaluation: score={avg_score:.2f}, success_rate={success_rate:.1f}%")
-            logger.info(f"Total evaluation episodes collected so far: {len(evaluation_histories['all_scores'])}")
+            logger.info(f"Total evaluation rounds completed so far: {len(evaluation_histories['round_best_scores'])}")
             
             # Generate test behavior visualization after collecting evaluation histories
             logger.info(f"Generating test behavior visualization after inference (episode {ep+1})...")
-            logger.debug(f"Using accumulated evaluation histories with {len(evaluation_histories['all_scores'])} total episodes")
+            logger.debug(f"Using best episode from current evaluation round (total rounds: {len(evaluation_histories['round_best_scores'])})")
             
             # Create a Record-like object for compatibility with plot_test_behaviors
             class EvaluationRecord:
-                def __init__(self, accumulated_histories):
-                    # Use accumulated evaluation data for visualization
-                    self.training_record = {"score": accumulated_histories["all_scores"]}
+                def __init__(self, round_histories):
+                    # Use only the best episode from each evaluation round for visualization
+                    self.training_record = {"score": round_histories["round_best_scores"]}
                     self.testing_record = {
-                        "score": accumulated_histories["all_scores"],
-                        "action": accumulated_histories["all_actions"],
-                        "action_SCWB": accumulated_histories["all_actions_SCWB"],
-                        "option": accumulated_histories["all_options"],
-                        "option_instances": accumulated_histories["all_option_instances"]
+                        "score": round_histories["round_best_scores"],
+                        "action": round_histories["round_best_actions"],
+                        "action_SCWB": round_histories["round_best_actions_SCWB"],
+                        "option": round_histories["round_best_options"],
+                        "option_instances": round_histories["round_best_option_instances"]
                     }
             
             # Create record with accumulated evaluation histories
@@ -1318,6 +1321,18 @@ def main(args):
                     test_option_instances = record.testing_record.get("option_instances", None)
                     
                     logger.debug(f"Test data summary - scores: {len(test_scores)}, actions: {len(test_actions)}, options: {len(test_options)}")
+
+                    # Debug option instances data
+                    if test_option_instances is not None:
+                        logger.debug(f"Option instances available: {len(test_option_instances)} episodes")
+                        if len(test_option_instances) > 0 and test_option_instances[0] is not None:
+                            first_episode_instances = test_option_instances[0]
+                            logger.debug(f"First episode instances: {len(first_episode_instances) if first_episode_instances else 0} steps")
+                            if first_episode_instances and len(first_episode_instances) > 0:
+                                sample_instance = first_episode_instances[0]
+                                logger.debug(f"Sample instance structure: {list(sample_instance.keys()) if isinstance(sample_instance, dict) else type(sample_instance)}")
+                    else:
+                        logger.debug("Option instances data is None")
                     
                     # Validate base_env and story_num
                     if not hasattr(base_env, '_testing_structure') or not hasattr(base_env._testing_structure, 'story_num'):
@@ -1349,11 +1364,9 @@ def main(args):
                     
                     logger.debug(f"Action types mapping completed for all {len(action_types)} episodes")
                     
-                    # Create episode mapping
-                    if len(train_scores) > 0:
-                        test_episodes = np.linspace(1, len(train_scores), num=len(test_scores))
-                    else:
-                        test_episodes = np.arange(1, len(test_scores)+1, 1)
+                    # Create episode mapping - use the actual training episode numbers when evaluations occurred
+                    # Since we now store only the best episode from each round, use the round_numbers directly
+                    test_episodes = evaluation_histories["round_numbers"]
                     
                     color_mapping = {'xdir-beam': 'dodgerblue', 'zdir-beam': 'yellowgreen', 'out-col': 'orange', 'in-col': 'red'}
                     
@@ -1367,41 +1380,114 @@ def main(args):
                             count = 1
                             ax1.bar(test_episodes[i], count, color=color, width=3, bottom=j, zorder=1)
                     
-                    # Add option boundaries (simplified version)
-                    for i, (actions, options) in enumerate(zip(test_actions, test_options)):
-                        if len(options) == 0:
-                            continue
-                        
-                        current_option = options[0]
-                        option_start = 0
-                        
-                        for j in range(1, len(options)):
-                            if options[j] != current_option or j == len(options) - 1:
-                                option_end = j if options[j] != current_option else j + 1
-                                
-                                rect_x = test_episodes[i] - 1.5
-                                rect_width = 3
-                                rect_y = option_start
-                                rect_height = option_end - option_start
-                                
-                                rect = Rectangle((rect_x, rect_y), rect_width, rect_height, 
-                                               linewidth=3, edgecolor='black', facecolor='none', 
-                                               zorder=3, linestyle='-')
-                                ax1.add_patch(rect)
-                                
-                                ax1.text(rect_x + rect_width/2, rect_y + rect_height/2, 
-                                        f'O{current_option}', ha='center', va='center', 
-                                        fontsize=8, fontweight='bold', color='black', zorder=4,
-                                        bbox=dict(boxstyle="round,pad=0.1", facecolor='white', alpha=0.8))
-                                
-                                if j < len(options):
-                                    current_option = options[j]
-                                option_start = j
+                    # Add option boundaries with thick black rectangles
+                    # Use option instances data if available, otherwise fall back to old method
+                    use_new_method = False
+                    if test_option_instances is not None and len(test_option_instances) > 0:
+                        logger.debug(f"Trying to use option_instances data for {len(test_option_instances)} episodes")
+                        use_new_method = True
+                        # New method using option instance data
+                        for i, (actions, instances) in enumerate(zip(test_actions, test_option_instances)):
+                            if not instances or len(instances) == 0:
+                                logger.debug(f"Episode {i}: No instances data, skipping")
+                                continue
+
+                            # Validate that instances is a list and has the expected structure
+                            if not isinstance(instances, list) or not isinstance(instances[0], dict):
+                                logger.warning(f"Episode {i}: Invalid instances format, falling back to old method")
+                                use_new_method = False
+                                break
+
+                            if "instance_id" not in instances[0] or "option_index" not in instances[0]:
+                                logger.warning(f"Episode {i}: Missing keys in instances, falling back to old method")
+                                use_new_method = False
+                                break
+
+                            logger.debug(f"Episode {i}: Processing {len(instances)} instance steps")
+
+                            # Group consecutive steps by option instance ID
+                            current_instance_id = instances[0]["instance_id"]
+                            current_option_index = instances[0]["option_index"]
+                            option_start = 0
+
+                            for j in range(1, len(instances)):
+                                # Check if option instance changed or if we're at the end
+                                if instances[j]["instance_id"] != current_instance_id or j == len(instances) - 1:
+                                    # Option instance boundary detected or end of episode
+                                    option_end = j if instances[j]["instance_id"] != current_instance_id else j + 1
+
+                                    logger.debug(f"Episode {i}: Option instance boundary: steps {option_start}-{option_end}, option {current_option_index}")
+
+                                    # Draw thick black rectangle around this option instance
+                                    rect_x = test_episodes[i] - 1.5  # Adjust for bar width
+                                    rect_width = 3  # Match bar width
+                                    rect_y = option_start
+                                    rect_height = option_end - option_start
+
+                                    rect = Rectangle((rect_x, rect_y), rect_width, rect_height,
+                                                   linewidth=3, edgecolor='black', facecolor='none',
+                                                   zorder=3, linestyle='-')
+                                    ax1.add_patch(rect)
+
+                                    # Add option number label with instance info
+                                    ax1.text(rect_x + rect_width/2, rect_y + rect_height/2,
+                                            f'O{current_option_index}', ha='center', va='center',
+                                            fontsize=8, fontweight='bold', color='black', zorder=4,
+                                            bbox=dict(boxstyle="round,pad=0.1", facecolor='white', alpha=0.8))
+
+                                    # Update for next option instance
+                                    if j < len(instances):
+                                        current_instance_id = instances[j]["instance_id"]
+                                        current_option_index = instances[j]["option_index"]
+                                    option_start = j
+
+                    # Fall back to old method if new method was not used or failed
+                    if not use_new_method:
+                        logger.debug("Using fallback method with option index changes")
+                        # Fall back to old method using option index changes
+                        for i, (actions, options) in enumerate(zip(test_actions, test_options)):
+                            if len(options) == 0:
+                                logger.debug(f"Episode {i}: No options data, skipping")
+                                continue
+
+                            logger.debug(f"Episode {i}: Processing {len(options)} option steps")
+
+                            # Find option boundaries
+                            current_option = options[0]
+                            option_start = 0
+
+                            for j in range(1, len(options)):
+                                if options[j] != current_option or j == len(options) - 1:
+                                    # Option boundary detected or end of episode
+                                    option_end = j if options[j] != current_option else j + 1
+
+                                    logger.debug(f"Episode {i}: Option boundary: steps {option_start}-{option_end}, option {current_option}")
+
+                                    # Draw thick black rectangle around this option
+                                    rect_x = test_episodes[i] - 1.5  # Adjust for bar width
+                                    rect_width = 3  # Match bar width
+                                    rect_y = option_start
+                                    rect_height = option_end - option_start
+
+                                    rect = Rectangle((rect_x, rect_y), rect_width, rect_height,
+                                                   linewidth=3, edgecolor='black', facecolor='none',
+                                                   zorder=3, linestyle='-')
+                                    ax1.add_patch(rect)
+
+                                    # Add option number label
+                                    ax1.text(rect_x + rect_width/2, rect_y + rect_height/2,
+                                            f'O{current_option}', ha='center', va='center',
+                                            fontsize=8, fontweight='bold', color='black', zorder=4,
+                                            bbox=dict(boxstyle="round,pad=0.1", facecolor='white', alpha=0.8))
+
+                                    # Update for next option
+                                    current_option = options[j] if j < len(options) else current_option
+                                    option_start = j
                     
                     # Set up the plot
                     ax1.set_xlabel("episode", fontsize=16)
                     ax1.set_ylabel("action index", fontsize=16)
-                    ax1.set_title(f"Accumulated Test Episodes Behavior (up to training episode {episode_num})", fontsize=18, fontweight='bold')
+                    ax1.set_title(f"Best Test Episode Behavior from Each Evaluation Round (up to training episode {episode_num})", fontsize=18, fontweight='bold')
                     ax1.grid(True, alpha=0.3)
                     
                     # Add second y-axis for scores
@@ -1450,10 +1536,10 @@ def main(args):
             # Generate the plot with accumulated data
             result_path = plot_test_behaviors_inference_accumulated(eval_record, base_env, ckpt_dir, ep+1)
             if result_path:
-                logger.debug(f"Test episodes plotted successfully: {len(evaluation_histories['all_scores'])} accumulated episodes")
+                logger.debug(f"Test episodes plotted successfully: {len(evaluation_histories['round_best_scores'])} evaluation rounds completed")
             else:
                 logger.warning(f"Failed to plot test episodes for episode {ep+1}")
-                logger.debug(f"Evaluation histories summary: {len(evaluation_histories['all_scores'])} scores, {len(evaluation_histories['all_actions'])} actions")
+                logger.debug(f"Evaluation histories summary: {len(evaluation_histories['round_best_scores'])} rounds, {len(evaluation_histories['round_best_actions'])} best episodes")
             
             # Check if this is the best model so far
             if avg_score > best_model_score:
@@ -1621,7 +1707,7 @@ def main(args):
         
     logger.info(f"Behavior visualizations have been generated per episode during training")
     logger.info(f"Training episodes processed: {len(training_histories['all_scores'])}")
-    logger.info(f"Evaluation episodes processed: {len(evaluation_histories['all_scores'])}")
+    logger.info(f"Evaluation rounds processed: {len(evaluation_histories['round_best_scores'])}")
     logger.info(f"Check checkpoint directory for individual episode behavior plots: {ckpt_dir}")
     
     # Loss history summary
