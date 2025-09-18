@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(conda info:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
