@@ -133,9 +133,20 @@ def plot_test_behaviors(rec: Record, env: Environment, checkpoint_dir: Path) -> 
     for action in test_actions:
         types = []
         for a in action:
-            if a < story_num: action_type = "xdir-beam"
-            elif a < story_num*2: action_type = "zdir-beam"
-            elif a < story_num*3: action_type = "out-col"
+            # Handle different tensor types and extract action index
+            if hasattr(a, 'item'):
+                # Single element tensor
+                if a.numel() == 1:
+                    a_val = a.item()
+                else:
+                    # Multi-element tensor - get the argmax as action index
+                    a_val = a.argmax().item()
+            else:
+                a_val = a
+
+            if a_val < story_num: action_type = "xdir-beam"
+            elif a_val < story_num*2: action_type = "zdir-beam"
+            elif a_val < story_num*3: action_type = "out-col"
             else: action_type = "in-col"
             types.append(action_type)
         action_types.append(types)

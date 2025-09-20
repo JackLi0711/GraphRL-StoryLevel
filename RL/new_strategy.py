@@ -89,8 +89,9 @@ def strong_column_weak_beam_driven_action(structure: Structure, fail_conditions:
     return xdir_beam_update_action, zdir_beam_update_action
 
 
-def strong_column_weak_beam_driven_update(structure: Structure, analysis_dir: Path, logger: Logger=None) -> tuple[float, list[int], dict]:    
-    auxiliary_values, load_cases, responses = check.get_response(structure, analysis_dir)
+def strong_column_weak_beam_driven_update(structure: Structure, analysis_dir: Path, logger: Logger=None) -> tuple[float, list[int], dict]:
+    load_cases, responses = check.get_response(structure, analysis_dir)
+    auxiliary_values = {}  # Initialize empty auxiliary values dict
     fail_conditions = check_strong_column_weak_beam(structure, responses)
     xdir_beam_update_action, zdir_beam_update_action = strong_column_weak_beam_driven_action(structure, fail_conditions)
     update_actions = xdir_beam_update_action + zdir_beam_update_action
@@ -112,7 +113,7 @@ def strong_column_weak_beam_driven_update(structure: Structure, analysis_dir: Pa
         print(f"{structure.story_level_sections}\n")
         material_saved += score
     
-        auxiliary_values, load_cases, responses = check.get_response(structure, analysis_dir)
+        load_cases, responses = check.get_response(structure, analysis_dir)
         fail_conditions = check_strong_column_weak_beam(structure, responses)
         xdir_beam_update_action, zdir_beam_update_action = strong_column_weak_beam_driven_action(structure, fail_conditions)
         update_actions = xdir_beam_update_action + zdir_beam_update_action
