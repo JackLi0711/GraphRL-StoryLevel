@@ -86,6 +86,9 @@ class DACEnvironmentWrapper:
         # Reset base environment
         structure_obj = self.base_env.reset(**kwargs)
 
+        # Store current structure for easy access
+        self._current_structure = structure_obj
+
         # Reset DAC-specific tracking
         self.current_option = None
         self.option_start_step = 0
@@ -159,7 +162,8 @@ class DACEnvironmentWrapper:
         self.option_states.append(self._extract_dual_states(current_structure))
         self.option_actions.append(action)
 
-        # Update material usage
+        # Update current structure and material usage
+        self._current_structure = next_structure
         self.current_material_usage = next_structure.calculate_material_usage()
 
         # Check if all indexes are zero (structure at minimum) - force terminate episode and option
@@ -387,7 +391,7 @@ class DACEnvironmentWrapper:
             self.logger.error(f"Error executing action {action_int}: {e}")
             # Return safe fallback values
             raise ValueError(f"Error executing action {action_int}: {e}")
-            return structure_obj, -10.0, True, "execution_error", str(e), False
+            # return structure_obj, -10.0, True, "execution_error", str(e), False
 
     def _compute_dual_rewards(self,
                             base_reward: float,
@@ -474,9 +478,16 @@ class DACEnvironmentWrapper:
 
     def _get_current_structure(self) -> structure.Structure:
         """Get current structure from base environment."""
-        # This should return the current structure state
-        # For now, placeholder implementation
-        return self.base_env._testing_structure
+        # Check if we have a current structure stored
+        if hasattr(self, '_current_structure') and self._current_structure is not None:
+            return self._current_structure
+
+        # Fallback to base environment's testing structure
+        if hasattr(self.base_env, '_testing_structure') and self.base_env._testing_structure is not None:
+            return self.base_env._testing_structure
+
+        # If nothing is available, raise an error with helpful message
+        raise ValueError("No current structure available. Make sure environment has been reset properly.")
 
     def get_option_statistics(self) -> Dict[str, Any]:
         """Get statistics about current option."""

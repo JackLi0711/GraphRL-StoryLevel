@@ -52,6 +52,7 @@ class DACAgent:
 
         # Initialize network
         network_config = config.get_network_config()
+        network_config['logger'] = self.logger  # Pass logger to network
         self.network = DACDoubleActorCritic(**network_config)
 
         # Initialize optimizers (separate for high and low level)
@@ -136,6 +137,7 @@ class DACAgent:
 
             # Create valid actions mask (like Option-Critic)
             valid_mask = None
+            self.logger.debug(f"structure_obj is None  : {structure_obj is None}")
             if structure_obj is not None:
                 valid_mask = self._create_valid_actions_mask(structure_obj, self.config.device)
                 self.logger.debug(f"Valid actions mask: {valid_mask.sum().item()}/{len(valid_mask)} actions available")
@@ -449,19 +451,20 @@ class DACAgent:
         else:
             raise ValueError("Invalid state format")
 
-        # Since we're using only the first graph state, we need to use only first element
-        # of other batch tensors to match dimensions
-        # TODO: Implement proper graph batching for full batch processing
-        batch_size = 1  # Since we're using only first graph state
+        # CURRENT LIMITATION: Due to graph batching complexity, we only process
+        # one sample at a time. This limits the effective mini-batch size to 1,
+        # reducing training efficiency but maintaining correctness.
+        effective_batch_size = 1
 
         # Take only first element of each tensor to match single graph prediction
-        actions = actions[:batch_size]
-        options = options[:batch_size]
-        log_probs_old = log_probs_old[:batch_size]
-        returns = returns[:batch_size]
-        advantages = advantages[:batch_size]
-        prev_options = prev_options[:batch_size]
-        inits = inits[:batch_size]
+        # This ensures dimensional consistency with the single graph output
+        actions = actions[:effective_batch_size]
+        options = options[:effective_batch_size]
+        log_probs_old = log_probs_old[:effective_batch_size]
+        returns = returns[:effective_batch_size]
+        advantages = advantages[:effective_batch_size]
+        prev_options = prev_options[:effective_batch_size]
+        inits = inits[:effective_batch_size]
 
         # Compute current policy
         if mdp == 'hat':
@@ -519,13 +522,24 @@ class DACAgent:
         }
 
     def _combine_graph_batch(self, states: List[Dict[str, torch.Tensor]]) -> Dict[str, torch.Tensor]:
-        """Combine a batch of graph data."""
+        """
+        Combine a batch of graph data.
+
+        CURRENT LIMITATION: This implementation only uses the first sample from the batch
+        due to the complexity of graph batching. Each graph represents a building structure
+        with variable number of nodes and edges, making naive tensor concatenation impossible.
+
+        Proper graph batching would require:
+        1. PyTorch Geometric's Batch.from_data_list()
+        2. Careful handling of batch indices for story_batch and structure_story_ptr
+        3. Proper unbatching for action selection per structure
+
+        For now, training effectively uses batch_size=1.
+        """
         if not states:
             raise ValueError("Empty states list")
 
-        # For now, just return the first state since proper graph batching
-        # is complex and requires PyTorch Geometric utilities
-        # TODO: Implement proper graph batching using torch_geometric.data.Batch
+        # Use only the first state - this limits effective batch size to 1
         return states[0]
 
     def should_update(self) -> bool:
@@ -623,7 +637,13 @@ class DACAgent:
         Returns:
             Boolean tensor mask where True = valid action
         """
-        # Get all restricted actions
+        # First, create dynamic action mask based on current structure's story_num
+        current_story_num = getattr(structure_obj, 'story_num', 4)  # Default to 4 if not found
+        dynamic_mask = self.config.get_action_mask(current_story_num)
+
+        self.logger.debug(f"Dynamic mask based on {current_story_num} stories: {dynamic_mask.sum().item()}/{len(dynamic_mask)} actions")
+
+        # Get all restricted actions based on structure constraints
         already_minimum = set(getattr(structure_obj, 'already_minimum_section_story_indexes', []) or [])
         restricted_actions = set()
 
@@ -638,14 +658,15 @@ class DACAgent:
         self.logger.debug(f"Already minimum: {already_minimum}, Restricted: {restricted_actions}")
         self.logger.debug(f"Total invalid actions: {invalid_actions}")
 
-        # Create mask tensor (True = valid action)
-        num_actions = len(structure_obj.story_level_actions)
-        valid_mask = torch.ones(num_actions, dtype=torch.bool, device=device)
+        # Start with dynamic mask, then apply structure-specific restrictions
+        valid_mask = dynamic_mask.clone()
 
+        # Apply structure-specific restrictions (but only to valid actions within current structure size)
         for invalid_action in invalid_actions:
-            if 0 <= invalid_action < num_actions:
+            if 0 <= invalid_action < current_story_num * 4:  # Only mask if within current structure's action space
                 valid_mask[invalid_action] = False
 
+        self.logger.debug(f"Final mask after structure constraints: {valid_mask.sum().item()}/{len(valid_mask)} actions")
         return valid_mask
 
     def _check_all_indexes_zero(self, structure_obj) -> bool:

@@ -199,6 +199,8 @@ def load_config(args) -> DACConfig:
 
     if args.structure_shape:
         config.structure_shape = args.structure_shape
+        # Recalculate num_actions based on new structure_shape
+        config.num_actions = config._get_max_action_size()
 
     if args.no_response_features:
         config.add_response_features = False

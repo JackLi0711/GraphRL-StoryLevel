@@ -15,6 +15,7 @@ import torch.nn.functional as F
 from torch.distributions import Categorical, Normal
 from typing import Tuple, Optional, Dict, Any
 import numpy as np
+import logging
 
 from ..model import StateGNN
 
@@ -38,7 +39,8 @@ class DACDoubleActorCritic(nn.Module):
                  num_layers: int,
                  num_actions: int,
                  num_options: int,
-                 device: str = 'cpu'):
+                 device: str = 'cpu',
+                 logger: Optional[logging.Logger] = None):
         """
         Initialize DAC Double Actor-Critic network.
 
@@ -51,6 +53,7 @@ class DACDoubleActorCritic(nn.Module):
             num_actions: Number of primitive actions
             num_options: Number of options
             device: Device to use
+            logger: Logger instance (optional)
         """
         super(DACDoubleActorCritic, self).__init__()
 
@@ -62,6 +65,7 @@ class DACDoubleActorCritic(nn.Module):
         self.num_actions = num_actions
         self.num_options = num_options
         self.device = torch.device(device)
+        self.logger = logger or logging.getLogger(f"dac_dac_training")
 
         # StateGNN for feature extraction
         self.state_gnn = StateGNN(
@@ -247,42 +251,77 @@ class DACDoubleActorCritic(nn.Module):
         Based on ASquaredC_PPO_agent.compute_pi_bar()
 
         Args:
-            story_features: Story-level features [batch_size, feature_dim]
-            options: Selected options [batch_size] or scalar
+            story_features: Story-level features [num_actions, feature_dim] - features for each action
+            options: Selected options [1] or scalar
 
         Returns:
-            Tuple of (mean, std) for action distribution
+            Tuple of (mean, std) for action distribution [num_actions]
         """
+        # Debug logging for inputs
+        self.logger.debug(f"compute_pi_bar: story_features.shape={story_features.shape}")
+        self.logger.debug(f"compute_pi_bar: options={options}, options.shape={options.shape}")
+        self.logger.debug(f"compute_pi_bar: intra_option_mean.shape={self.intra_option_mean.shape}")
+        self.logger.debug(f"compute_pi_bar: intra_option_std.shape={self.intra_option_std.shape}")
+
         # Ensure options is a tensor with proper shape
         if options.dim() == 0:
             options = options.unsqueeze(0)
 
-        batch_size = story_features.shape[0]
-        feature_dim = story_features.shape[1]
+        # story_features: [num_actions, feature_dim]
+        # This represents features for each possible action, NOT batch samples
+        num_actions, feature_dim = story_features.shape
 
-        # Expand options to match batch_size if needed
-        # In DAC, all story members use the same option for an episode
-        if options.shape[0] == 1 and batch_size > 1:
-            options = options.expand(batch_size)
+        # Validate that we have the expected number of actions
+        if num_actions != self.num_actions:
+            self.logger.warning(f"Expected {self.num_actions} actions, got {num_actions}")
+
+        self.logger.debug(f"compute_pi_bar: processing {num_actions} actions with feature_dim {feature_dim}")
+
+        # Validate option indices
+        if torch.any(options >= self.num_options) or torch.any(options < 0):
+            self.logger.error(f"Invalid option indices: {options}, valid range: [0, {self.num_options})")
+            raise ValueError(f"Invalid option indices: {options}")
 
         # Get option-specific weight matrices
         # intra_option_mean: [num_options, feature_dim, num_actions]
+        self.logger.debug(f"compute_pi_bar: intra_option_mean.shape={self.intra_option_mean.shape}")
         # intra_option_std: [num_options, feature_dim, num_actions]
+        self.logger.debug(f"compute_pi_bar: intra_option_std.shape={self.intra_option_std.shape}")
 
-        # Select parameters for the chosen options
-        option_mean_weights = self.intra_option_mean[options]  # [batch_size, feature_dim, num_actions]
-        option_std_weights = self.intra_option_std[options]    # [batch_size, feature_dim, num_actions]
+        try:
+            # Select parameters for the chosen option (single option for all actions)
+            option_idx = options[0].item()  # Extract scalar option index
+            option_mean_weights = self.intra_option_mean[option_idx]  # [feature_dim, num_actions]
+            option_std_weights = self.intra_option_std[option_idx]    # [feature_dim, num_actions]
 
-        # Compute action means and stds using matrix multiplication
-        # story_features: [batch_size, feature_dim]
-        # option_weights: [batch_size, feature_dim, num_actions]
-        mean = torch.bmm(story_features.unsqueeze(1), option_mean_weights).squeeze(1)  # [batch_size, num_actions]
-        std = torch.bmm(story_features.unsqueeze(1), option_std_weights).squeeze(1)    # [batch_size, num_actions]
+            self.logger.debug(f"compute_pi_bar: option_mean_weights.shape={option_mean_weights.shape}")
+            self.logger.debug(f"compute_pi_bar: option_std_weights.shape={option_std_weights.shape}")
 
-        # Ensure positive std
-        std = F.softplus(std) + 1e-5
+            # Compute action means and stds using matrix multiplication
+            # story_features: [num_actions, feature_dim]
+            # option_weights: [feature_dim, num_actions]
+            # Result: [num_actions] - one value per action
 
-        return mean, std
+            mean = torch.matmul(story_features, option_mean_weights)  # [num_actions, feature_dim] @ [feature_dim, num_actions] -> [num_actions, num_actions]
+            std = torch.matmul(story_features, option_std_weights)    # [num_actions, feature_dim] @ [feature_dim, num_actions] -> [num_actions, num_actions]
+
+            # Take diagonal to get the action-specific values
+            mean = torch.diag(mean)  # [num_actions]
+            std = torch.diag(std)    # [num_actions]
+
+            self.logger.debug(f"compute_pi_bar: raw mean.shape={mean.shape}, raw std.shape={std.shape}")
+
+            # Ensure positive std
+            std = F.softplus(std) + 1e-5
+
+            self.logger.debug(f"compute_pi_bar: final mean.shape={mean.shape}, final std.shape={std.shape}")
+
+            return mean, std
+
+        except Exception as e:
+            self.logger.error(f"Error in compute_pi_bar: {e}")
+            self.logger.error(f"story_features.shape={story_features.shape}, options={options}")
+            raise
 
     def select_option(self,
                       global_features: torch.Tensor,
@@ -338,48 +377,88 @@ class DACDoubleActorCritic(nn.Module):
         Returns:
             Tuple of (action, log_prob)
         """
+        # Debug logging for input shapes
+        self.logger.debug(f"select_action: story_features.shape={story_features.shape}")
+        self.logger.debug(f"select_action: option={option}, option.shape={option.shape}")
+        self.logger.debug(f"select_action: valid_mask={'None' if valid_mask is None else valid_mask.shape}")
+
         # Get action distribution parameters
         mean, std = self.compute_pi_bar(story_features, option)
 
+        # Debug logging for output shapes from compute_pi_bar
+        self.logger.debug(f"select_action: mean.shape={mean.shape}, std.shape={std.shape}")
+        self.logger.debug(f"select_action: mean={mean}")
+        self.logger.debug(f"select_action: std={std}")
+
         # Apply action restrictions if provided
         if valid_mask is not None:
-            # For continuous actions, we need to map to discrete and then back
-            # For now, we'll sample from continuous distribution and then check validity
-            # This is a simplified approach - in practice, you might want a more sophisticated method
-            max_attempts = 100
-            for attempt in range(max_attempts):
-                # Sample or select greedily
-                if deterministic:
-                    action = mean
-                else:
-                    dist = Normal(mean, std)
-                    action = dist.sample()
+            self.logger.debug(f"select_action: applying valid_mask with {valid_mask.sum().item()}/{len(valid_mask)} valid actions")
+            self.logger.debug(f"select_action: mean.shape={mean.shape}, valid_mask.shape={valid_mask.shape}")
 
-                # Convert continuous action to discrete for validity check
-                # Assuming action is in [0, num_actions) range after processing
-                discrete_action = torch.clamp(action, 0, len(valid_mask) - 1).long()
+            # For action masking, we need to mask the continuous distribution outputs
+            # mean and std are [num_actions], valid_mask is [num_actions]
+            masked_mean = mean.clone()
+            masked_std = std.clone()
 
-                # Check if action is valid
-                if valid_mask[discrete_action].all():
-                    break
-                elif attempt == max_attempts - 1:
-                    # Fallback: select first valid action
-                    valid_indices = torch.where(valid_mask)[0]
-                    if len(valid_indices) > 0:
-                        # Convert first valid discrete action back to continuous
-                        action = torch.tensor([valid_indices[0].float()], dtype=action.dtype, device=action.device)
-                    break
+            # Apply mask - set invalid actions to very negative mean and small std
+            invalid_mask = ~valid_mask
+            if invalid_mask.any():
+                masked_mean[invalid_mask] = -1e6  # Very negative mean for invalid actions
+                masked_std[invalid_mask] = 1e-6   # Very small std for invalid actions
+
+            self.logger.debug(f"select_action: applied masking, valid actions: {valid_mask.sum().item()}")
+
+            # For discrete action selection from continuous space
+            if deterministic:
+                # Select action with highest (least negative) mean
+                action_idx = torch.argmax(masked_mean)
+            else:
+                # Sample from categorical distribution based on softmax of means
+                # Use softmax to convert means to probabilities
+                action_probs = F.softmax(masked_mean / 0.1, dim=-1)  # Temperature = 0.1
+                action_dist = torch.distributions.Categorical(action_probs)
+                action_idx = action_dist.sample()
+
+            # Convert to tensor and ensure proper shape
+            action = action_idx.unsqueeze(0).float()  # [1] - single action index
+
+            self.logger.debug(f"select_action: selected action_idx={action_idx.item()}, action={action}")
+
+            # Compute log probability for the selected action
+            # Use the probability from categorical distribution for discrete action
+            if deterministic:
+                log_prob = torch.log(F.softmax(masked_mean / 0.1, dim=-1)[action_idx] + 1e-8)
+            else:
+                log_prob = action_dist.log_prob(action_idx)
+
+            log_prob = log_prob.unsqueeze(0)  # [1] to match action shape
+
         else:
             # No restrictions, proceed normally
             if deterministic:
-                action = mean
+                # Select action with highest mean
+                action_idx = torch.argmax(mean)
             else:
-                dist = Normal(mean, std)
-                action = dist.sample()
+                # Sample from categorical distribution
+                action_probs = F.softmax(mean / 0.1, dim=-1)  # Temperature = 0.1
+                action_dist = torch.distributions.Categorical(action_probs)
+                action_idx = action_dist.sample()
 
-        # Compute log probability
-        dist = Normal(mean, std)
-        log_prob = dist.log_prob(action).sum(dim=-1)
+            # Convert to proper action format
+            action = action_idx.unsqueeze(0).float()  # [1]
+
+            # Compute log probability
+            if deterministic:
+                log_prob = torch.log(F.softmax(mean / 0.1, dim=-1)[action_idx] + 1e-8)
+            else:
+                log_prob = action_dist.log_prob(action_idx)
+
+            log_prob = log_prob.unsqueeze(0)  # [1]
+
+        # Debug logging for final output
+        self.logger.debug(f"select_action: final_action.shape={action.shape}")
+        self.logger.debug(f"select_action: final_action={action}")
+        self.logger.debug(f"select_action: log_prob.shape={log_prob.shape}")
 
         return action, log_prob
 

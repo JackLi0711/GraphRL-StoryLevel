@@ -28,7 +28,7 @@ class DACConfig:
     hidden_dim: int = 256
     member_state_dim: int = 128
     num_gnn_layers: int = 3
-    num_actions: int = 14  # Based on structural design action space
+    num_actions: int = None  # Will be set dynamically based on structure_shape
     num_options: int = 4   # Number of options for hierarchical RL
 
     # ========== PPO Hyperparameters ==========
@@ -119,6 +119,9 @@ class DACConfig:
 
     def __post_init__(self):
         """Post-initialization validation and setup."""
+        # Set num_actions dynamically based on structure_shape
+        self.num_actions = self._get_max_action_size()
+
         # Validate parameters
         assert self.num_options > 0, "Number of options must be positive"
         assert self.num_actions > 0, "Number of actions must be positive"
@@ -139,10 +142,66 @@ class DACConfig:
         self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
         print(f"Created timestamped checkpoint directory: {self.checkpoint_dir}")
+        print(f"Action size set to {self.num_actions} based on structure_shape '{self.structure_shape}'")
 
         # Validate learning schedule
         assert self.learning_schedule in ["all", "alt", "sequential"], \
             "Learning schedule must be 'all', 'alt', or 'sequential'"
+
+    def _get_max_action_size(self) -> int:
+        """
+        Calculate maximum action size based on structure shape.
+
+        Action size = max_story_num * 4 (4 directions: north, south, east, west)
+
+        Returns:
+            Maximum action size for the given structure shape
+        """
+        if self.structure_shape == "fixed":
+            # Fixed structure: 4 floors
+            max_story_num = 4
+        elif self.structure_shape == "small_random":
+            # Small random: 2-4 floors (based on environment.py line 189)
+            max_story_num = 4
+        elif self.structure_shape == "random":
+            # Random structure: 4-7 floors (based on environment.py line 199)
+            max_story_num = 7
+        else:
+            # Default fallback
+            max_story_num = 7
+            print(f"Warning: Unknown structure_shape '{self.structure_shape}', using max_story_num=7")
+
+        action_size = max_story_num * 4  # 4 directions per floor
+        return action_size
+
+    def get_current_action_size(self, current_story_num: int) -> int:
+        """
+        Get current action size for a specific structure.
+
+        Args:
+            current_story_num: Current number of stories in the structure
+
+        Returns:
+            Current action size (story_num * 4)
+        """
+        return current_story_num * 4
+
+    def get_action_mask(self, current_story_num: int) -> torch.Tensor:
+        """
+        Get action mask for current structure.
+
+        Args:
+            current_story_num: Current number of stories in the structure
+
+        Returns:
+            Boolean tensor with True for valid actions, False for masked actions
+        """
+        current_action_size = self.get_current_action_size(current_story_num)
+        # Ensure we don't exceed the model's maximum action size
+        valid_action_size = min(current_action_size, self.num_actions)
+        mask = torch.zeros(self.num_actions, dtype=torch.bool, device=self.device)
+        mask[:valid_action_size] = True
+        return mask
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert config to dictionary for serialization."""
@@ -233,7 +292,7 @@ def get_debug_config() -> DACConfig:
     return DACConfig(
         max_episodes=10,
         rollout_length=32,
-        mini_batch_size=16,
+        mini_batch_size=32,
         optimization_epochs=2,
         debug_mode=True,
         verbose_logging=True,
