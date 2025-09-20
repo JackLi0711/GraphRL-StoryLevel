@@ -83,11 +83,27 @@ class DACEnvironmentWrapper:
             - global_state: Global state for high-level MDP
             - graph_data: Full graph data for feature extraction
         """
+        self.logger.info(f"=== Environment Reset Called with kwargs: {kwargs} ===")
+
         # Reset base environment
         structure_obj = self.base_env.reset(**kwargs)
+        self.logger.info(f"Base environment reset completed, structure: {type(structure_obj)}")
+
+        # Validate structure object
+        if structure_obj is None:
+            raise ValueError("Base environment reset returned None structure")
 
         # Store current structure for easy access
         self._current_structure = structure_obj
+
+        # Verify structure has required attributes
+        required_attrs = ['already_minimum_section_story_indexes', 'story_level_actions']
+        missing_attrs = [attr for attr in required_attrs if not hasattr(structure_obj, attr)]
+        if missing_attrs:
+            self.logger.warning(f"Structure missing attributes: {missing_attrs}")
+            # Initialize missing attributes with empty defaults
+            for attr in missing_attrs:
+                setattr(structure_obj, attr, [])
 
         # Reset DAC-specific tracking
         self.current_option = None
@@ -103,6 +119,12 @@ class DACEnvironmentWrapper:
         # Get initial material usage
         self.initial_material_usage = structure_obj.calculate_material_usage()
         self.current_material_usage = self.initial_material_usage
+        self.logger.info(f"Initial material usage: {self.initial_material_usage}")
+
+        # Check initial structure state
+        already_minimum = set(getattr(structure_obj, 'already_minimum_section_story_indexes', []) or [])
+        total_actions = len(getattr(structure_obj, 'story_level_actions', []))
+        self.logger.info(f"Initial structure state - already_minimum: {len(already_minimum)}/{total_actions} actions")
 
         # Extract dual state representation
         dual_states = self._extract_dual_states(structure_obj)
@@ -114,6 +136,7 @@ class DACEnvironmentWrapper:
             'option_length': self.option_length
         }
 
+        self.logger.info(f"=== Environment Reset Completed Successfully ===")
         return dual_states, info
 
     def step(self,
@@ -146,6 +169,7 @@ class DACEnvironmentWrapper:
 
         # Get current structure
         current_structure = self._get_current_structure()
+        self.logger.debug(f"Step {self.episode_step}: action={action}, option={option}, option_terminated={option_terminated}")
 
         # Execute action in base environment
         next_structure, base_reward, done, fail_name, fail_reason, is_min_section = self._execute_base_action(
@@ -166,9 +190,19 @@ class DACEnvironmentWrapper:
         self._current_structure = next_structure
         self.current_material_usage = next_structure.calculate_material_usage()
 
+        # Check structure state before termination
+        already_minimum = set(getattr(next_structure, 'already_minimum_section_story_indexes', []) or [])
+        total_actions = len(getattr(next_structure, 'story_level_actions', []))
+        all_indexes_zero = self._check_all_indexes_zero(next_structure)
+
+        self.logger.debug(f"Step {self.episode_step} status - is_min_section: {is_min_section}, "
+                         f"all_indexes_zero: {all_indexes_zero}, already_minimum: {len(already_minimum)}/{total_actions}, "
+                         f"base_done: {done}, fail_name: {fail_name}")
+
         # Check if all indexes are zero (structure at minimum) - force terminate episode and option
-        if is_min_section or self._check_all_indexes_zero(next_structure):
-            self.logger.info("All structure indexes at minimum, terminating episode and option")
+        if is_min_section or all_indexes_zero:
+            self.logger.info(f"TERMINATION TRIGGERED - Episode {self.episode_step}: is_min_section={is_min_section}, "
+                           f"all_indexes_zero={all_indexes_zero}, already_minimum={len(already_minimum)}/{total_actions}")
             done = True
             option_terminated = True
             # Apply penalty for minimum section (like Option-Critic)
@@ -527,9 +561,19 @@ class DACEnvironmentWrapper:
         # Get total number of story level actions
         total_actions = len(getattr(structure_obj, 'story_level_actions', []))
 
+        # Log detailed structure state for debugging
+        self.logger.debug(f"Structure state check - already_minimum: {already_minimum}, "
+                         f"total_actions: {total_actions}, "
+                         f"will_terminate: {total_actions > 0 and len(already_minimum) >= total_actions}")
+
         # If all story-level actions are at minimum, episode should terminate
         if total_actions > 0 and len(already_minimum) >= total_actions:
-            self.logger.info(f"All structure indexes are at minimum: {len(already_minimum)}/{total_actions} actions at minimum")
+            self.logger.warning(f"CRITICAL: All structure indexes are at minimum: {len(already_minimum)}/{total_actions} actions at minimum")
+            return True
+
+        # Additional check: if there are no available actions
+        if total_actions == 0:
+            self.logger.warning(f"CRITICAL: No story level actions available, total_actions=0")
             return True
 
         return False

@@ -199,7 +199,9 @@ class DACTrainer:
             Episode statistics
         """
         # Reset environment
+        self.logger.logger.info(f"=== Starting Episode {self.episode + 1} ===")
         dual_states, info = self.env.reset()
+        self.logger.logger.info(f"Episode {self.episode + 1} environment reset completed")
 
         episode_reward = 0.0
         episode_steps = 0
@@ -288,8 +290,20 @@ class DACTrainer:
             # Check termination
             if done:
                 # Log termination details
+                termination_info = {
+                    'fail_name': env_info.get('fail_name'),
+                    'fail_reason': env_info.get('fail_reason'),
+                    'episode_step': episode_steps,
+                    'option_length': env_info.get('option_length', 0),
+                    'material_usage': env_info.get('material_usage', 0)
+                }
                 if env_info.get('fail_name'):
-                    self.logger.logger.info(f"Episode failed: {env_info.get('fail_name')} - {env_info.get('fail_reason')}")
+                    self.logger.logger.warning(f"Episode {self.episode + 1} failed after {episode_steps} steps: "
+                                             f"{env_info.get('fail_name')} - {env_info.get('fail_reason')}")
+                else:
+                    self.logger.logger.info(f"Episode {self.episode + 1} completed after {episode_steps} steps")
+
+                self.logger.logger.debug(f"Episode termination info: {termination_info}")
                 break
 
         # Final option logging
