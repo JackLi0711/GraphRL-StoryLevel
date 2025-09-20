@@ -87,8 +87,8 @@ Successfully implemented periodic inference and behavior plotting functionality 
 
 ### Basic Usage
 ```python
-from RL.dac.dac_config import DACConfig
-from RL.dac.dac_trainer import DACTrainer
+from RL.dac.config import DACConfig
+from RL.dac.trainer import DACTrainer
 
 # Create config with inference parameters
 config = DACConfig(

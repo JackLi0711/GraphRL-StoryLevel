@@ -20,10 +20,10 @@ import numpy as np
 import logging
 from typing import Dict, Any, Optional, Tuple, List
 
-from .dac_config import DACConfig
-from .dac_gnn import DACDoubleActorCritic
-from .dac_buffer import DACStorage, DACExperienceBuffer, random_sample
-from .dac_environment import DACEnvironmentWrapper
+from .config import DACConfig
+from .gnn import DACDoubleActorCritic
+from .buffer import DACStorage, DACExperienceBuffer, random_sample
+from .environment import DACEnvironmentWrapper
 
 
 class DACAgent:

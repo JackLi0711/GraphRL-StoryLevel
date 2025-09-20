@@ -14,12 +14,12 @@ from collections import defaultdict
 import json
 import datetime
 
-from .dac_config import DACConfig
-from .dac_agent import DACAgent
-from .dac_environment import DACEnvironmentWrapper
-from .dac_logger import DACLogger
-from .dac_utils import set_seed, EarlyStopping, MovingAverage
-from .dac_evaluation import evaluate_dac_model
+from .config import DACConfig
+from .agent import DACAgent
+from .environment import DACEnvironmentWrapper
+from .logger import DACLogger
+from .utils import set_seed, EarlyStopping, MovingAverage
+from .evaluation import evaluate_dac_model
 from ..environment import Environment
 from Validation import normalization as nda_norm
 from Visualization.plot import plot_test_behaviors

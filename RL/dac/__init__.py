@@ -13,14 +13,14 @@ The module provides:
 - DACTrainer: Training loop coordinator
 """
 
-from .dac_config import DACConfig, get_default_config, get_debug_config, get_performance_config
-from .dac_gnn import DACDoubleActorCritic
-from .dac_buffer import DACExperienceBuffer
-from .dac_environment import DACEnvironmentWrapper
-from .dac_agent import DACAgent
-from .dac_trainer import DACTrainer
-from .dac_utils import DACUtils
-from .dac_logger import DACLogger
+from .config import DACConfig, get_default_config, get_debug_config, get_performance_config
+from .gnn import DACDoubleActorCritic
+from .buffer import DACExperienceBuffer
+from .environment import DACEnvironmentWrapper
+from .agent import DACAgent
+from .trainer import DACTrainer
+from .utils import DACUtils
+from .logger import DACLogger
 
 __version__ = "1.0.0"
 __all__ = [
