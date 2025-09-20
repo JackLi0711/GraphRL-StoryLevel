@@ -324,13 +324,15 @@ class DACDoubleActorCritic(nn.Module):
     def select_action(self,
                       story_features: torch.Tensor,
                       option: torch.Tensor,
+                      valid_mask: Optional[torch.Tensor] = None,
                       deterministic: bool = False) -> Tuple[torch.Tensor, torch.Tensor]:
         """
-        Select action using low-level policy.
+        Select action using low-level policy with optional action restrictions.
 
         Args:
             story_features: Story-level features
             option: Selected option
+            valid_mask: Boolean mask for valid actions (True = valid)
             deterministic: Whether to select deterministically
 
         Returns:
@@ -339,12 +341,41 @@ class DACDoubleActorCritic(nn.Module):
         # Get action distribution parameters
         mean, std = self.compute_pi_bar(story_features, option)
 
-        # Sample or select greedily
-        if deterministic:
-            action = mean
+        # Apply action restrictions if provided
+        if valid_mask is not None:
+            # For continuous actions, we need to map to discrete and then back
+            # For now, we'll sample from continuous distribution and then check validity
+            # This is a simplified approach - in practice, you might want a more sophisticated method
+            max_attempts = 100
+            for attempt in range(max_attempts):
+                # Sample or select greedily
+                if deterministic:
+                    action = mean
+                else:
+                    dist = Normal(mean, std)
+                    action = dist.sample()
+
+                # Convert continuous action to discrete for validity check
+                # Assuming action is in [0, num_actions) range after processing
+                discrete_action = torch.clamp(action, 0, len(valid_mask) - 1).long()
+
+                # Check if action is valid
+                if valid_mask[discrete_action].all():
+                    break
+                elif attempt == max_attempts - 1:
+                    # Fallback: select first valid action
+                    valid_indices = torch.where(valid_mask)[0]
+                    if len(valid_indices) > 0:
+                        # Convert first valid discrete action back to continuous
+                        action = torch.tensor([valid_indices[0].float()], dtype=action.dtype, device=action.device)
+                    break
         else:
-            dist = Normal(mean, std)
-            action = dist.sample()
+            # No restrictions, proceed normally
+            if deterministic:
+                action = mean
+            else:
+                dist = Normal(mean, std)
+                action = dist.sample()
 
         # Compute log probability
         dist = Normal(mean, std)

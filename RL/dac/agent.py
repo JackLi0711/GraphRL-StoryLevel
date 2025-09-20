@@ -109,12 +109,14 @@ class DACAgent:
 
     def select_option_and_action(self,
                                 graph_data: Dict[str, torch.Tensor],
+                                structure_obj=None,
                                 deterministic: bool = False) -> Tuple[int, torch.Tensor, Dict[str, Any]]:
         """
-        Select option and action for current state.
+        Select option and action for current state with action restrictions.
 
         Args:
             graph_data: Graph data for current state
+            structure_obj: Structure object for action validation
             deterministic: Whether to select deterministically
 
         Returns:
@@ -132,13 +134,22 @@ class DACAgent:
                 deterministic=deterministic
             )
 
-            # Select action (low-level)
+            # Create valid actions mask (like Option-Critic)
+            valid_mask = None
+            if structure_obj is not None:
+                valid_mask = self._create_valid_actions_mask(structure_obj, self.config.device)
+                self.logger.debug(f"Valid actions mask: {valid_mask.sum().item()}/{len(valid_mask)} actions available")
+
+            # Select action (low-level) with action restrictions
             action, action_log_prob = self.network.select_action(
                 story_features,
                 option,
+                valid_mask=valid_mask,
                 deterministic=deterministic
             )
 
+            self.logger.debug(f"Selected action in agent : {action}")
+            self.logger.debug(f"action_log_prob in agent : {action_log_prob}")
             # Get values
             high_value = self.network.get_high_value(global_features)
             low_value = self.network.get_low_value(story_features, option)
@@ -154,7 +165,8 @@ class DACAgent:
                 'high_value': high_value.item(),
                 'low_value': low_value.item(),
                 'story_features': story_features,
-                'global_features': global_features
+                'global_features': global_features,
+                'valid_mask': valid_mask
             }
 
         return option.item(), action, info
@@ -598,3 +610,82 @@ class DACAgent:
             'avg_high_level_loss': np.mean(self.high_level_losses[-100:]) if self.high_level_losses else 0,
             'avg_low_level_loss': np.mean(self.low_level_losses[-100:]) if self.low_level_losses else 0,
         }
+
+    def _create_valid_actions_mask(self, structure_obj, device: torch.device) -> torch.Tensor:
+        """
+        Create valid actions mask based on structure constraints.
+        Based on Option-Critic rollout_option logic (lines 80-115).
+
+        Args:
+            structure_obj: Structure object
+            device: torch device
+
+        Returns:
+            Boolean tensor mask where True = valid action
+        """
+        # Get all restricted actions
+        already_minimum = set(getattr(structure_obj, 'already_minimum_section_story_indexes', []) or [])
+        restricted_actions = set()
+
+        if hasattr(structure_obj, 'restrict_action_space'):
+            restricted = structure_obj.restrict_action_space()
+            if restricted is not None:
+                restricted_actions.update(restricted)
+
+        # Combine all invalid actions
+        invalid_actions = already_minimum | restricted_actions
+
+        self.logger.debug(f"Already minimum: {already_minimum}, Restricted: {restricted_actions}")
+        self.logger.debug(f"Total invalid actions: {invalid_actions}")
+
+        # Create mask tensor (True = valid action)
+        num_actions = len(structure_obj.story_level_actions)
+        valid_mask = torch.ones(num_actions, dtype=torch.bool, device=device)
+
+        for invalid_action in invalid_actions:
+            if 0 <= invalid_action < num_actions:
+                valid_mask[invalid_action] = False
+
+        return valid_mask
+
+    def _check_all_indexes_zero(self, structure_obj) -> bool:
+        """
+        Check if all structure indexes are at minimum (all zeros).
+        This indicates that the episode should be terminated.
+
+        Args:
+            structure_obj: Structure object
+
+        Returns:
+            True if all indexes are zero (episode should terminate)
+        """
+        # Check if structure has already_minimum_section_story_indexes
+        already_minimum = getattr(structure_obj, 'already_minimum_section_story_indexes', [])
+
+        # Get total number of story level actions
+        total_actions = len(getattr(structure_obj, 'story_level_actions', []))
+
+        # If all story-level actions are at minimum, episode should terminate
+        if total_actions > 0 and len(already_minimum) >= total_actions:
+            self.logger.info(f"All structure indexes are at minimum: {len(already_minimum)}/{total_actions} actions at minimum")
+            return True
+
+        return False
+
+    def check_termination_conditions(self, structure_obj) -> Tuple[bool, str]:
+        """
+        Check various termination conditions for episode and option.
+
+        Args:
+            structure_obj: Structure object
+
+        Returns:
+            Tuple of (should_terminate, termination_reason)
+        """
+        # Check if all indexes are zero (most important condition)
+        if self._check_all_indexes_zero(structure_obj):
+            return True, "all_indexes_zero"
+
+        # Add other termination conditions here if needed
+
+        return False, None

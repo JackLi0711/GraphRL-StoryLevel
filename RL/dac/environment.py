@@ -145,7 +145,7 @@ class DACEnvironmentWrapper:
         current_structure = self._get_current_structure()
 
         # Execute action in base environment
-        next_structure, base_reward, done, fail_name, fail_reason = self._execute_base_action(
+        next_structure, base_reward, done, fail_name, fail_reason, is_min_section = self._execute_base_action(
             current_structure, action
         )
 
@@ -162,6 +162,14 @@ class DACEnvironmentWrapper:
         # Update material usage
         self.current_material_usage = next_structure.calculate_material_usage()
 
+        # Check if all indexes are zero (structure at minimum) - force terminate episode and option
+        if is_min_section or self._check_all_indexes_zero(next_structure):
+            self.logger.info("All structure indexes at minimum, terminating episode and option")
+            done = True
+            option_terminated = True
+            # Apply penalty for minimum section (like Option-Critic)
+            base_reward = -1.0
+
         # Compute dual rewards
         rewards = self._compute_dual_rewards(
             base_reward, done, option_terminated, fail_name, fail_reason
@@ -171,7 +179,7 @@ class DACEnvironmentWrapper:
         next_dual_states = self._extract_dual_states(next_structure)
 
         # Check for option timeout
-        if self.option_length >= self.option_timeout:
+        if self.option_length >= self.option_timeout and not done:
             option_terminated = True
             self.logger.debug(f"Option {option} timed out after {self.option_length} steps")
 
@@ -227,14 +235,19 @@ class DACEnvironmentWrapper:
     def _structure_to_graph_data(self, structure_obj: structure.Structure) -> Dict[str, torch.Tensor]:
         """Convert structure object to graph data format."""
         # Initialize graph if it doesn't exist
-        if not hasattr(structure_obj, 'graph'):
+        if not hasattr(structure_obj, 'graph') or structure_obj.graph is None:
             # Calculate static response features like the base environment does
-            if hasattr(self.base_env, 'code_analysis_dir'):
-                load_cases, static_responses = check.get_response(structure_obj, self.base_env.code_analysis_dir)
-                _, static_response_features, _ = check.process_response(structure_obj, load_cases, static_responses)
-                structure_obj.init_graph_GraphRL(static_response_features, None)
-            else:
-                # Fallback if code_analysis_dir is not available
+            try:
+                if hasattr(self.base_env, 'code_analysis_dir'):
+                    load_cases, static_responses = check.get_response(structure_obj, self.base_env.code_analysis_dir)
+                    _, static_response_features, _ = check.process_response(structure_obj, load_cases, static_responses)
+                    structure_obj.init_graph_GraphRL(static_response_features, None)
+                else:
+                    # Fallback if code_analysis_dir is not available
+                    structure_obj.init_graph_GraphRL()
+            except Exception as e:
+                self.logger.warning(f"Failed to initialize graph for structure: {e}")
+                # Create a minimal fallback graph structure
                 structure_obj.init_graph_GraphRL()
 
         # Extract graph representation from structure.graph (same as option_critic)
@@ -314,33 +327,67 @@ class DACEnvironmentWrapper:
         return torch.tensor(features, dtype=torch.float32)
 
     def _execute_base_action(self, structure_obj: structure.Structure, action: torch.Tensor) -> Tuple:
-        """Execute action in base environment."""
-        # Convert action to numpy if needed
+        """Execute action in base environment and return is_min_section flag."""
+        # Convert action to int if needed (like Option-Critic rollout)
         if isinstance(action, torch.Tensor):
-            action_np = action.detach().cpu().numpy()
+            if action.numel() == 1:
+                action_int = int(action.item())
+            else:
+                # If action is a multi-element tensor (e.g., probabilities), take argmax
+                action_int = int(action.argmax().item())
         else:
-            action_np = action
+            action_int = int(action)
 
-        # This should call the base environment's step method
-        # For now, we simulate the interface based on the existing environment
+        # Validate action bounds
+        num_actions = len(structure_obj.story_level_actions)
+        self.logger.debug(f"Action validation: action_int={action_int}, num_actions={num_actions}, action_shape={action.shape if isinstance(action, torch.Tensor) else 'N/A'}")
+
+        if not (0 <= action_int < num_actions):
+            # If action is out of bounds, clip it to valid range
+            action_int = max(0, min(action_int, num_actions - 1))
+            self.logger.warning(f"Action was out of bounds, clipped to {action_int} (valid range: [0, {num_actions}))")
+
+        if not (0 <= action_int < num_actions):
+            error_msg = f"Action {action_int} is out of bounds [0, {num_actions})"
+            self.logger.error(error_msg)
+            raise ValueError(f"Invalid action index: {action_int}")
+
         try:
-            # Placeholder for actual environment step
-            # In practice, this would call something like:
-            # next_structure, reward, done, fail_name, fail_reason = self.base_env.step(structure_obj, action_np)
+            # Ensure structure has graph initialized before calling step
+            if not hasattr(structure_obj, 'graph') or structure_obj.graph is None:
+                self.logger.debug("Initializing graph for structure before step execution")
+                self._structure_to_graph_data(structure_obj)  # This will initialize the graph
 
-            # For now, return dummy values
-            next_structure = deepcopy(structure_obj)
-            reward = -1.0  # Placeholder reward
-            done = False
-            fail_name = None
-            fail_reason = None
+            # Call the actual base environment step method (like apply_primitive_action in Option-Critic)
+            # This should be similar to Option-Critic's apply_primitive_action call
+            if hasattr(self.base_env, 'step'):
+                next_structure, reward, step_done, is_min_section, fail_reason = self.base_env.step(
+                    structure_obj, action_int
+                )
+                fail_name = "constraint_violation" if step_done else None
+                self.logger.debug(f"Base environment step returned: step_done={step_done}, fail_name={fail_name}, fail_reason={fail_reason}")
+                
+                done = step_done  # Episode done if constraints violated
 
-            return next_structure, reward, done, fail_name, fail_reason
+                self.logger.debug(f"Base environment step returned: next_structure={next_structure}, reward={reward}, step_done={step_done}, is_min_section={is_min_section}, fail_reason={fail_reason}")
+                self.logger.debug(f"done:{done}")
+            else:
+                # Fallback: simulate the step
+                self.logger.warning("Base environment doesn't have step method, using fallback")
+                next_structure = deepcopy(structure_obj)
+                reward = -1.0
+                done = False
+                fail_name = None
+                fail_reason = None
+                is_min_section = False
+
+            return next_structure, reward, done, fail_name, fail_reason, is_min_section
 
         except Exception as e:
-            self.logger.error(f"Error executing action: {e}")
-            raise e
-            # return structure_obj, -10.0, True, "execution_error", str(e)
+            self.logger.error(f"Error executing action {action_int}: {e}")
+            # Return safe fallback values
+            raise ValueError(f"Error executing action {action_int}: {e}")
+            return structure_obj, -10.0, True, "execution_error", str(e), False
 
     def _compute_dual_rewards(self,
                             base_reward: float,
@@ -450,3 +497,28 @@ class DACEnvironmentWrapper:
             'current_material_usage': self.current_material_usage,
             'material_saved': self.initial_material_usage - self.current_material_usage if self.current_material_usage else 0
         }
+
+    def _check_all_indexes_zero(self, structure_obj: structure.Structure) -> bool:
+        """
+        Check if all structure indexes are at minimum (all zeros).
+        This indicates that the episode should be terminated.
+        Based on Option-Critic rollout logic.
+
+        Args:
+            structure_obj: Structure object
+
+        Returns:
+            True if all indexes are zero (episode should terminate)
+        """
+        # Check if structure has already_minimum_section_story_indexes
+        already_minimum = set(getattr(structure_obj, 'already_minimum_section_story_indexes', []) or [])
+
+        # Get total number of story level actions
+        total_actions = len(getattr(structure_obj, 'story_level_actions', []))
+
+        # If all story-level actions are at minimum, episode should terminate
+        if total_actions > 0 and len(already_minimum) >= total_actions:
+            self.logger.info(f"All structure indexes are at minimum: {len(already_minimum)}/{total_actions} actions at minimum")
+            return True
+
+        return False

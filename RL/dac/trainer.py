@@ -181,7 +181,7 @@ class DACTrainer:
 
         except Exception as e:
             self.logger.logger.error(f"Training failed with error: {e}")
-            raise
+            raise e 
 
         finally:
             # Final save and cleanup
@@ -217,9 +217,12 @@ class DACTrainer:
             episode_steps += 1
             self.total_steps += 1
 
-            # Select option and action
+            # Select option and action with structure object for action restrictions
+            # Get current structure from environment wrapper
+            current_structure = self.env._get_current_structure()
             option, action, agent_info = self.agent.select_option_and_action(
-                dual_states['graph_data']
+                dual_states['graph_data'],
+                structure_obj=current_structure
             )
 
             # Check for option change
@@ -272,8 +275,21 @@ class DACTrainer:
                 if update_stats:
                     self.logger.log_training_metrics(self.total_steps, update_stats)
 
+            # Check additional termination conditions (like Option-Critic)
+            if not done:
+                next_structure = env_info.get('structure')
+                if next_structure is not None:
+                    should_terminate, termination_reason = self.agent.check_termination_conditions(next_structure)
+                    if should_terminate:
+                        self.logger.logger.info(f"Episode terminated due to: {termination_reason}")
+                        done = True
+                        option_terminated = True
+
             # Check termination
             if done:
+                # Log termination details
+                if env_info.get('fail_name'):
+                    self.logger.logger.info(f"Episode failed: {env_info.get('fail_name')} - {env_info.get('fail_reason')}")
                 break
 
         # Final option logging
@@ -333,9 +349,11 @@ class DACTrainer:
             for step in range(self.config.max_steps_per_episode):
                 episode_steps += 1
 
-                # Select option and action deterministically
+                # Select option and action deterministically with structure object
+                current_structure = self.env._get_current_structure()
                 option, action, _ = self.agent.select_option_and_action(
                     dual_states['graph_data'],
+                    structure_obj=current_structure,
                     deterministic=True
                 )
 
