@@ -76,8 +76,10 @@ def evaluate_dac_model(agent, env_wrapper, num_episodes: int, logger=None, seed:
             episode_steps += 1
 
             # Select option and action deterministically
+            current_structure = env_wrapper._get_current_structure()
             option, action, _ = agent.select_option_and_action(
                 dual_states['graph_data'],
+                structure_obj=current_structure,
                 deterministic=True
             )
 
