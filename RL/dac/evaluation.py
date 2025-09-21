@@ -41,6 +41,8 @@ def evaluate_dac_model(agent, env_wrapper, num_episodes: int, logger=None, seed:
     episode_options = []  # Collect option sequences
     episode_option_instances = []  # Collect option instance data
     episode_actions_SCWB = []  # For compatibility
+    episode_final_valid_scores = []  # Track final valid scores per episode
+    episode_option_pass_rates = []  # Track option pass rates per episode
     successful_episodes = 0
 
     # Store original agent state - DACAgent doesn't have training attribute
@@ -106,9 +108,10 @@ def evaluate_dac_model(agent, env_wrapper, num_episodes: int, logger=None, seed:
             # Update rewards and scores
             episode_total_reward += rewards['low_level_reward']
 
-            # For DAC, we accumulate score based on environment feedback
-            if 'material_saved' in env_info:
-                episode_score += float(env_info.get('material_saved', 0))
+            # For DAC, we use the updated score from environment
+            # The environment tracks option-level scores internally
+            if 'score' in env_info:
+                episode_score = float(env_info.get('score', 0))
 
             # Update for next step
             dual_states = next_dual_states
@@ -123,10 +126,17 @@ def evaluate_dac_model(agent, env_wrapper, num_episodes: int, logger=None, seed:
                         logger.info(f"Episode {ep+1} completed successfully")
                 break
 
+        # Collect final episode statistics including score information
+        env_stats = env_wrapper.get_episode_statistics()
+        final_valid_score = env_stats.get('last_valid_score', 0.0)
+        option_pass_rate = env_stats.get('option_pass_rate', 0.0)
+
         # Store episode data
         episode_scores.append(episode_score)
         episode_total_rewards.append(episode_total_reward)
         episode_lengths.append(episode_steps)
+        episode_final_valid_scores.append(final_valid_score)
+        episode_option_pass_rates.append(option_pass_rate)
         episode_actions.append(episode_action_sequence)
         episode_options.append(episode_option_sequence)
         episode_option_instances.append(current_episode_option_instances)
@@ -134,6 +144,8 @@ def evaluate_dac_model(agent, env_wrapper, num_episodes: int, logger=None, seed:
 
         if logger:
             logger.info(f"Episode {ep+1} completed: score={episode_score:.2f}, "
+                       f"final_valid_score={final_valid_score:.2f}%, "
+                       f"pass_rate={option_pass_rate*100:.1f}%, "
                        f"length={episode_steps}, actions={len(episode_action_sequence)}")
 
     # Restore original agent state
@@ -142,23 +154,31 @@ def evaluate_dac_model(agent, env_wrapper, num_episodes: int, logger=None, seed:
 
     # Calculate metrics
     avg_score = float(np.mean(episode_scores)) if episode_scores else 0.0
+    avg_final_valid_score = float(np.mean(episode_final_valid_scores)) if episode_final_valid_scores else 0.0
+    avg_option_pass_rate = float(np.mean(episode_option_pass_rates)) if episode_option_pass_rates else 0.0
     avg_episode_length = float(np.mean(episode_lengths)) if episode_lengths else 0.0
     success_rate = (successful_episodes / num_episodes) * 100.0 if num_episodes > 0 else 0.0
 
     if logger:
         logger.info(f"DAC evaluation completed:")
         logger.info(f"  Average score: {avg_score:.2f}")
+        logger.info(f"  Average final valid score: {avg_final_valid_score:.2f}%")
+        logger.info(f"  Average option pass rate: {avg_option_pass_rate*100:.1f}%")
         logger.info(f"  Average episode length: {avg_episode_length:.2f}")
         logger.info(f"  Success rate: {success_rate:.1f}% ({successful_episodes}/{num_episodes})")
 
     # Prepare evaluation history for visualization
     eval_history = {
         "scores": episode_scores,
+        "final_valid_scores": episode_final_valid_scores,
+        "option_pass_rates": episode_option_pass_rates,
         "actions": episode_actions,
         "options": episode_options,
         "option_instances": episode_option_instances,
         "actions_SCWB": episode_actions_SCWB,
         "avg_score": avg_score,
+        "avg_final_valid_score": avg_final_valid_score,
+        "avg_option_pass_rate": avg_option_pass_rate,
         "success_rate": success_rate
     }
 

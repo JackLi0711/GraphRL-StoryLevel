@@ -37,6 +37,7 @@ class DACEnvironmentWrapper:
                  response_feature: bool = True,
                  length_bonus_weight: float = 0.1,
                  option_timeout: int = 50,
+                 score_tolerance: float = 0.05,
                  logger: Optional[logging.Logger] = None):
         """
         Initialize DAC environment wrapper.
@@ -46,12 +47,14 @@ class DACEnvironmentWrapper:
             response_feature: Whether to enable response feature analysis
             length_bonus_weight: Weight for option length bonus
             option_timeout: Maximum steps per option
+            score_tolerance: Tolerance for material usage increase in score calculation
             logger: Logger instance
         """
         self.base_env = base_env
         self.response_feature = response_feature
         self.length_bonus_weight = length_bonus_weight
         self.option_timeout = option_timeout
+        self.score_tolerance = score_tolerance
         self.logger = logger or logging.getLogger(__name__)
 
         # Option tracking
@@ -68,6 +71,12 @@ class DACEnvironmentWrapper:
         # Material usage tracking for option-level evaluation
         self.initial_material_usage = None
         self.current_material_usage = None
+
+        # Score tracking for option-level evaluation
+        self.last_valid_score = 0.0  # Score from last successfully validated option
+        self.current_score = 0.0     # Current accumulated score
+        self.score_history = []      # History of all scores during episode
+        self.option_pass_history = [] # History of option pass/fail status
 
         # Episode tracking
         self.episode_step = 0
@@ -115,6 +124,12 @@ class DACEnvironmentWrapper:
         self.option_actions = []
         self.episode_step = 0
         self.episode_reward = 0.0
+
+        # Reset score tracking
+        self.last_valid_score = 0.0
+        self.current_score = 0.0
+        self.score_history = []
+        self.option_pass_history = []
 
         # Get initial material usage
         self.initial_material_usage = structure_obj.calculate_material_usage()
@@ -168,13 +183,21 @@ class DACEnvironmentWrapper:
             self.option_actions = []
 
         # Get current structure
-        current_structure = self._get_current_structure()
+        current_structure = deepcopy(self._get_current_structure())
         self.logger.debug(f"Step {self.episode_step}: action={action}, option={option}, option_terminated={option_terminated}")
 
         # Execute action in base environment
         next_structure, base_reward, done, fail_name, fail_reason, is_min_section = self._execute_base_action(
             current_structure, action
         )
+
+        self.logger.debug(f"self._get_current_structure(): {self._get_current_structure().story_level_sections}")
+        self.logger.debug(f"Next structure: {next_structure.story_level_sections}")
+        if next_structure == self._get_current_structure():
+            self.logger.warning(f"Next structure is the same as current structure")
+            self.logger.warning(f"Next structure: {next_structure}")
+            self.logger.warning(f"Current structure: {self._get_current_structure()}")
+            raise ValueError("Next structure is the same as current structure")
 
         # Update tracking
         self.total_steps += 1
@@ -183,7 +206,7 @@ class DACEnvironmentWrapper:
         self.option_accumulated_reward += base_reward
 
         # Store option experience
-        self.option_states.append(self._extract_dual_states(current_structure))
+        self.option_states.append(self._extract_dual_states(self._get_current_structure()))
         self.option_actions.append(action)
 
         # Update current structure and material usage
@@ -201,12 +224,12 @@ class DACEnvironmentWrapper:
 
         # Check if all indexes are zero (structure at minimum) - force terminate episode and option
         if is_min_section or all_indexes_zero:
-            self.logger.info(f"TERMINATION TRIGGERED - Episode {self.episode_step}: is_min_section={is_min_section}, "
+            self.logger.info(f"TERMINATION TRIGGERED - Step {self.episode_step}: is_min_section={is_min_section}, "
                            f"all_indexes_zero={all_indexes_zero}, already_minimum={len(already_minimum)}/{total_actions}")
             done = True
             option_terminated = True
             # Apply penalty for minimum section (like Option-Critic)
-            base_reward = -1.0
+            base_reward = 100.0
 
         # Compute dual rewards
         rewards = self._compute_dual_rewards(
@@ -399,13 +422,17 @@ class DACEnvironmentWrapper:
             # Call the actual base environment step method (like apply_primitive_action in Option-Critic)
             # This should be similar to Option-Critic's apply_primitive_action call
             if hasattr(self.base_env, 'step'):
-                next_structure, reward, step_done, is_min_section, fail_reason = self.base_env.step(
+                next_structure, reward, step_done, fail_name, fail_reason = self.base_env.step(
                     structure_obj, action_int
                 )
-                fail_name = "constraint_violation" if step_done else None
                 self.logger.debug(f"Base environment step returned: step_done={step_done}, fail_name={fail_name}, fail_reason={fail_reason}")
                 
                 done = step_done  # Episode done if constraints violated
+
+                if fail_reason == "minimum_section":
+                    is_min_section = True
+                else:
+                    is_min_section = False
 
                 self.logger.debug(f"Base environment step returned: next_structure={next_structure}, reward={reward}, step_done={step_done}, is_min_section={is_min_section}, fail_reason={fail_reason}")
                 self.logger.debug(f"done:{done}")
@@ -473,40 +500,78 @@ class DACEnvironmentWrapper:
 
     def _perform_option_level_check(self, structure_obj: structure.Structure) -> Dict[str, Any]:
         """
-        Perform option-level structural checking.
+        Perform option-level structural checking and score calculation.
 
         Args:
             structure_obj: Structure object
 
         Returns:
-            Dictionary with check results
+            Dictionary with check results including score
         """
         check_results = {
             'whether_pass': True,
             'constraint_violations': [],
-            'material_efficiency': 0.0
+            'material_efficiency': 0.0,
+            'score': self.current_score,  # Default to current score
+            'option_passed': False
         }
 
         try:
             # Perform structural analysis if response features enabled
             if self.response_feature:
-                # This would call the actual checking functions
-                # For now, placeholder implementation
-
-                # Calculate material efficiency
+                # Calculate material efficiency relative to initial structure
                 material_saved = self.initial_material_usage - self.current_material_usage
-                check_results['material_efficiency'] = material_saved / self.initial_material_usage
+                material_efficiency = material_saved / self.initial_material_usage if self.initial_material_usage > 0 else 0.0
+                check_results['material_efficiency'] = material_efficiency
 
-                # Check structural constraints
-                # This would involve calling Structure/check.py functions
+                # For now, we consider the option as "passed" if it achieved some material reduction
+                # and doesn't violate basic structural constraints
+                # In a real implementation, this would call actual structural checking functions
 
-                self.logger.debug(f"Option-level check completed. Material efficiency: {check_results['material_efficiency']:.3f}")
+                # Basic check: structure should not increase material usage significantly
+                # and should maintain structural integrity
+                structure_passed = True
+
+                # Check if material usage increased (which might indicate structural failure)
+                tolerance_threshold = self.initial_material_usage * (1.0 + self.score_tolerance)
+                if self.current_material_usage > tolerance_threshold:
+                    structure_passed = False
+                    check_results['constraint_violations'].append(f"Material usage increased beyond {self.score_tolerance*100:.1f}% tolerance")
+
+                # Additional structural checks would go here
+                # For example: calling Structure/check.py functions for constraint validation
+
+                check_results['whether_pass'] = structure_passed
+                check_results['option_passed'] = structure_passed
+
+                # Calculate and update score based on check results
+                if structure_passed:
+                    # Option passed: calculate new score as percentage of material saved
+                    new_score = (material_saved / self.initial_material_usage) * 100.0 if self.initial_material_usage > 0 else 0.0
+                    self.current_score = new_score
+                    self.last_valid_score = new_score
+                    self.logger.debug(f"Option passed. New score: {new_score:.2f}% material saved")
+                else:
+                    # Option failed: keep the last valid score unchanged
+                    self.current_score = self.last_valid_score
+                    self.logger.debug(f"Option failed. Maintaining last valid score: {self.last_valid_score:.2f}%")
+
+                # Record score and pass status in history
+                self.score_history.append(self.current_score)
+                self.option_pass_history.append(structure_passed)
+
+                check_results['score'] = self.current_score
+
+                self.logger.debug(f"Option-level check completed. Material efficiency: {material_efficiency:.3f}, "
+                                f"Score: {self.current_score:.2f}%, Passed: {structure_passed}")
 
         except Exception as e:
-            raise e
-            # self.logger.error(f"Error in option-level check: {e}")
-            # check_results['whether_pass'] = False
-            # check_results['constraint_violations'].append(f"Check error: {str(e)}")
+            self.logger.error(f"Error in option-level check: {e}")
+            check_results['whether_pass'] = False
+            check_results['option_passed'] = False
+            check_results['constraint_violations'].append(f"Check error: {str(e)}")
+            # Keep current score unchanged on error
+            check_results['score'] = self.current_score
 
         return check_results
 
@@ -530,7 +595,9 @@ class DACEnvironmentWrapper:
             'option_length': self.option_length,
             'option_accumulated_reward': self.option_accumulated_reward,
             'option_start_step': self.option_start_step,
-            'material_usage_change': self.initial_material_usage - self.current_material_usage if self.current_material_usage else 0
+            'material_usage_change': self.initial_material_usage - self.current_material_usage if self.current_material_usage else 0,
+            'current_score': self.current_score,
+            'last_valid_score': self.last_valid_score
         }
 
     def get_episode_statistics(self) -> Dict[str, Any]:
@@ -540,7 +607,13 @@ class DACEnvironmentWrapper:
             'episode_reward': self.episode_reward,
             'total_steps': self.total_steps,
             'current_material_usage': self.current_material_usage,
-            'material_saved': self.initial_material_usage - self.current_material_usage if self.current_material_usage else 0
+            'material_saved': self.initial_material_usage - self.current_material_usage if self.current_material_usage else 0,
+            'current_score': self.current_score,
+            'last_valid_score': self.last_valid_score,
+            'score_history': self.score_history.copy(),
+            'option_pass_history': self.option_pass_history.copy(),
+            'total_options_passed': sum(self.option_pass_history),
+            'option_pass_rate': sum(self.option_pass_history) / len(self.option_pass_history) if self.option_pass_history else 0.0
         }
 
     def _check_all_indexes_zero(self, structure_obj: structure.Structure) -> bool:

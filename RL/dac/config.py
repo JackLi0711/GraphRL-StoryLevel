@@ -41,7 +41,7 @@ class DACConfig:
     ppo_ratio_clip: float = 0.2    # PPO clipping parameter
     optimization_epochs: int = 4   # Number of optimization epochs per update
     mini_batch_size: int = 64      # Mini-batch size for SGD
-    rollout_length: int = 128      # Steps to collect before update
+    rollout_length: int = 10       # Steps to collect before update
 
     # Loss weights
     entropy_weight: float = 0.01   # Entropy regularization weight
@@ -78,8 +78,13 @@ class DACConfig:
     check_acceleration: bool = False
     check_displacement: bool = True
 
+    # ========== Score Tracking Parameters ==========
+    enable_score_tracking: bool = True  # Enable option-level score tracking
+    score_tolerance: float = 0.05       # Tolerance for material usage increase (5%)
+    score_calculation_method: str = "material_reduction"  # Method for score calculation
+
     # ========== Training Parameters ==========
-    max_episodes: int = 10              # Maximum training episodes
+    max_episodes: int = 100             # Maximum training episodes
     max_steps_per_episode: int = 500    # Maximum steps per episode
     save_interval: int = 100            # Model save interval (episodes)
     eval_interval: int = 50             # Evaluation interval (episodes)
