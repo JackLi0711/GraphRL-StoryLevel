@@ -157,7 +157,7 @@ class DACEnvironmentWrapper:
     def step(self,
              action: torch.Tensor,
              option: int,
-             option_terminated: bool = False) -> Tuple[Dict[str, torch.Tensor], Dict[str, float], bool, Dict[str, Any]]:
+             option_terminated: bool = False) -> Tuple[Dict[str, torch.Tensor], float, bool, Dict[str, Any]]:
         """
         Execute action in environment with DAC-specific handling.
 
@@ -167,7 +167,7 @@ class DACEnvironmentWrapper:
             option_terminated: Whether option just terminated
 
         Returns:
-            Tuple of (next_dual_states, rewards, done, info)
+            Tuple of (next_dual_states, base_reward, done, info)
         """
         # Update option tracking
         if self.current_option != option or option_terminated:
@@ -231,10 +231,8 @@ class DACEnvironmentWrapper:
             # Apply penalty for minimum section (like Option-Critic)
             base_reward = 100.0
 
-        # Compute dual rewards
-        rewards = self._compute_dual_rewards(
-            base_reward, done, option_terminated, fail_name, fail_reason
-        )
+        # Pass base reward and fail_name to agent for unified reward calculation
+        # Agent will handle option length bonus and failure penalty internally
 
         # Extract next dual states
         next_dual_states = self._extract_dual_states(next_structure)
@@ -264,7 +262,15 @@ class DACEnvironmentWrapper:
 
         self.episode_reward += base_reward
 
-        return next_dual_states, rewards, done, info
+        # Create info dict with base reward and failure info for unified reward calculation
+        info.update({
+            'base_reward': base_reward,
+            'fail_name': fail_name,
+            'fail_reason': fail_reason,
+            'option_terminated': option_terminated
+        })
+
+        return next_dual_states, base_reward, done, info
 
     def _extract_dual_states(self, structure_obj: structure.Structure) -> Dict[str, torch.Tensor]:
         """
@@ -480,13 +486,14 @@ class DACEnvironmentWrapper:
         if option_terminated or done:
             # Compute option reward with length bonus
             material_saved = self.initial_material_usage - self.current_material_usage
-            material_reward = material_saved / 1000.0  # Normalize
+            material_reward = material_saved
 
             # Length bonus as in DAC paper
             length_bonus = self.length_bonus_weight * self.option_length
 
             # Penalty for failure
             failure_penalty = -10.0 if fail_name else 0.0
+            self.logger.debug(f"Debugging reward material_reward: {material_reward}, length_bonus: {length_bonus}, failure_penalty: {failure_penalty}, fail_name: {fail_name}")
 
             high_level_reward = material_reward + length_bonus + failure_penalty
         else:

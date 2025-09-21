@@ -83,6 +83,10 @@ class DACAgent:
         self.prev_options = torch.zeros(config.num_workers, dtype=torch.long, device=config.device)
         self.is_initial_states = torch.ones(config.num_workers, dtype=torch.bool, device=config.device)
 
+        # New: Option step tracking for consistent reward calculation
+        self.current_option_step = torch.zeros(config.num_workers, dtype=torch.long, device=config.device)
+        self.option_reward_accumulator = torch.zeros(config.num_workers, dtype=torch.float, device=config.device)
+
         # Statistics
         self.episode_rewards = []
         self.option_lengths = []
@@ -157,8 +161,18 @@ class DACAgent:
             low_value = self.network.get_low_value(story_features, option)
 
             # Update state tracking
+            old_option = self.prev_options[0]
             self.prev_options[0] = option
             self.is_initial_states[0] = False
+
+            # Update option step tracking
+            if old_option != option or self.is_initial_states[0]:
+                # New option started, reset step counter
+                self.current_option_step[0] = 1
+                self.option_reward_accumulator[0] = 0.0
+            else:
+                # Same option continues, increment step counter
+                self.current_option_step[0] += 1
 
             info = {
                 'option': option.item(),
@@ -168,7 +182,8 @@ class DACAgent:
                 'low_value': low_value.item(),
                 'story_features': story_features,
                 'global_features': global_features,
-                'valid_mask': valid_mask
+                'valid_mask': valid_mask,
+                'current_option_step': self.current_option_step[0].item()  # Add option step info
             }
 
         return option.item(), action, info
@@ -177,35 +192,64 @@ class DACAgent:
                         graph_data: Dict[str, torch.Tensor],
                         option: int,
                         action: torch.Tensor,
-                        rewards: Dict[str, float],
+                        base_reward: float,
                         next_graph_data: Dict[str, torch.Tensor],
                         done: bool,
                         option_terminated: bool,
-                        info: Dict[str, Any]):
+                        fail_name: Optional[str] = None,
+                        info: Dict[str, Any] = None):
         """
-        Store experience in storage for PPO training.
+        Store experience in storage for PPO training with unified reward calculation.
 
         Args:
             graph_data: Current state graph data
             option: Selected option
             action: Selected action
-            rewards: Dictionary with high_level_reward and low_level_reward
+            base_reward: Base environment reward
             next_graph_data: Next state graph data
             done: Episode done flag
             option_terminated: Option terminated flag
+            fail_name: Name of failure type (if any), triggers penalty
             info: Additional information
         """
         # Get network outputs for storage
         with torch.no_grad():
             prediction = self.network(graph_data)
 
-        # Store data in format compatible with ASquaredC_PPO_agent
+        # Calculate unified reward with option length bonus and failure penalty
+        current_step = info.get('current_option_step', 1) if info else 1
+
+        # Low-level reward: base_reward + length_bonus_weight * (step - 1)
+        low_level_reward = base_reward + self.config.length_bonus_weight * (current_step - 1)
+
+        # Apply failure penalty if needed
+        if fail_name is not None:
+            low_level_reward -= self.config.failure_penalty
+            self.logger.debug(f"Applied failure penalty for {fail_name}: -{self.config.failure_penalty}")
+
+        # Accumulate low-level reward for high-level calculation
+        self.option_reward_accumulator[0] += low_level_reward
+
+        # High-level reward is the accumulated low-level rewards when option terminates
+        if option_terminated:
+            high_level_reward = self.option_reward_accumulator[0].item()
+            # Reset accumulator for next option
+            self.option_reward_accumulator[0] = 0.0
+        else:
+            # Option continues, high-level reward is 0 for intermediate steps
+            high_level_reward = 0.0
+
+        self.logger.debug(f"Reward calculation: base={base_reward:.3f}, step={current_step}, "
+                         f"low_level={low_level_reward:.3f}, high_level={high_level_reward:.3f}, "
+                         f"option_terminated={option_terminated}")
+
+        # Store data in format compatible with ASquaredC_PPO_agent, but using unified reward
         storage_data = {
             's': graph_data,  # States
             'a': action,      # Actions
             'o': torch.tensor([option], device=self.config.device),  # Options
-            'r': torch.tensor([rewards['low_level_reward']], device=self.config.device),  # Low-level rewards
-            'r_hat': torch.tensor([rewards['high_level_reward']], device=self.config.device),  # High-level rewards
+            'r': torch.tensor([low_level_reward], device=self.config.device),  # Unified low-level reward
+            'r_hat': torch.tensor([high_level_reward], device=self.config.device),  # Accumulated high-level reward
             'm': torch.tensor([1 - done], device=self.config.device),  # Mask (1 - done)
             'prev_o': torch.tensor([self.prev_options[0]], device=self.config.device),  # Previous options
             'init': torch.tensor([self.is_initial_states[0]], device=self.config.device),  # Initial state flag
@@ -216,7 +260,7 @@ class DACAgent:
             'v_hat': prediction['high_value'], # High-level value
             'v_bar': prediction['option_value'][:, option:option+1],  # Low-level value
             'log_pi_hat': torch.log(prediction['inter_pi'][0, option] + 1e-8).unsqueeze(0),
-            'log_pi_bar': info.get('action_log_prob', 0.0)
+            'log_pi_bar': info.get('action_log_prob', 0.0) if info else 0.0
         }
 
         self.storage.add(storage_data)
@@ -232,12 +276,14 @@ class DACAgent:
         """
         config = self.config
 
+        # Both MDPs now use the same underlying reward structure
+        # but with different aggregation strategies
         if mdp == 'hat':
             v_key = 'v_hat'
-            r_key = 'r_hat'
-        else:
+            r_key = 'r_hat'  # Accumulated rewards at option termination
+        else:  # mdp == 'bar'
             v_key = 'v_bar'
-            r_key = 'r'
+            r_key = 'r'      # Step-wise rewards with length bonus
 
         v = storage.data[v_key]
         adv_key = f'adv_{mdp}'

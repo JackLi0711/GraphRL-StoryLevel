@@ -60,6 +60,9 @@ class DACConfig:
     # Option length bonus (from DAC paper)
     length_bonus_weight: float = 0.1    # Weight for option length bonus
 
+    # Failure penalty
+    failure_penalty: float = 10.0       # Penalty score for failed actions
+
     # Termination parameters
     termination_reg: float = 0.01       # Termination regularization
 

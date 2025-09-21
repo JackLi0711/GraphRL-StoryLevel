@@ -253,7 +253,7 @@ class DACTrainer:
                 option_start_step = step
 
             # Execute action
-            next_dual_states, rewards, done, env_info = self.env.step(
+            next_dual_states, base_reward, done, env_info = self.env.step(
                 action, option, option_terminated
             )
 
@@ -266,21 +266,22 @@ class DACTrainer:
                 "action_step": len(episode_action_sequence) - 1
             })
 
-            # Store experience
+            # Store experience with unified reward calculation
             self.agent.store_experience(
                 dual_states['graph_data'],
                 option,
                 action,
-                rewards,
+                base_reward,
                 next_dual_states['graph_data'],
                 done,
                 option_terminated,
+                env_info.get('fail_name'),
                 {**agent_info, **env_info}
             )
 
             # Update for next step
             dual_states = next_dual_states
-            episode_reward += rewards['low_level_reward']
+            episode_reward += base_reward
 
             # Agent update
             if self.agent.should_update():
@@ -387,12 +388,12 @@ class DACTrainer:
                 )
 
                 # Execute action
-                next_dual_states, rewards, done, _ = self.env.step(
+                next_dual_states, base_reward, done, _ = self.env.step(
                     action, option, False
                 )
 
                 dual_states = next_dual_states
-                episode_reward += rewards['low_level_reward']
+                episode_reward += base_reward
 
                 if done:
                     break

@@ -92,7 +92,7 @@ def evaluate_dac_model(agent, env_wrapper, num_episodes: int, logger=None, seed:
                 option_start_step = step
 
             # Execute action
-            next_dual_states, rewards, done, env_info = env_wrapper.step(
+            next_dual_states, base_reward, done, env_info = env_wrapper.step(
                 action, option, option_terminated
             )
 
@@ -106,7 +106,7 @@ def evaluate_dac_model(agent, env_wrapper, num_episodes: int, logger=None, seed:
             })
 
             # Update rewards and scores
-            episode_total_reward += rewards['low_level_reward']
+            episode_total_reward += base_reward
 
             # For DAC, we use the updated score from environment
             # The environment tracks option-level scores internally
