@@ -554,7 +554,7 @@ class DACEnvironmentWrapper:
                 # Calculate and update score based on check results
                 if structure_passed:
                     # Option passed: calculate new score as percentage of material saved
-                    new_score = (material_saved / self.initial_material_usage) * 100.0 if self.initial_material_usage > 0 else 0.0
+                    new_score = material_saved if self.initial_material_usage > 0 else 0.0
                     self.current_score = new_score
                     self.last_valid_score = new_score
                     self.logger.debug(f"Option passed. New score: {new_score:.2f}% material saved")
@@ -614,7 +614,6 @@ class DACEnvironmentWrapper:
             'episode_reward': self.episode_reward,
             'total_steps': self.total_steps,
             'current_material_usage': self.current_material_usage,
-            'material_saved': self.initial_material_usage - self.current_material_usage if self.current_material_usage else 0,
             'current_score': self.current_score,
             'last_valid_score': self.last_valid_score,
             'score_history': self.score_history.copy(),

@@ -74,13 +74,11 @@ class DACTrainer:
         self.episode = 0
         self.total_steps = 0
         self.best_reward = -float('inf')
-        self.best_material_saved = -float('inf')
         self.best_score = -float('inf')
 
         # Statistics tracking
         self.episode_rewards = []
         self.episode_lengths = []
-        self.material_savings = []
         self.episode_scores = []  # Track episode scores
         self.episode_final_valid_scores = []  # Track final valid scores per episode
         self.option_pass_rates = []  # Track option pass rates per episode
@@ -98,7 +96,6 @@ class DACTrainer:
 
         # Moving averages for monitoring
         self.reward_ma = MovingAverage(window_size=100)
-        self.material_ma = MovingAverage(window_size=100)
 
         # Behavior tracking for visualization (similar to option_critic)
         self.training_histories = {
@@ -339,7 +336,6 @@ class DACTrainer:
         episode_stats = {
             'episode_reward': episode_reward,
             'episode_steps': episode_steps,
-            'material_saved': env_stats.get('material_saved', 0),
             'material_usage': env_stats.get('current_material_usage', 0),
             'current_score': env_stats.get('current_score', 0.0),
             'final_valid_score': env_stats.get('last_valid_score', 0.0),
@@ -365,7 +361,6 @@ class DACTrainer:
         self.logger.logger.info(f"Running evaluation with {num_episodes} episodes")
 
         eval_rewards = []
-        eval_material_savings = []
         eval_episode_lengths = []
 
         for _ in range(num_episodes):
@@ -401,15 +396,12 @@ class DACTrainer:
             # Collect statistics
             env_stats = self.env.get_episode_statistics()
             eval_rewards.append(episode_reward)
-            eval_material_savings.append(env_stats.get('material_saved', 0))
             eval_episode_lengths.append(episode_steps)
 
         # Compute evaluation metrics
         eval_stats = {
             'eval_reward_mean': np.mean(eval_rewards),
             'eval_reward_std': np.std(eval_rewards),
-            'eval_material_saved_mean': np.mean(eval_material_savings),
-            'eval_material_saved_std': np.std(eval_material_savings),
             'eval_episode_length_mean': np.mean(eval_episode_lengths),
             'eval_episode_length_std': np.std(eval_episode_lengths)
         }
@@ -419,9 +411,6 @@ class DACTrainer:
             self.best_reward = eval_stats['eval_reward_mean']
             self._save_best_model("best_reward")
 
-        if eval_stats['eval_material_saved_mean'] > self.best_material_saved:
-            self.best_material_saved = eval_stats['eval_material_saved_mean']
-            self._save_best_model("best_material")
 
         return eval_stats
 
@@ -429,7 +418,6 @@ class DACTrainer:
         """Update training statistics."""
         self.episode_rewards.append(episode_stats['episode_reward'])
         self.episode_lengths.append(episode_stats['episode_steps'])
-        self.material_savings.append(episode_stats['material_saved'])
 
         # Update score statistics
         self.episode_scores.append(episode_stats.get('current_score', 0.0))
@@ -438,7 +426,6 @@ class DACTrainer:
 
         # Update moving averages
         self.reward_ma.update(episode_stats['episode_reward'])
-        self.material_ma.update(episode_stats['material_saved'])
 
         # Update best score tracking
         if episode_stats.get('final_valid_score', 0.0) > self.best_score:
@@ -456,14 +443,12 @@ class DACTrainer:
     def _log_progress(self, episode: int):
         """Log training progress."""
         recent_rewards = self.episode_rewards[-self.config.log_interval:]
-        recent_material = self.material_savings[-self.config.log_interval:]
         recent_scores = self.episode_final_valid_scores[-self.config.log_interval:]
         recent_pass_rates = self.option_pass_rates[-self.config.log_interval:]
 
         self.logger.logger.info(
             f"Episode {episode:4d} | "
             f"Avg Reward: {np.mean(recent_rewards):8.2f} | "
-            f"Avg Material Saved: {np.mean(recent_material):6.2f} | "
             f"Avg Score: {np.mean(recent_scores):6.2f}% | "
             f"Avg Pass Rate: {np.mean(recent_pass_rates)*100:5.1f}% | "
             f"Best Score: {self.best_score:6.2f}% | "
@@ -486,11 +471,9 @@ class DACTrainer:
             'episode': episode,
             'total_steps': self.total_steps,
             'best_reward': self.best_reward,
-            'best_material_saved': self.best_material_saved,
             'best_score': self.best_score,
             'episode_rewards': self.episode_rewards,
             'episode_lengths': self.episode_lengths,
-            'material_savings': self.material_savings,
             'episode_scores': self.episode_scores,
             'episode_final_valid_scores': self.episode_final_valid_scores,
             'option_pass_rates': self.option_pass_rates,
@@ -518,7 +501,6 @@ class DACTrainer:
             'episode': self.episode,
             'total_steps': self.total_steps,
             'score': float(self.best_reward),
-            'material_saved': float(self.best_material_saved),
             'best_score': float(self.best_score),
             'model_type': model_type,
             'hyperparameters': self.config.to_dict()
@@ -536,8 +518,8 @@ class DACTrainer:
         self.agent.save_checkpoint(str(final_checkpoint))
 
         # Save training curves in checkpoint directory
-        metrics_to_plot = ['episode_reward', 'material_saved', 'episode_steps']
-        available_metrics = {k: getattr(self, f"{k}s", []) for k in ['episode_reward', 'material_saving']
+        metrics_to_plot = ['episode_reward', 'episode_steps']
+        available_metrics = {k: getattr(self, f"{k}s", []) for k in ['episode_reward']
                            if hasattr(self, f"{k}s")}
         available_metrics['episode_steps'] = self.episode_lengths
 
@@ -561,10 +543,8 @@ class DACTrainer:
             'total_episodes': self.episode,
             'total_steps': self.total_steps,
             'best_reward': self.best_reward,
-            'best_material_saved': self.best_material_saved,
             'best_score': self.best_score,
             'final_reward_avg': np.mean(self.episode_rewards[-100:]) if self.episode_rewards else 0,
-            'final_material_avg': np.mean(self.material_savings[-100:]) if self.material_savings else 0,
             'final_score_avg': np.mean(self.episode_final_valid_scores[-100:]) if self.episode_final_valid_scores else 0,
             'final_pass_rate_avg': np.mean(self.option_pass_rates[-100:]) if self.option_pass_rates else 0,
             'avg_episode_length': np.mean(self.episode_lengths) if self.episode_lengths else 0,
@@ -592,11 +572,9 @@ class DACTrainer:
             self.episode = training_state['episode']
             self.total_steps = training_state['total_steps']
             self.best_reward = training_state['best_reward']
-            self.best_material_saved = training_state['best_material_saved']
             self.best_score = training_state.get('best_score', -float('inf'))
             self.episode_rewards = training_state['episode_rewards']
             self.episode_lengths = training_state['episode_lengths']
-            self.material_savings = training_state['material_savings']
             self.episode_scores = training_state.get('episode_scores', [])
             self.episode_final_valid_scores = training_state.get('episode_final_valid_scores', [])
             self.option_pass_rates = training_state.get('option_pass_rates', [])

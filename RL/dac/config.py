@@ -41,7 +41,7 @@ class DACConfig:
     ppo_ratio_clip: float = 0.2    # PPO clipping parameter
     optimization_epochs: int = 4   # Number of optimization epochs per update
     mini_batch_size: int = 64      # Mini-batch size for SGD
-    rollout_length: int = 10       # Steps to collect before update
+    rollout_length: int = 32       # Steps to collect before update
 
     # Loss weights
     entropy_weight: float = 0.01   # Entropy regularization weight
@@ -58,7 +58,7 @@ class DACConfig:
 
     # ========== DAC Specific Parameters ==========
     # Option length bonus (from DAC paper)
-    length_bonus_weight: float = 0.1    # Weight for option length bonus
+    length_bonus_weight: float = 0.001   # Weight for option length bonus
 
     # Failure penalty
     failure_penalty: float = 10.0       # Penalty score for failed actions
@@ -89,8 +89,8 @@ class DACConfig:
     # ========== Training Parameters ==========
     max_episodes: int = 100             # Maximum training episodes
     max_steps_per_episode: int = 500    # Maximum steps per episode
-    save_interval: int = 100            # Model save interval (episodes)
-    eval_interval: int = 50             # Evaluation interval (episodes)
+    save_interval: int = 10             # Model save interval (episodes)
+    eval_interval: int = 10             # Evaluation interval (episodes)
     log_interval: int = 10              # Logging interval (episodes)
 
     # Evaluation parameters (like option_critic)

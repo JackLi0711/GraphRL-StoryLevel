@@ -165,14 +165,12 @@ class DACLogger:
         # Detailed logging
         reward = metrics.get('episode_reward', 0)
         steps = metrics.get('episode_steps', 0)
-        material_saved = metrics.get('material_saved', 0)
         current_score = metrics.get('current_score', 0)
         final_valid_score = metrics.get('final_valid_score', 0)
         option_pass_rate = metrics.get('option_pass_rate', 0)
 
         self.logger.info(
             f"  Reward: {reward:8.2f} | Steps: {steps:3d} | "
-            f"Material Saved: {material_saved:6.2f} | "
             f"Score: {current_score:6.2f}% | "
             f"Valid Score: {final_valid_score:6.2f}% | "
             f"Pass Rate: {option_pass_rate*100:5.1f}%"

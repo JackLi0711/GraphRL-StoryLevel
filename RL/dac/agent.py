@@ -98,6 +98,7 @@ class DACAgent:
     def _get_high_level_parameters(self) -> List[nn.Parameter]:
         """Get parameters for high-level networks."""
         params = []
+        params.extend(self.network.state_gnn.parameters())        # StateGNN for feature extraction
         params.extend(self.network.inter_option_policy.parameters())
         params.extend(self.network.option_termination.parameters())
         params.extend(self.network.high_level_value.parameters())
@@ -107,6 +108,7 @@ class DACAgent:
     def _get_low_level_parameters(self) -> List[nn.Parameter]:
         """Get parameters for low-level networks."""
         params = []
+        params.extend(self.network.state_gnn.parameters())        # StateGNN for feature extraction
         params.append(self.network.intra_option_mean)
         params.append(self.network.intra_option_std)
         params.extend(self.network.low_level_value.parameters())

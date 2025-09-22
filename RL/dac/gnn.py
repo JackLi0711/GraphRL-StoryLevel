@@ -194,9 +194,14 @@ class DACDoubleActorCritic(nn.Module):
         story_features = features  # Full features for story-level (low-level)
         global_features = features[:, self.member_state_dim:]  # Global part for high-level
 
+        self.logger.debug(f"get_features: story_features.shape={story_features.shape}, global_features.shape={global_features.shape}")
+        self.logger.debug(f"global_features: {global_features}")
+
         # Aggregate global features (mean pooling over stories)
-        if len(global_features.shape) > 1:
-            global_features = torch.mean(global_features, dim=0, keepdim=True)
+        # if len(global_features.shape) > 1:
+        #     global_features = torch.mean(global_features, dim=0, keepdim=True)
+
+        global_features = global_features[0: ]
 
         return story_features, global_features
 
@@ -288,40 +293,36 @@ class DACDoubleActorCritic(nn.Module):
         # intra_option_std: [num_options, feature_dim, num_actions]
         self.logger.debug(f"compute_pi_bar: intra_option_std.shape={self.intra_option_std.shape}")
 
-        try:
-            # Select parameters for the chosen option (single option for all actions)
-            option_idx = options[0].item()  # Extract scalar option index
-            option_mean_weights = self.intra_option_mean[option_idx]  # [feature_dim, num_actions]
-            option_std_weights = self.intra_option_std[option_idx]    # [feature_dim, num_actions]
+        
+        # Select parameters for the chosen option (single option for all actions)
+        option_idx = options[0].item()  # Extract scalar option index
+        option_mean_weights = self.intra_option_mean[option_idx]  # [feature_dim, num_actions]
+        option_std_weights = self.intra_option_std[option_idx]    # [feature_dim, num_actions]
 
-            self.logger.debug(f"compute_pi_bar: option_mean_weights.shape={option_mean_weights.shape}")
-            self.logger.debug(f"compute_pi_bar: option_std_weights.shape={option_std_weights.shape}")
+        self.logger.debug(f"compute_pi_bar: option_mean_weights.shape={option_mean_weights.shape}")
+        self.logger.debug(f"compute_pi_bar: option_std_weights.shape={option_std_weights.shape}")
 
-            # Compute action means and stds using matrix multiplication
-            # story_features: [num_actions, feature_dim]
-            # option_weights: [feature_dim, num_actions]
-            # Result: [num_actions] - one value per action
+        # Compute action means and stds using matrix multiplication
+        # story_features: [num_actions, feature_dim]
+        # option_weights: [feature_dim, num_actions]
+        # Result: [num_actions] - one value per action
 
-            mean = torch.matmul(story_features, option_mean_weights)  # [num_actions, feature_dim] @ [feature_dim, num_actions] -> [num_actions, num_actions]
-            std = torch.matmul(story_features, option_std_weights)    # [num_actions, feature_dim] @ [feature_dim, num_actions] -> [num_actions, num_actions]
+        mean = torch.matmul(story_features, option_mean_weights)  # [num_actions, feature_dim] @ [feature_dim, num_actions] -> [num_actions, num_actions]
+        std = torch.matmul(story_features, option_std_weights)    # [num_actions, feature_dim] @ [feature_dim, num_actions] -> [num_actions, num_actions]
 
-            # Take diagonal to get the action-specific values
-            mean = torch.diag(mean)  # [num_actions]
-            std = torch.diag(std)    # [num_actions]
+        # Take diagonal to get the action-specific values
+        mean = torch.diag(mean)  # [num_actions]
+        std = torch.diag(std)    # [num_actions]
 
-            self.logger.debug(f"compute_pi_bar: raw mean.shape={mean.shape}, raw std.shape={std.shape}")
+        self.logger.debug(f"compute_pi_bar: raw mean.shape={mean.shape}, raw std.shape={std.shape}")
 
-            # Ensure positive std
-            std = F.softplus(std) + 1e-5
+        # Ensure positive std
+        std = F.softplus(std) + 1e-5
 
-            self.logger.debug(f"compute_pi_bar: final mean.shape={mean.shape}, final std.shape={std.shape}")
+        self.logger.debug(f"compute_pi_bar: final mean.shape={mean.shape}, final std.shape={std.shape}")
 
-            return mean, std
+        return mean, std
 
-        except Exception as e:
-            self.logger.error(f"Error in compute_pi_bar: {e}")
-            self.logger.error(f"story_features.shape={story_features.shape}, options={options}")
-            raise
 
     def select_option(self,
                       global_features: torch.Tensor,
