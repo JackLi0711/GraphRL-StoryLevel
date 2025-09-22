@@ -44,13 +44,13 @@ def parse_args():
     parser.add_argument("--num_layers", type=int, default=3)  # 3
     parser.add_argument("--termination_reg", type=float, default=0.01)
     parser.add_argument("--entropy_reg", type=float, default=0.01)
-    parser.add_argument("--option_length_bonus", type=float, default=0.001, help="Bonus reward for longer options: reward += (step-1) * bonus")
+    parser.add_argument("--option_length_bonus", type=float, default=0.005, help="Bonus reward for longer options: reward += (step-1) * bonus")
     parser.add_argument("--termination_lr_ratio", type=float, default=0.01, help="Termination learning rate as ratio of actor_lr (termination_lr = actor_lr * ratio)")
     parser.add_argument("--eval_frequency", type=int, default=10, help="Evaluate model every N training episodes")
     parser.add_argument("--eval_episodes", type=int, default=5, help="Number of episodes for evaluation")
 
     # Option preview visualization settings
     parser.add_argument("--enable_option_preview", action="store_true", default=True, help="Enable option preview visualization")
-    parser.add_argument("--option_preview_frequency", type=int, default=10, help="Generate option preview every N evaluation rounds")
+    parser.add_argument("--option_preview_frequency", type=int, default=1, help="Generate option preview every N evaluation rounds")
 
     return parser.parse_args()

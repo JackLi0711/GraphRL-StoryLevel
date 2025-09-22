@@ -70,9 +70,9 @@ def action_to_story_component(action_index: int, structure: structure.Structure)
     return story_index + 1, component_type  # 樓層從1開始
 
 
-def analyze_actions_by_story_component(action_indices: list, structure: structure.Structure) -> dict:
+def analyze_actions_by_story_component_original(action_indices: list, structure: structure.Structure) -> dict:
     """
-    分析 actions 按樓層和構件類型的統計。
+    分析 actions 按樓層和構件類型的統計。（原始版本，已備份）
 
     Args:
         action_indices: Action 索引列表
@@ -101,13 +101,104 @@ def analyze_actions_by_story_component(action_indices: list, structure: structur
     return stats
 
 
-def prepare_episode_option_data(episode_data: dict, structure: structure.Structure) -> list:
+def calculate_section_reductions_by_story(before_sections: list, after_sections: list, structure: structure.Structure) -> dict:
+    """
+    基於 story_level_sections 的前後差距計算各樓層樑柱減少次數。
+
+    Args:
+        before_sections: Option 執行前的 story_level_sections
+        after_sections: Option 執行後的 story_level_sections
+        structure: 結構對象
+
+    Returns:
+        dict: 統計結果，格式與原函數相同
+    """
+    if len(before_sections) != len(after_sections):
+        raise ValueError("before_sections 和 after_sections 的長度必須相同")
+
+    # 計算差距
+    reductions = [before - after for before, after in zip(before_sections, after_sections)]
+
+    # 初始化統計結構
+    stats = {
+        'total_actions': sum(reductions),
+        'by_story': {},
+        'by_component': {'Inner-Column': 0, 'Outer-Column': 0, 'X-Beam': 0, 'Z-Beam': 0}
+    }
+
+    # 獲取每類構件的數量
+    num_xdir_beam = len(structure.story_xdir_beam_member)
+    num_zdir_beam = len(structure.story_zdir_beam_member)
+    num_outer_column = len(structure.story_outer_column_member)
+    num_inner_column = len(structure.story_inner_column_member)
+
+    # 根據 story_level_categories 映射每個 action index 到樓層和構件類型
+    for i, reduction_count in enumerate(reductions):
+        if reduction_count > 0:  # 只處理有減少的構件
+            category = structure.story_level_categories[i]
+
+            if category == 'xdir_beam':
+                story_index = i
+                component_type = 'X-Beam'
+            elif category == 'zdir_beam':
+                story_index = i - num_xdir_beam
+                component_type = 'Z-Beam'
+            elif category == 'outer_column':
+                story_index = i - num_xdir_beam - num_zdir_beam
+                component_type = 'Outer-Column'
+            else:  # inner_column
+                story_index = i - num_xdir_beam - num_zdir_beam - num_outer_column
+                component_type = 'Inner-Column'
+
+            story_number = story_index + 1  # 樓層從1開始
+
+            # 更新統計
+            if story_number not in stats['by_story']:
+                stats['by_story'][story_number] = {}
+            if component_type not in stats['by_story'][story_number]:
+                stats['by_story'][story_number][component_type] = 0
+
+            stats['by_story'][story_number][component_type] += reduction_count
+            stats['by_component'][component_type] += reduction_count
+
+    return stats
+
+
+def analyze_actions_by_story_component(action_indices: list = None, structure: structure.Structure = None,
+                                     before_sections: list = None, after_sections: list = None) -> dict:
+    """
+    分析 actions 按樓層和構件類型的統計。
+    支援兩種模式：
+    1. 傳統模式：使用 action_indices 和 structure
+    2. 新模式：使用 before_sections 和 after_sections 計算差距
+
+    Args:
+        action_indices: Action 索引列表（傳統模式）
+        structure: 結構對象
+        before_sections: Option 執行前的 story_level_sections（新模式）
+        after_sections: Option 執行後的 story_level_sections（新模式）
+
+    Returns:
+        dict: 統計結果
+    """
+    if before_sections is not None and after_sections is not None:
+        # 新模式：使用 story_level_sections 差距計算
+        return calculate_section_reductions_by_story(before_sections, after_sections, structure)
+    elif action_indices is not None:
+        # 傳統模式：使用原始邏輯
+        return analyze_actions_by_story_component_original(action_indices, structure)
+    else:
+        raise ValueError("必須提供 action_indices 或 (before_sections, after_sections)")
+
+
+def prepare_episode_option_data(episode_data: dict, structure: structure.Structure, use_section_diff: bool = True) -> list:
     """
     準備 episode 中每個 option instance 的詳細數據。
 
     Args:
         episode_data: Episode 數據包含 actions, options, option_instances
         structure: 結構對象
+        use_section_diff: 是否使用 story_level_sections 差距計算（預設 True）
 
     Returns:
         list: 按時間順序排列的 (instance_id, instance_data) 對
@@ -124,7 +215,8 @@ def prepare_episode_option_data(episode_data: dict, structure: structure.Structu
             instance_groups[instance_id] = {
                 'option_index': instance_data['option_index'],
                 'action_indices': [],
-                'first_action_step': float('inf')
+                'first_action_step': float('inf'),
+                'last_action_step': -1
             }
 
         action_step = instance_data['action_step']
@@ -132,12 +224,40 @@ def prepare_episode_option_data(episode_data: dict, structure: structure.Structu
         instance_groups[instance_id]['first_action_step'] = min(
             instance_groups[instance_id]['first_action_step'], action_step
         )
+        instance_groups[instance_id]['last_action_step'] = max(
+            instance_groups[instance_id]['last_action_step'], action_step
+        )
 
     # 為每個 instance 生成統計
-    for instance_id in instance_groups:
-        group_actions = instance_groups[instance_id]['action_indices']
-        stats = analyze_actions_by_story_component(group_actions, structure)
-        instance_groups[instance_id]['statistics'] = stats
+    if use_section_diff:
+        # 新模式：使用 story_level_sections 差距計算
+        # 需要模擬 option 執行過程來獲取前後狀態
+        for instance_id in instance_groups:
+            group_actions = instance_groups[instance_id]['action_indices']
+
+            # 計算此 option instance 的 story_level_sections 變化
+            before_sections = structure.story_level_sections.copy()
+            after_sections = structure.story_level_sections.copy()
+
+            # 模擬執行這些 actions 來計算 after_sections
+            for action_idx in group_actions:
+                if after_sections[action_idx] > 0:
+                    after_sections[action_idx] -= 1
+
+            stats = analyze_actions_by_story_component(
+                structure=structure,
+                before_sections=before_sections,
+                after_sections=after_sections
+            )
+            instance_groups[instance_id]['statistics'] = stats
+            instance_groups[instance_id]['before_sections'] = before_sections
+            instance_groups[instance_id]['after_sections'] = after_sections
+    else:
+        # 傳統模式：使用原始邏輯
+        for instance_id in instance_groups:
+            group_actions = instance_groups[instance_id]['action_indices']
+            stats = analyze_actions_by_story_component(action_indices=group_actions, structure=structure)
+            instance_groups[instance_id]['statistics'] = stats
 
     # 按首次出現順序排序
     sorted_instances = sorted(instance_groups.items(),
@@ -148,52 +268,63 @@ def prepare_episode_option_data(episode_data: dict, structure: structure.Structu
 
 def _add_option_preview_panel(fig, preview_data: dict):
     """
-    在右側添加 option actions 預告統計面板。
+    在右側添加 option preview 統計面板，使用更大的字體。
 
     Args:
         fig: matplotlib figure 對象
         preview_data: 預告數據包含 option_index, instance_id, statistics
     """
-    ax_preview = fig.add_subplot(1, 3, 3)
-    ax_preview.set_axis_off()
-
     option_idx = preview_data['option_index']
     instance_id = preview_data['instance_id']
     stats = preview_data['statistics']
 
+    # 右側面板 - 統計信息
+    ax_preview = fig.add_subplot(1, 3, 3)
+    ax_preview.set_axis_off()
+
     # Title
-    title_text = f"Option {option_idx} (Instance {instance_id})\nUpcoming Actions"
+    title_text = f"Option {option_idx} (Instance {instance_id})\nSection Reductions (Story-Level)"
     ax_preview.text(0.5, 0.95, title_text, ha='center', va='top',
-                   fontsize=16, weight='bold', transform=ax_preview.transAxes)
+                   fontsize=28, weight='bold', transform=ax_preview.transAxes)
 
     # Total information
-    total_actions = stats['total_actions']
-    summary_text = f"Total: {total_actions} actions\n\n"
-
-    # 按樓層統計
-    y_pos = 0.85
-    ax_preview.text(0.05, y_pos, summary_text, fontsize=14,
+    total_reductions = stats['total_actions']
+    summary_text = f"Total Reductions: {total_reductions}\n"
+    ax_preview.text(0.05, 0.82, summary_text, fontsize=24,
                    transform=ax_preview.transAxes, weight='bold')
 
-    y_pos -= 0.08
-    for story in sorted(stats['by_story'].keys()):
-        story_text = f"{story}F:"
-        ax_preview.text(0.05, y_pos, story_text, fontsize=13, weight='bold',
+    # By story detailed statistics
+    if stats['by_story']:
+        y_pos = 0.72
+        ax_preview.text(0.05, y_pos, "By Story Details:", fontsize=32, weight='bold',
                        transform=ax_preview.transAxes)
         y_pos -= 0.04
 
-        for component, count in stats['by_story'][story].items():
-            component_text = f"  • {component}: {count} times"
-            ax_preview.text(0.1, y_pos, component_text, fontsize=16,
-                          transform=ax_preview.transAxes)
-            y_pos -= 0.04
-        y_pos -= 0.02  # 樓層間距
+        for story in sorted(stats['by_story'].keys()):
+            story_text = f"Floor {story}:"
+            ax_preview.text(0.1, y_pos, story_text, fontsize=32, weight='bold',
+                           transform=ax_preview.transAxes)
+            y_pos -= 0.03
+
+            for component, count in stats['by_story'][story].items():
+                if count > 0:
+                    component_text = f"  - {component}: {count} times"
+                    ax_preview.text(0.15, y_pos, component_text, fontsize=24,
+                                  transform=ax_preview.transAxes)
+                    y_pos -= 0.022
+            y_pos -= 0.03
+    else:
+        # If no statistics data, show hint message
+        no_data_text = "No section reductions\nin this option instance"
+        ax_preview.text(0.5, 0.5, no_data_text, ha='center', va='center',
+                       fontsize=24, transform=ax_preview.transAxes,
+                       style='italic', color='gray')
 
     # 添加邊框
     from matplotlib.patches import Rectangle
     bbox = Rectangle((0.02, 0.02), 0.96, 0.96,
                     transform=ax_preview.transAxes,
-                    fill=False, edgecolor='blue', linewidth=2)
+                    fill=False, edgecolor='blue', linewidth=3)
     ax_preview.add_patch(bbox)
 
 
@@ -307,8 +438,8 @@ def visualize_option_preview_process(agent: agent.DeepQAgent,
     # 重置環境到初始狀態
     structure = env.reset(testing=True)
 
-    # 準備 option instance 數據
-    sorted_option_instances = prepare_episode_option_data(episode_data, structure)
+    # 準備 option instance 數據（使用新的 story_level_sections 差距計算方式）
+    sorted_option_instances = prepare_episode_option_data(episode_data, structure, use_section_diff=True)
 
     actions = episode_data['actions']
     total_actions = len(actions)
@@ -520,9 +651,10 @@ def _visualize_one_iteration(structure: structure.Structure,
                              option_action_preview: dict = None):
     # plot 3d - 調整佈局和大小以容納 option preview
     if option_action_preview:
-        fig = plt.figure(figsize=(30, 15), facecolor="w")  # 加寬以容納統計面板
-        q_subplot_spec = (1, 3, 1)
-        structure_subplot_spec = (1, 3, 2)
+        fig = plt.figure(figsize=(30, 15), facecolor="w")  # 3欄佈局
+        q_subplot_spec = (1, 3, 1)  # Q values 在第1欄
+        structure_subplot_spec = (1, 3, 2)  # 結構圖在第2欄
+        # 第3欄用於統計面板
     else:
         fig = plt.figure(figsize=(20, 15), facecolor="w")  # 原有佈局
         q_subplot_spec = (1, 2, 1)
@@ -584,7 +716,7 @@ def _visualize_one_iteration(structure: structure.Structure,
         # plot a border on a line: https://stackoverflow.com/questions/12729529/can-i-give-a-border-outline-to-a-line-in-matplotlib-plot-function
         ax.plot(xx, zz, yy, c=(color), linewidth=5, path_effects=[pe.Stroke(linewidth=9, foreground='black'), pe.Normal()])
 
-    ax.set_title(f"Q values", fontsize=30)
+    ax.set_title(f"Q values", fontsize=40)
 
 
     # Then plot beam-column sections
@@ -647,7 +779,7 @@ def _visualize_one_iteration(structure: structure.Structure,
         infos += f"reduced material(SCWB): {saved_material_SCWB:5.2f} m3"
     title = f"Reward: {env.reward_type}\n" + f"Iteration: {iteration:4d}\n" + infos
 
-    ax.set_title(title, fontsize=30)
+    ax.set_title(title, fontsize=40)
 
     # 如果有 option preview 數據，添加統計面板
     if option_action_preview:
