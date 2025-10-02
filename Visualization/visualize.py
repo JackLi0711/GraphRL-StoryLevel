@@ -328,6 +328,72 @@ def _add_option_preview_panel(fig, preview_data: dict):
     ax_preview.add_patch(bbox)
 
 
+def _add_episode_final_panel(fig, episode_final_data: dict):
+    """
+    在右側添加 episode 結束面板，顯示 fail_name 和 fail_reason。
+
+    Args:
+        fig: matplotlib figure 對象
+        episode_final_data: 結束數據包含 fail_name, fail_reason, episode_info, total_actions, total_instances
+    """
+    fail_name = episode_final_data.get('fail_name', 'Unknown')
+    fail_reason = episode_final_data.get('fail_reason', 'Unknown')
+    episode_info = episode_final_data.get('episode_info', {})
+    total_actions = episode_final_data.get('total_actions', 0)
+    total_instances = episode_final_data.get('total_instances', 0)
+
+    # 右側面板 - 結束信息
+    ax_final = fig.add_subplot(1, 3, 3)
+    ax_final.set_axis_off()
+
+    # Title
+    title_text = f"Episode Completed\nRound {episode_info.get('round_number', 'N/A')}"
+    ax_final.text(0.5, 0.95, title_text, ha='center', va='top',
+                  fontsize=28, weight='bold', transform=ax_final.transAxes)
+
+    # Episode basic info
+    episode_text = f"Episode: {episode_info.get('episode_number', 'N/A')}\n"
+    episode_text += f"Final Score: {episode_info.get('score', 0):.2f}\n"
+    ax_final.text(0.05, 0.82, episode_text, fontsize=24,
+                  transform=ax_final.transAxes, weight='bold')
+
+    # Failure information
+    y_pos = 0.68
+    ax_final.text(0.05, y_pos, "Termination Details:", fontsize=32, weight='bold',
+                  transform=ax_final.transAxes, color='red')
+    y_pos -= 0.06
+
+    if fail_name and fail_name != 'None':
+        fail_info_text = f"Fail Name: {fail_name}"
+        ax_final.text(0.1, y_pos, fail_info_text, fontsize=24,
+                      transform=ax_final.transAxes, color='darkred')
+        y_pos -= 0.04
+
+    if fail_reason and fail_reason != 'None':
+        fail_reason_text = f"Fail Reason: {fail_reason}"
+        ax_final.text(0.1, y_pos, fail_reason_text, fontsize=24,
+                      transform=ax_final.transAxes, color='darkred')
+        y_pos -= 0.04
+
+    # Summary statistics
+    y_pos -= 0.08
+    ax_final.text(0.05, y_pos, "Episode Summary:", fontsize=32, weight='bold',
+                  transform=ax_final.transAxes)
+    y_pos -= 0.06
+
+    summary_text = f"Total Actions: {total_actions}\n"
+    summary_text += f"Total Option Instances: {total_instances}"
+    ax_final.text(0.1, y_pos, summary_text, fontsize=24,
+                  transform=ax_final.transAxes)
+
+    # 添加邊框 - 使用紅色表示結束狀態
+    from matplotlib.patches import Rectangle
+    bbox = Rectangle((0.02, 0.02), 0.96, 0.96,
+                    transform=ax_final.transAxes,
+                    fill=False, edgecolor='red', linewidth=3)
+    ax_final.add_patch(bbox)
+
+
 def _generate_option_preview_gif(save_dir: Path, episode_info: dict) -> Path:
     """
     生成 option preview GIF 動畫。
@@ -445,6 +511,11 @@ def visualize_option_preview_process(agent: agent.DeepQAgent,
     total_actions = len(actions)
     action_step = 0
 
+    # 初始化最後一步的狀態記錄
+    final_fail_name = None
+    final_fail_reason = None
+    final_done = False
+
     logger.info(f"Processing {len(sorted_option_instances)} option instances with {total_actions} total actions")
 
     # 為每個 option instance 生成預告圖
@@ -503,10 +574,79 @@ def visualize_option_preview_process(agent: agent.DeepQAgent,
                 try:
                     structure, reward, done, fail_name, fail_reason = env.step(structure, action_idx)
                     action_step += 1
+
+                    # 更新最後一步的狀態記錄
+                    final_fail_name = fail_name
+                    final_fail_reason = fail_reason
+                    final_done = done
+
                     logger.debug(f"Applied action {action_idx} (step {action_step}/{total_actions})")
+
+                    # 如果 episode 結束，跳出循環
+                    if done:
+                        break
                 except Exception as e:
                     logger.error(f"Error applying action {action_idx}: {e}")
                     break
+
+            # 如果 episode 結束，跳出外層循環
+            if final_done:
+                break
+
+    # 如果 episode 結束或所有 actions 執行完畢，生成最後一張結構圖
+    if final_done or action_step >= total_actions:
+        logger.info(f"Episode completed with fail_name: {final_fail_name}, fail_reason: {final_fail_reason}")
+
+        # 準備最後一步的數據
+        episode_final_data = {
+            'fail_name': final_fail_name if final_fail_name else 'Success',
+            'fail_reason': final_fail_reason if final_fail_reason else 'Episode completed normally',
+            'episode_info': episode_info,
+            'total_actions': total_actions,
+            'total_instances': len(sorted_option_instances)
+        }
+
+        # 生成最後一步的 Q-values
+        with torch.no_grad():
+            graph = structure.graph.clone()
+            device = agent.device
+            graph = graph.to(device)
+
+            # 對於 Option-Critic，我們需要處理 option Q-values
+            if hasattr(agent, 'gnn') and agent.gnn is not None:
+                # 使用 Option-Critic 的方式獲取狀態
+                story_level_state, global_state = agent.gnn.get_state(
+                    graph.x, graph.edge_index, graph.edge_attr,
+                    structure.aux["story_batch"].to(device), None
+                )
+                # 獲取 option Q-values
+                option_q_values = agent.gnn.get_Q(global_state)
+                # 為了與原可視化兼容，我們創建一個偽造的 story-level Q-values
+                q_values = torch.zeros(len(structure.story_level_actions), device=device)
+                # 可以選擇將 option Q-values 的平均值分配到所有 story actions
+                if option_q_values.numel() > 0:
+                    avg_q = option_q_values.mean().item()
+                    q_values.fill_(avg_q)
+            else:
+                q_values = torch.zeros(len(structure.story_level_actions), device=device)
+
+        # 生成最後一步的圖片，文件名為最後一個 frame index + 1
+        final_frame_idx = len(sorted_option_instances)
+        final_vis_path = save_dir / f"{final_frame_idx}.png"
+        accumulated_reward = sum([env.material_usage_record[i] - env.material_usage_record[i+1]
+                                for i in range(min(len(env.material_usage_record)-1, action_step))])
+
+        _visualize_one_iteration(
+            structure=structure,
+            iteration=final_frame_idx,
+            env=env,
+            accumulated_reward=accumulated_reward,
+            q_values=q_values,
+            save_fig_path=final_vis_path,
+            episode_final_data=episode_final_data
+        )
+
+        logger.info(f"Generated final frame {final_frame_idx} for episode completion")
 
     # 生成 episode 摘要 JSON
     summary_data = {
@@ -648,13 +788,14 @@ def _visualize_one_iteration(structure: structure.Structure,
                              accumulated_reward: float,
                              q_values: torch.Tensor,
                              save_fig_path: Path,
-                             option_action_preview: dict = None):
-    # plot 3d - 調整佈局和大小以容納 option preview
-    if option_action_preview:
+                             option_action_preview: dict = None,
+                             episode_final_data: dict = None):
+    # plot 3d - 調整佈局和大小以容納 option preview 或 episode final panel
+    if option_action_preview or episode_final_data:
         fig = plt.figure(figsize=(30, 15), facecolor="w")  # 3欄佈局
         q_subplot_spec = (1, 3, 1)  # Q values 在第1欄
         structure_subplot_spec = (1, 3, 2)  # 結構圖在第2欄
-        # 第3欄用於統計面板
+        # 第3欄用於統計面板或結束面板
     else:
         fig = plt.figure(figsize=(20, 15), facecolor="w")  # 原有佈局
         q_subplot_spec = (1, 2, 1)
@@ -781,9 +922,11 @@ def _visualize_one_iteration(structure: structure.Structure,
 
     ax.set_title(title, fontsize=40)
 
-    # 如果有 option preview 數據，添加統計面板
+    # 根據傳入的數據類型添加相應的面板
     if option_action_preview:
         _add_option_preview_panel(fig, option_action_preview)
+    elif episode_final_data:
+        _add_episode_final_panel(fig, episode_final_data)
 
     fig.tight_layout()
     plt.savefig(save_fig_path)
