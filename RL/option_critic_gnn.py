@@ -197,15 +197,106 @@ class OptionCriticGNN(nn.Module):
     def get_Q(self, global_state: torch.Tensor) -> torch.Tensor:
         """
         Get Q-values for all options using global state.
-        
+
         Args:
             global_state: Global state features [1, feature_dim]
-            
+
         Returns:
             Q-values for all options
         """
         return self.Q(global_state)
-    
+
+    def compute_Q_U(self,
+                    global_state: torch.Tensor,
+                    option: int,
+                    action: int,
+                    reward: float,
+                    next_global_state: torch.Tensor,
+                    gamma: float = 0.99) -> torch.Tensor:
+        """
+        Compute action-value Q_U(s,ω,a) for a specific (state, option, action) tuple.
+
+        Following Option-Critic paper (Page 4):
+        Q_U(s,ω,a) = r(s,a) + γ * U(ω,s')
+        U(ω,s') = (1 - β(s')) * Q_Ω(s',ω) + β(s') * V_Ω(s')
+
+        NOTE: 'action' here refers to the story member index selected.
+        The action value is independent of the specific action index,
+        as Q_U only depends on the reward and next state value.
+
+        Args:
+            global_state: Current global state [1, member_state_dim]
+            option: Current option index
+            action: Executed action (story member index) - not directly used in computation
+            reward: Immediate reward r(s,a)
+            next_global_state: Next global state [1, member_state_dim]
+            gamma: Discount factor
+
+        Returns:
+            Q_U value (scalar tensor)
+        """
+        with torch.no_grad():
+            # Compute termination probability β(s') for the current option
+            next_beta = self.get_terminations(next_global_state)  # [1, num_options]
+            if next_beta.dim() > 1:
+                next_beta_omega = next_beta[0, option]  # Scalar
+            else:
+                next_beta_omega = next_beta[option]
+
+            # Compute Q_Ω(s',ω) and V_Ω(s')
+            next_Q = self.get_Q(next_global_state)  # [1, num_options]
+            if next_Q.dim() > 1:
+                next_Q_omega = next_Q[0, option]  # Q_Ω(s',ω)
+                next_V = next_Q[0].max()  # V_Ω(s') = max_ω Q_Ω(s',ω) (greedy)
+            else:
+                next_Q_omega = next_Q[option]
+                next_V = next_Q.max()
+
+            # Compute U(ω,s') - value upon arrival
+            U_omega = (1 - next_beta_omega) * next_Q_omega + next_beta_omega * next_V
+
+            # Compute Q_U(s,ω,a) - action value
+            Q_U = reward + gamma * U_omega
+
+        return Q_U
+
+    def compute_Q_U_batch(self,
+                          global_states: List[torch.Tensor],
+                          options: torch.Tensor,
+                          actions: torch.Tensor,
+                          rewards: torch.Tensor,
+                          next_global_states: List[torch.Tensor],
+                          gamma: float = 0.99) -> torch.Tensor:
+        """
+        Batch version of compute_Q_U for efficient processing.
+
+        Args:
+            global_states: List of global state tensors [batch_size]
+            options: Option indices [batch_size]
+            actions: Action indices [batch_size]
+            rewards: Rewards [batch_size]
+            next_global_states: List of next global state tensors [batch_size]
+            gamma: Discount factor
+
+        Returns:
+            Q_U values [batch_size]
+        """
+        batch_size = len(options)
+        Q_U_values = []
+
+        for i in range(batch_size):
+            Q_U_i = self.compute_Q_U(
+                global_states[i],
+                options[i].item(),
+                actions[i].item(),
+                rewards[i].item(),
+                next_global_states[i],
+                gamma
+            )
+            Q_U_values.append(Q_U_i)
+
+        return torch.stack(Q_U_values)
+
     def get_terminations(self, global_state: torch.Tensor) -> torch.Tensor:
         """
         Get termination probabilities for all options using global state.
