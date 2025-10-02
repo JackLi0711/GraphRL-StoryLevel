@@ -662,113 +662,124 @@ def critic_loss(model: OptionCriticGNN,
     return td_err
 
 
-def actor_loss(obs, option: int, logp: torch.Tensor, entropy: torch.Tensor, 
-               reward: float, done: bool, next_obs, 
+def actor_loss(obs, option: int, action: int, logp: torch.Tensor, entropy: torch.Tensor,
+               reward: float, done: bool, next_obs,
                model: OptionCriticGNN, model_prime: OptionCriticGNN,
-               gamma: float = 0.99, termination_reg: float = 0.01, 
+               gamma: float = 0.99, termination_reg: float = 0.01,
                entropy_reg: float = 0.01) -> torch.Tensor:
     """
-    Compute actor loss for Option-Critic.
-    
+    Compute actor loss for Option-Critic following original paper.
+
+    Combines:
+    1. Intra-option policy gradient (Theorem 1): -log π(a|s,ω) * Q_U(s,ω,a)
+    2. Termination gradient (Theorem 2): β(s',ω) * [A_Ω(s',ω) + ε]
+
     Args:
-        obs: Current observation
-        option: Current option
+        obs: Current observation (graph data tuple)
+        option: Current option index
+        action: Executed action (story member index) - NEWLY ADDED
         logp: Log probability of selected action
         entropy: Entropy of action distribution
         reward: Reward received
         done: Whether episode terminated
-        next_obs: Next observation
+        next_obs: Next observation (graph data tuple)
         model: Current model
         model_prime: Target model
         gamma: Discount factor
-        termination_reg: Termination regularization weight
+        termination_reg: Termination regularization weight (ε in paper)
         entropy_reg: Entropy regularization weight
-        
+
     Returns:
-        Actor loss
+        Actor loss (combines policy gradient and termination gradient)
     """
-    # Handle graph observations
+    # =========================================================================
+    # Extract global states from graph observations
+    # =========================================================================
     if isinstance(obs, (tuple, list)) and len(obs) >= 4:
         graph_x, graph_edge_index, graph_edge_attr, story_batch = obs[:4]
         next_graph_x, next_graph_edge_index, next_graph_edge_attr, next_story_batch = next_obs[:4]
-        
-        # Use global state for loss computation (termination and Q-values)
+
+        # Use global state for Q_U and termination computation
         _, state = model.get_state(graph_x, graph_edge_index, graph_edge_attr, story_batch, None)
-        _, next_state = model.get_state(next_graph_x, next_graph_edge_index, 
+        _, next_state = model.get_state(next_graph_x, next_graph_edge_index,
                                        next_graph_edge_attr, next_story_batch, None)
-        _, next_state_prime = model_prime.get_state(next_graph_x, next_graph_edge_index, 
+        _, next_state_prime = model_prime.get_state(next_graph_x, next_graph_edge_index,
                                                    next_graph_edge_attr, next_story_batch, None)
     else:
-        # For tensor observations, convert to tensor if needed
+        # Fallback for non-graph observations
         if isinstance(obs, (tuple, list)):
             obs = obs[0] if len(obs) == 1 else torch.stack(list(obs))
         if isinstance(next_obs, (tuple, list)):
             next_obs = next_obs[0] if len(next_obs) == 1 else torch.stack(list(next_obs))
-            
-        state = model.feature_processor(obs)
-        next_state = model.feature_processor(next_obs)
-        next_state_prime = model_prime.feature_processor(next_obs)
-    
-    # Get termination probabilities
-    option_term_prob = model.get_terminations(state)
-    next_option_term_prob = model.get_terminations(next_state).detach()
-    
-    # Handle dimensions
-    if option_term_prob.dim() > 1:
-        option_term_prob = option_term_prob.mean(dim=0)
-    if next_option_term_prob.dim() > 1:
-        next_option_term_prob = next_option_term_prob.mean(dim=0)
-    
-    option_term_prob = option_term_prob[option]
-    next_option_term_prob = next_option_term_prob[option]
-    
-    # Get Q-values
-    Q = model.get_Q(state).detach().squeeze()
-    next_Q_prime = model_prime.get_Q(next_state_prime).detach().squeeze()
-    
-    # Handle dimensions - ensure consistent shape for max operations
-    if Q.dim() == 0:
-        Q = Q.unsqueeze(0)
-    if next_Q_prime.dim() == 0:
-        next_Q_prime = next_Q_prime.unsqueeze(0)
-    
-    # For 1D tensors, use .max() directly; for 2D tensors, use .max(dim=-1)[0]
-    if Q.dim() == 1:
-        Q_max = Q.max()
-    else:
-        Q_max = Q.max(dim=-1)[0]
-        
-    if next_Q_prime.dim() == 1:
-        next_Q_max = next_Q_prime.max()
-    else:
-        next_Q_max = next_Q_prime.max(dim=-1)[0]
-    
-    # Compute target
-    print(f'done {done}')
-    print(f'next_option_term_prob {next_option_term_prob.shape}')
-    print(f'next_Q_prime {next_Q_prime.shape}')
-    print(f'next_Q_max {next_Q_max.shape}')
-    print(f'Q {Q.shape}')
-    print(f'Q_max {Q_max.shape}')
-    print(f'option_term_prob {option_term_prob.shape}')
-    print(f'Q[option] {Q[:, option].shape}')
 
-    gt = reward + (1 - done) * gamma * \
-        ((1 - next_option_term_prob) * next_Q_prime[:, option] + 
-         next_option_term_prob * next_Q_max)
-    
-    # Termination loss
-    termination_loss = option_term_prob * (Q[:, option].detach() - Q_max.detach() + termination_reg) * (1 - done)
-    
-    # Policy gradient loss with entropy regularization
-    advantage = gt.detach() - Q[:, option]
-    policy_loss = -logp * advantage - entropy_reg * entropy
-    
+        state = model.feature_processor(obs) if hasattr(model, 'feature_processor') else obs
+        next_state = model.feature_processor(next_obs) if hasattr(model, 'feature_processor') else next_obs
+        next_state_prime = model_prime.feature_processor(next_obs) if hasattr(model_prime, 'feature_processor') else next_obs
+
+    # =========================================================================
+    # Part 1: Intra-Option Policy Gradient (Theorem 1)
+    # =========================================================================
+    # Compute Q_U(s,ω,a) using the executed action
+    Q_U = model.compute_Q_U(
+        global_state=state,
+        option=option,
+        action=action,
+        reward=reward,
+        next_global_state=next_state_prime,
+        gamma=gamma
+    )
+
+    # Policy gradient: -log π(a|s,ω) * Q_U(s,ω,a)
+    # (Negative because we're minimizing loss, equivalent to maximizing objective)
+    policy_loss = -logp * Q_U.detach() - entropy_reg * entropy
+
+    # =========================================================================
+    # Part 2: Termination Gradient (Theorem 2)
+    # =========================================================================
+    # Get termination probability for current option at next state
+    next_termination_probs = model.get_terminations(next_state)  # [1, num_options] or [num_options]
+
+    # Handle dimensions
+    if next_termination_probs.dim() > 1:
+        next_beta_omega = next_termination_probs[0, option]
+    else:
+        next_beta_omega = next_termination_probs[option]
+
+    # Compute advantage A_Ω(s',ω) = Q_Ω(s',ω) - V_Ω(s')
+    next_Q = model.get_Q(next_state).detach()  # [1, num_options] or [num_options]
+
+    if next_Q.dim() > 1:
+        next_Q_omega = next_Q[0, option]  # Q_Ω(s',ω)
+        # V_Ω(s') = max_ω Q_Ω(s',ω) for greedy policy-over-options
+        next_V = next_Q[0].max()
+    else:
+        next_Q_omega = next_Q[option]
+        next_V = next_Q.max()
+
+    advantage_omega = next_Q_omega - next_V
+
+    # Termination gradient: β(s',ω) * [A_Ω(s',ω) + ε]
+    # Only applies if episode hasn't terminated
+    termination_loss = next_beta_omega * (advantage_omega + termination_reg) * (1 - done)
+
+    # =========================================================================
+    # Combine losses
+    # =========================================================================
     # Ensure all components are scalars
-    if termination_loss.dim() > 0:
-        termination_loss = termination_loss.mean()
     if policy_loss.dim() > 0:
         policy_loss = policy_loss.mean()
-    
-    actor_loss = termination_loss + policy_loss
-    return actor_loss
+    if termination_loss.dim() > 0:
+        termination_loss = termination_loss.mean()
+
+    total_actor_loss = policy_loss + termination_loss
+
+    # Optional debug logging
+    if hasattr(model, 'debug_logging') and model.debug_logging:
+        print(f"[ActorLoss] Policy: {policy_loss.item():.6f}, "
+              f"Termination: {termination_loss.item():.6f}, "
+              f"Total: {total_actor_loss.item():.6f}")
+        print(f"[ActorLoss] Q_U: {Q_U.item():.4f}, "
+              f"Advantage: {advantage_omega.item():.4f}, "
+              f"β: {next_beta_omega.item():.4f}")
+
+    return total_actor_loss

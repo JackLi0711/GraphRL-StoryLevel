@@ -413,9 +413,19 @@ class OptionCriticTrainer:
         if len(step_transitions) > 0:
             for tr in step_transitions:
                 a_loss = actor_loss(
-                    tr["obs"], tr["option"], tr["logp"], tr["entropy"], tr["reward"],
-                    tr["done"], tr["next_obs"], self.oc, self.oc_prime,
-                    self.args.gamma, self.args.termination_reg, self.args.entropy_reg
+                    tr["obs"],
+                    tr["option"],
+                    tr["action"],  # ✅ NEW: Pass action for Q_U computation
+                    tr["logp"],
+                    tr["entropy"],
+                    tr["reward"],
+                    tr["done"],
+                    tr["next_obs"],
+                    self.oc,
+                    self.oc_prime,
+                    self.args.gamma,
+                    self.args.termination_reg,
+                    self.args.entropy_reg
                 )
                 accumulated_actor_losses.append(a_loss)
 
