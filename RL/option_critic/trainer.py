@@ -411,6 +411,31 @@ class OptionCriticTrainer:
         # Accumulate actor losses
         accumulated_actor_losses = []
         if len(step_transitions) > 0:
+            # =========================================================================
+            # Debug logging: Monitor Q_U values (Stage 6)
+            # =========================================================================
+            if hasattr(self.args, 'debug_logging') and self.args.debug_logging and len(step_transitions) > 0:
+                # Sample first 3 transitions for monitoring
+                for idx, tr in enumerate(step_transitions[:3]):
+                    if isinstance(tr["obs"], (tuple, list)) and len(tr["obs"]) >= 4:
+                        _, state = self.oc.get_state(*tr["obs"][:4], None)
+                        _, next_state = self.oc_prime.get_state(*tr["next_obs"][:4], None)
+
+                        Q_U = self.oc.compute_Q_U(
+                            global_state=state,
+                            option=tr["option"],
+                            action=tr["action"],
+                            reward=tr["reward"],
+                            next_global_state=next_state,
+                            gamma=self.args.gamma
+                        )
+
+                        self.logger.debug(
+                            f"[Q_U Monitor] Sample {idx}: "
+                            f"ω={tr['option']}, a={tr['action']}, "
+                            f"r={tr['reward']:.4f}, Q_U={Q_U.item():.4f}"
+                        )
+
             for tr in step_transitions:
                 a_loss = actor_loss(
                     tr["obs"],
