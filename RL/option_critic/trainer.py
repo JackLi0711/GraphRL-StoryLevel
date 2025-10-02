@@ -137,15 +137,19 @@ class OptionCriticTrainer:
         node_feature_dim = graph.x.shape[1]
         edge_feature_dim = graph.edge_attr.shape[1]
 
-        # Create models
-        A = num_actions(structure)
+        # ⚠️ num_actions is now IGNORED in the new architecture (v2)
+        # We pass it for compatibility, but it's not used
+        # The actual action space is determined dynamically by the number of story members
+        A = num_actions(structure)  # This can be any value, e.g., max expected actions
+
+        # Create models with dynamic action size support
         oc = OptionCriticGNN(
             node_feature_dim=node_feature_dim,
             edge_feature_dim=edge_feature_dim,
             hidden_dim=self.args.hidden_dim,
             member_state_dim=self.args.hidden_dim,
             num_layers=self.args.num_layers,
-            num_actions=A,
+            num_actions=A,  # ⚠️ DEPRECATED parameter, not used in v2 architecture
             num_options=self.args.num_options,
             temperature=self.args.temperature,
             eps_start=self.args.eps_start,
@@ -163,7 +167,7 @@ class OptionCriticTrainer:
             hidden_dim=self.args.hidden_dim,
             member_state_dim=self.args.hidden_dim,
             num_layers=self.args.num_layers,
-            num_actions=A,
+            num_actions=A,  # ⚠️ DEPRECATED parameter, not used in v2 architecture
             num_options=self.args.num_options,
             temperature=self.args.temperature,
             eps_start=self.args.eps_start,
