@@ -13,7 +13,43 @@ from .utils import to_tensor, ensure_tensor_on_device, calculate_epsilon
 class OptionCriticGNN(nn.Module):
     """
     Option-Critic network with Graph Neural Network backbone.
-    Integrates StateGNN for processing graph-structured observations.
+
+    **NEW ARCHITECTURE (v2)**: Supports dynamic action sizes!
+
+    Key changes from v1:
+    - Intra-option policies use per-story-member scoring (MLPs)
+    - No longer uses fixed-size action logits (options_W, options_b)
+    - Can handle buildings with varying numbers of floors
+    - Fully aligned with Option-Critic paper (Bacon et al., 2016)
+
+    Architecture components:
+    1. StateGNN: Extracts features from graph-structured observations
+       - Story-level features: [num_story_members, gnn_output_dim]
+       - Global features: [1, member_state_dim]
+
+    2. Q network: Option-value function Q_Ω(s,ω) [global state → num_options]
+       - Learns value of each option in given state
+       - Used for policy-over-options
+
+    3. Termination networks: β(s,ω) [global state → num_options]
+       - Learns when to terminate each option
+       - Sigmoid output gives termination probability
+
+    4. Intra-option policies: π(m|s,ω) [story-level state → score per member]
+       - Each option has independent MLP
+       - Scores each story member for selection
+       - Dynamic action space based on building size
+
+    The action space is dynamic:
+    - 4-story building: 16 story members → 16 possible actions
+    - 7-story building: 28 story members → 28 possible actions
+    - 10-story building: 40 story members → 40 possible actions
+    - Action = which story member to reduce section
+
+    Theoretical alignment with Option-Critic paper:
+    - Policy gradient (Theorem 1): ∇_θ J = E[∇log π(a|s,ω) * Q_U(s,ω,a)]
+    - Termination gradient (Theorem 2): ∇_ϑ J = E[β(s',ω) * A_Ω(s',ω)]
+    - Q_U estimation (Page 4): Q_U(s,ω,a) = r + γ*[(1-β)Q_Ω(s',ω) + β*V_Ω(s')]
     """
     
     def __init__(self,
