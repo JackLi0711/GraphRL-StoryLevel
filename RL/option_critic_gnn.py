@@ -253,187 +253,125 @@ class OptionCriticGNN(nn.Module):
         
         return bool(option_termination.item()), int(next_option.item())
     
-    def get_action(self, 
+    def get_action(self,
                    story_level_state: torch.Tensor,
                    structure_story_ptr: Optional[List[int]],
                    option: int,
                    valid_actions_mask: torch.Tensor = None) -> Tuple[int, torch.Tensor, torch.Tensor]:
         """
-        Select action within an option using intra-option policy.
-        Following DQN pattern: compute logits for each story member, then select best action.
-        
+        Select action by scoring story members (NEW ARCHITECTURE v2).
+
+        Key change: Instead of computing logits for fixed action space,
+        we score each story member and select which one to modify.
+
         Args:
-            story_level_state: Story-level state features [total_story_member_num, feature_dim]
-            structure_story_ptr: Story member indices for slicing (None = use all story members as one group)
+            story_level_state: Story-level state features
+                              Shape: [total_story_member_num, gnn_output_dim]
+                              - For 4-story building: [16, gnn_output_dim]
+                              - For 7-story building: [28, gnn_output_dim]
+                              - For 10-story building: [40, gnn_output_dim]
+            structure_story_ptr: NOT USED in new architecture (kept for compatibility)
             option: Current option index
-            valid_actions_mask: Boolean tensor indicating valid actions (True = valid)
-            
+            valid_actions_mask: Boolean tensor indicating which story members can be modified
+                              Shape: [total_story_member_num]
+                              True = can modify this member, False = cannot
+
         Returns:
-            (action, log_probability, entropy)
+            (action_index, log_prob, entropy)
+            action_index: Which story member to reduce (0 to total_story_member_num-1)
         """
-        # DEBUG: Enhanced logging for action selection
+        num_story_members = story_level_state.shape[0]
+
         if self.debug_logging:
-            print(f"DEBUG get_action: story_level_state.shape={story_level_state.shape}, option={option}")
-            print(f"DEBUG get_action: structure_story_ptr={structure_story_ptr}")
+            print(f"DEBUG get_action: num_story_members={num_story_members}, option={option}")
             if valid_actions_mask is not None:
-                print(f"DEBUG get_action: valid_actions_mask.shape={valid_actions_mask.shape}, valid_count={valid_actions_mask.sum().item()}")
-        
-        # Compute action logits for all story members for the given option
-        # story_level_state shape: [total_story_member_num, feature_dim]
-        logits = story_level_state @ self.options_W[option] + self.options_b[option]
-        # logits shape: [total_story_member_num, num_actions]
+                print(f"DEBUG get_action: valid_count={valid_actions_mask.sum().item()}/{num_story_members}")
+
+        # =========================================================================
+        # Step 1: Compute score for each story member using option-specific MLP
+        # =========================================================================
+        # story_level_state: [N, gnn_output_dim] where N = num_story_members
+        # Output: [N, 1]
+        scores = self.intra_option_policies[option](story_level_state)  # [N, 1]
+        scores = scores.squeeze(-1)  # [N]
+
         if self.debug_logging:
-            print(f"DEBUG get_action: logits.shape={logits.shape}, logits_range=[{logits.min().item():.3f}, {logits.max().item():.3f}]")
-        
-        # Apply action masking if provided
+            print(f"DEBUG get_action: scores range=[{scores.min().item():.3f}, {scores.max().item():.3f}]")
+
+        # =========================================================================
+        # Step 2: Apply valid actions mask
+        # =========================================================================
         if valid_actions_mask is not None:
-            # Ensure mask is on the same device and broadcast properly
-            if valid_actions_mask.device != logits.device:
-                valid_actions_mask = valid_actions_mask.to(logits.device)
-            
-            # Expand mask to match logits shape if needed
-            if valid_actions_mask.dim() == 1 and valid_actions_mask.shape[0] != logits.shape[0]:
-                # If mask is for actions only, expand to cover all story members
-                if valid_actions_mask.shape[0] == logits.shape[1]:  # num_actions
-                    # Broadcast across story members: [1, num_actions] -> [total_story_members, num_actions]
-                    valid_actions_mask = valid_actions_mask.unsqueeze(0).expand(logits.shape[0], -1)
+            # Ensure mask is on correct device
+            if valid_actions_mask.device != scores.device:
+                valid_actions_mask = valid_actions_mask.to(scores.device)
+
+            # Ensure mask has correct shape [num_story_members]
+            if valid_actions_mask.shape[0] != num_story_members:
+                raise ValueError(
+                    f"Mask shape mismatch: expected [{num_story_members}], "
+                    f"got {valid_actions_mask.shape}"
+                )
+
+            # Mask out invalid actions with very negative scores
+            scores = scores.masked_fill(~valid_actions_mask, -1e8)
+
+            if self.debug_logging:
+                print(f"DEBUG get_action: After masking, valid_scores={scores[valid_actions_mask].shape[0]}")
+
+        # =========================================================================
+        # Step 3: Convert scores to probabilities
+        # =========================================================================
+        action_probs = (scores / self.temperature).softmax(dim=0)  # [N]
+
+        # Additional safety: ensure no invalid actions have probability
+        if valid_actions_mask is not None:
+            # Zero out probabilities for invalid actions
+            action_probs = action_probs * valid_actions_mask.float()
+
+            # Renormalize
+            prob_sum = action_probs.sum()
+            if prob_sum > 0:
+                action_probs = action_probs / prob_sum
+            else:
+                # Emergency: all actions masked out
+                if valid_actions_mask.sum() > 0:
+                    # Uniform over valid actions
+                    action_probs = valid_actions_mask.float() / valid_actions_mask.sum().float()
                 else:
-                    # Mask doesn't match expected dimensions - use as is
-                    pass
-            
-            # Set invalid actions to very negative logits
-            logits = logits.clone()
-            logits[~valid_actions_mask] = -1e8
-        
-        # Apply temperature and get action distribution
-        action_probs = (logits / self.temperature).softmax(dim=-1)
-        # action_probs shape: [total_story_member_num, num_actions]
-        
-        # Additional safety: Zero out probabilities for invalid actions
+                    raise ValueError("No valid actions available!")
+
+        # =========================================================================
+        # Step 4: Sample action
+        # =========================================================================
+        action_dist = Categorical(action_probs)
+        action = action_dist.sample()
+
+        logp = action_dist.log_prob(action)
+        entropy = action_dist.entropy()
+
+        # =========================================================================
+        # Step 5: Validation
+        # =========================================================================
+        action_idx = action.item()
+
+        # Check if action is valid
         if valid_actions_mask is not None:
-            if valid_actions_mask.dim() == 1 and valid_actions_mask.shape[0] == action_probs.shape[1]:
-                # Expand mask to match action_probs shape
-                mask_expanded = valid_actions_mask.unsqueeze(0).expand(action_probs.shape[0], -1)
-            else:
-                mask_expanded = valid_actions_mask
-            
-            # Zero out invalid action probabilities
-            action_probs = action_probs * mask_expanded.float()
-            
-            # Renormalize probabilities (only if there are valid actions)
-            prob_sums = action_probs.sum(dim=-1, keepdim=True)
-            prob_sums = torch.where(prob_sums > 0, prob_sums, torch.ones_like(prob_sums))
-            action_probs = action_probs / prob_sums
-        
-        # Handle structure_story_ptr to determine how to select actions
-        if structure_story_ptr is None or len(structure_story_ptr) <= 1:
-            # No structure info or single structure - aggregate all story members
-            # Take the mean probability across all story members
-            aggregated_probs = action_probs.mean(dim=0)  # [num_actions]
-            
-            # Always use stochastic sampling for consistency between training and inference
-            action_dist = Categorical(aggregated_probs)
-            action = action_dist.sample()
-            
-            logp = torch.log(aggregated_probs[action] + 1e-8)
-            entropy = -(aggregated_probs * torch.log(aggregated_probs + 1e-8)).sum()
-            
-        else:
-            # Multiple story member groups - select best action following DQN pattern
-            best_action = 0
-            best_prob = -1
-            best_entropy_probs = None
-            
-            for i in range(len(structure_story_ptr) - 1):
-                start_idx = structure_story_ptr[i]
-                end_idx = structure_story_ptr[i + 1]
-                
-                # Get probabilities for this story group
-                group_probs = action_probs[start_idx:end_idx].mean(dim=0)  # Average within group
-                
-                # Always use stochastic sampling for consistency between training and inference
-                action_dist = Categorical(group_probs)
-                local_action = action_dist.sample()
-                local_prob = group_probs[local_action]
-                
-                # Keep track of the best action across all groups
-                if local_prob > best_prob:
-                    best_prob = local_prob
-                    best_action = local_action
-                    best_entropy_probs = group_probs
-            
-            # Calculate log probability and entropy for the selected action
-            action = best_action
-            logp = torch.log(best_prob + 1e-8)
-            entropy = -(best_entropy_probs * torch.log(best_entropy_probs + 1e-8)).sum()
-        
-        # DEBUG: Final action selection logging
-        final_action = action.item()
+            if not valid_actions_mask[action_idx].item():
+                if self.debug_logging:
+                    print(f"ERROR: Selected invalid action {action_idx}!")
+                # Emergency fallback
+                valid_indices = torch.where(valid_actions_mask)[0]
+                if len(valid_indices) > 0:
+                    action_idx = valid_indices[0].item()
+                    logp = torch.log(action_probs[action_idx] + 1e-8)
+                else:
+                    raise ValueError("No valid actions and fallback failed!")
+
         if self.debug_logging:
-            print(f"DEBUG get_action: final_action={final_action}, logp={logp.item():.4f}, entropy={entropy.item():.4f}")
-            print(f"DEBUG get_action: action type={type(final_action)}, action range check: 0 <= {final_action} < {self.num_actions} = {0 <= final_action < self.num_actions}")
-        
-        # Safety check: Ensure final_action is a valid integer and allowed by mask
-        try:
-            if not isinstance(final_action, int):
-                if self.debug_logging:
-                    print(f"WARNING get_action: Converting final_action from {type(final_action)} to int")
-                final_action = int(final_action)
-                
-            if not (0 <= final_action < self.num_actions):
-                if self.debug_logging:
-                    print(f"ERROR get_action: Action {final_action} is out of bounds [0, {self.num_actions})")
-                # Clamp to valid range as fallback
-                final_action = max(0, min(final_action, self.num_actions - 1))
-                if self.debug_logging:
-                    print(f"WARNING get_action: Clamped action to {final_action}")
-            
-            # CRITICAL: Check if action is allowed by the valid_actions_mask
-            if valid_actions_mask is not None:
-                if final_action < len(valid_actions_mask) and not valid_actions_mask[final_action].item():
-                    if self.debug_logging:
-                        print(f"CRITICAL ERROR get_action: Selected action {final_action} is INVALID according to mask!")
-                        print(f"  valid_actions_mask[{final_action}] = {valid_actions_mask[final_action].item()}")
-                    
-                    # Find valid actions and select the first one as fallback
-                    valid_indices = torch.where(valid_actions_mask)[0]
-                    if len(valid_indices) > 0:
-                        final_action = valid_indices[0].item()  # Use first valid action
-                        if self.debug_logging:
-                            print(f"WARNING get_action: Forced selection of valid action {final_action}")
-                            print(f"  Available valid actions: {valid_indices.tolist()}")
-                    else:
-                        if self.debug_logging:
-                            print(f"CRITICAL ERROR get_action: No valid actions available in mask!")
-                        final_action = 0  # Ultimate fallback
-                
-            if self.debug_logging:
-                print(f"DEBUG get_action: Final validated action={final_action}")
-        except Exception as safety_e:
-            if self.debug_logging:
-                print(f"ERROR get_action: Safety check failed: {safety_e}")
-            # Try to find a valid action if mask is available
-            if valid_actions_mask is not None:
-                try:
-                    valid_indices = torch.where(valid_actions_mask)[0]
-                    if len(valid_indices) > 0:
-                        final_action = valid_indices[0].item()
-                        if self.debug_logging:
-                            print(f"WARNING get_action: Emergency fallback to valid action {final_action}")
-                    else:
-                        final_action = 0
-                        if self.debug_logging:
-                            print(f"WARNING get_action: No valid actions, using action 0")
-                except:
-                    final_action = 0
-                    if self.debug_logging:
-                        print(f"WARNING get_action: Using ultimate fallback action=0")
-            else:
-                final_action = 0  # Fallback to first action
-                if self.debug_logging:
-                    print(f"WARNING get_action: Using fallback action=0")
-        
-        return final_action, logp, entropy
+            print(f"DEBUG get_action: Selected action={action_idx}, logp={logp.item():.4f}, entropy={entropy.item():.4f}")
+
+        return action_idx, logp, entropy
     
     def greedy_option(self, global_state: torch.Tensor) -> int:
         """
