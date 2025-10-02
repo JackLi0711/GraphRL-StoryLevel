@@ -33,15 +33,19 @@ class OptionCriticGNN(nn.Module):
                  testing: bool = False,
                  debug_logging: bool = False):
         """
-        Initialize OptionCriticGNN.
-        
+        Initialize OptionCriticGNN with support for dynamic action sizes.
+
+        Key architectural change (v2):
+        - Instead of fixed-size action logits, we use per-story-member scoring
+        - This allows handling varying numbers of story members across episodes
+
         Args:
             node_feature_dim: Dimension of node features
             edge_feature_dim: Dimension of edge features
             hidden_dim: Hidden dimension for GNN
             member_state_dim: Member state dimension
             num_layers: Number of GNN layers
-            num_actions: Number of primitive actions
+            num_actions: [DEPRECATED] Not used in new architecture, kept for compatibility
             num_options: Number of options
             temperature: Temperature for action selection
             eps_start: Starting epsilon for exploration
@@ -50,20 +54,22 @@ class OptionCriticGNN(nn.Module):
             eps_test: Epsilon for testing
             device: Device to use
             testing: Whether in testing mode
+            debug_logging: Enable debug logging
         """
         super(OptionCriticGNN, self).__init__()
-        
+
+        # Store parameters
         self.node_feature_dim = node_feature_dim
         self.edge_feature_dim = edge_feature_dim
         self.hidden_dim = hidden_dim
         self.member_state_dim = member_state_dim
         self.num_layers = num_layers
-        self.num_actions = num_actions
+        self.num_actions = num_actions  # Kept for compatibility, not used
         self.num_options = num_options
         self.device = torch.device(device)
         self.testing = testing
         self.debug_logging = debug_logging
-        
+
         # Exploration parameters
         self.temperature = temperature
         self.eps_min = eps_min
@@ -71,7 +77,7 @@ class OptionCriticGNN(nn.Module):
         self.eps_decay = eps_decay
         self.eps_test = eps_test
         self.num_steps = 0
-        
+
         # StateGNN for feature extraction
         self.state_gnn = StateGNN(
             node_feature_dim=node_feature_dim,
@@ -80,53 +86,63 @@ class OptionCriticGNN(nn.Module):
             member_state_dim=member_state_dim,
             num_layers=num_layers
         )
-        
-        # Feature processing layers - COMMENTED OUT FOR ABLATION STUDY
-        # StateGNN outputs shape: [total story_member_num, member_state_dim*2]
+
+        # GNN output dimension
         gnn_output_dim = member_state_dim * 2
-        # feature_dim = 512  # COMMENTED OUT - using gnn_output_dim directly
-        
-        # COMMENTED OUT - Removing feature processor to test necessity
-        # self.feature_processor = nn.Sequential(
-        #     nn.Linear(gnn_output_dim, feature_dim),
-        #     nn.ReLU(),
-        #     nn.Linear(feature_dim, feature_dim),
-        #     nn.ReLU()
-        # )
-        
-        # Option-Critic components - MODIFIED to use graph level embeddings (member_state_dim)
-        self.Q = nn.Linear(member_state_dim, num_options)  # Policy-Over-Options
-        self.terminations = nn.Linear(member_state_dim, num_options)  # Option-Termination
-        
-        # Intra-option policies (one for each option) - MODIFIED dimensions (using story level features)
-        self.options_W = nn.Parameter(torch.zeros(num_options, gnn_output_dim, num_actions))
-        self.options_b = nn.Parameter(torch.zeros(num_options, num_actions))
-        
+
+        # =========================================================================
+        # Option-Critic Components
+        # =========================================================================
+
+        # 1. Policy-Over-Options (uses global state)
+        self.Q = nn.Linear(member_state_dim, num_options)
+
+        # 2. Termination functions (uses global state)
+        self.terminations = nn.Linear(member_state_dim, num_options)
+
+        # 3. Intra-Option Policies (NEW ARCHITECTURE v2)
+        # ✅ NEW: Per-story-member scoring networks
+        # Each option has its own MLP that scores story members
+        self.intra_option_policies = nn.ModuleList([
+            nn.Sequential(
+                nn.Linear(gnn_output_dim, hidden_dim),
+                nn.ReLU(),
+                nn.Dropout(0.1),
+                nn.Linear(hidden_dim, hidden_dim // 2),
+                nn.ReLU(),
+                nn.Dropout(0.1),
+                nn.Linear(hidden_dim // 2, 1)  # Output: score for each story member
+            )
+            for _ in range(num_options)
+        ])
+
         # Initialize parameters
         self._initialize_parameters()
-        
+
         # Move to device
         self.to(self.device)
         self.train(not testing)
     
     def _initialize_parameters(self):
         """Initialize network parameters."""
-        # Initialize option policy parameters
-        nn.init.normal_(self.options_W, mean=0.0, std=0.01)
-        nn.init.zeros_(self.options_b)
-        
-        # Initialize other layers - MODIFIED to exclude feature_processor
-        # for module in [self.feature_processor, self.Q]:  # COMMENTED OUT - feature_processor removed
-        for module in [self.Q]:  # MODIFIED - only initialize Q network
-            if hasattr(module, 'weight'):
-                nn.init.xavier_uniform_(module.weight)
-            elif hasattr(module, 'children'):
-                for child in module.children():
-                    if hasattr(child, 'weight'):
-                        nn.init.xavier_uniform_(child.weight)
-        
-        # Special initialization for termination network
-        # Initialize with negative bias to start with low termination probabilities (~0.1)
+
+        # ✅ NEW: Initialize intra-option policy networks
+        for option_idx, option_policy in enumerate(self.intra_option_policies):
+            for layer in option_policy:
+                if isinstance(layer, nn.Linear):
+                    # Xavier initialization for better gradient flow
+                    nn.init.xavier_uniform_(layer.weight)
+                    if layer.bias is not None:
+                        nn.init.zeros_(layer.bias)
+
+        # Initialize Q network (unchanged)
+        if hasattr(self.Q, 'weight'):
+            nn.init.xavier_uniform_(self.Q.weight)
+            if hasattr(self.Q, 'bias') and self.Q.bias is not None:
+                nn.init.zeros_(self.Q.bias)
+
+        # Initialize termination network (unchanged)
+        # Start with low termination probabilities (~0.1)
         nn.init.xavier_uniform_(self.terminations.weight)
         nn.init.constant_(self.terminations.bias, -2.2)  # sigmoid(-2.2) ≈ 0.1
     
