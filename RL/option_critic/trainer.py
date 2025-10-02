@@ -181,40 +181,62 @@ class OptionCriticTrainer:
 
     def _setup_optimizers(self):
         """Setup optimizers for different model components."""
+
+        # =========================================================================
         # Separate parameters for different components
+        # =========================================================================
+
+        # 1. Termination parameters
         termination_params = [p for n, p in self.oc.named_parameters()
                              if n.startswith('terminations')]
-        policy_params = [self.oc.options_W, self.oc.options_b]
+
+        # 2. Intra-option policy parameters (NEW)
+        # ❌ OLD: policy_params = [self.oc.options_W, self.oc.options_b]
+        # ✅ NEW: Collect all parameters from intra_option_policies ModuleList
+        policy_params = []
+        for option_policy in self.oc.intra_option_policies:
+            policy_params.extend(option_policy.parameters())
+
+        # 3. Critic (Q network) parameters
         critic_params = [p for n, p in self.oc.named_parameters()
-                        if n.startswith('Q')]
+                        if n.startswith('Q.')]
+
+        # 4. StateGNN parameters (shared across all components)
         state_gnn_params = [p for n, p in self.oc.named_parameters()
                            if n.startswith('state_gnn')]
+
+        # 5. Feature processor parameters (if exists)
         feature_params = [p for n, p in self.oc.named_parameters()
                          if n.startswith('feature_processor')]
 
-        # Use different learning rates for different components
-        gnn_lr = self.args.actor_lr * 0.1
+        # =========================================================================
+        # Create optimizers with different learning rates
+        # =========================================================================
+
+        gnn_lr = self.args.actor_lr * 0.1  # Lower LR for GNN
         termination_lr = self.args.actor_lr * self.args.termination_lr_ratio
 
+        # Actor optimizer (policy + termination + shared GNN)
         actor_optimizer = optim.Adam([
-            {"params": policy_params, "lr": self.args.actor_lr},
-            {"params": termination_params, "lr": termination_lr},
-            {"params": state_gnn_params, "lr": gnn_lr},
-            {"params": feature_params, "lr": self.args.actor_lr},
+            {"params": policy_params, "lr": self.args.actor_lr, "name": "policy"},
+            {"params": termination_params, "lr": termination_lr, "name": "termination"},
+            {"params": state_gnn_params, "lr": gnn_lr, "name": "gnn_actor"},
+            {"params": feature_params, "lr": self.args.actor_lr, "name": "features_actor"},
         ])
 
+        # Critic optimizer (Q network + shared GNN)
         critic_optimizer = optim.Adam([
-            {"params": critic_params, "lr": self.args.critic_lr},
-            {"params": state_gnn_params, "lr": gnn_lr},
-            {"params": feature_params, "lr": self.args.critic_lr},
+            {"params": critic_params, "lr": self.args.critic_lr, "name": "critic"},
+            {"params": state_gnn_params, "lr": gnn_lr, "name": "gnn_critic"},
+            {"params": feature_params, "lr": self.args.critic_lr, "name": "features_critic"},
         ])
 
         # Log configuration
-        self.logger.info(f"Learning rate configuration:")
-        self.logger.info(f"  Policy parameters: {self.args.actor_lr}")
-        self.logger.info(f"  Termination parameters: {termination_lr}")
-        self.logger.info(f"  Critic parameters: {self.args.critic_lr}")
-        self.logger.info(f"  StateGNN parameters: {gnn_lr}")
+        self.logger.info(f"Optimizer configuration:")
+        self.logger.info(f"  Policy parameters: {sum(p.numel() for p in policy_params)} params, LR={self.args.actor_lr}")
+        self.logger.info(f"  Termination parameters: {sum(p.numel() for p in termination_params)} params, LR={termination_lr}")
+        self.logger.info(f"  Critic parameters: {sum(p.numel() for p in critic_params)} params, LR={self.args.critic_lr}")
+        self.logger.info(f"  StateGNN parameters: {sum(p.numel() for p in state_gnn_params)} params, LR={gnn_lr}")
 
         return actor_optimizer, critic_optimizer
 
