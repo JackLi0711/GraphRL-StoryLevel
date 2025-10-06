@@ -271,6 +271,24 @@ class OptionCriticTrainer:
         self.logger.info(f"Starting episode {episode_num+1}/{self.args.epochs}")
         structure = self.base_env.reset(testing=False)
 
+        # ========================================================================
+        # DIAGNOSIS LOGGING: Structure information
+        # ========================================================================
+        self.logger.info(f"[DIAGNOSIS] Episode {episode_num+1} Structure Info:")
+        self.logger.info(f"  - x_span_num: {structure.x_span_num}, z_span_num: {structure.z_span_num}")
+        self.logger.info(f"  - story_num: {structure.story_num}")
+        self.logger.info(f"  - x_span_lens: {structure.x_span_lens}")
+        self.logger.info(f"  - z_span_lens: {structure.z_span_lens}")
+        self.logger.info(f"  - story_height: {structure.story_height}")
+        self.logger.info(f"  - Initial story_level_sections: {structure.story_level_sections}")
+        self.logger.info(f"  - Total story members: {len(structure.story_level_actions)}")
+
+        # Create a unique structure identifier
+        structure_id = f"{structure.x_span_num}x{structure.z_span_num}_s{structure.story_num}_h{structure.story_height}"
+        self.logger.info(f"  - Structure ID: {structure_id}")
+        self.logger.info(f"========================================================================")
+        # ========================================================================
+
         done = False
         option_termination = True
         curr_option = 0
@@ -544,6 +562,26 @@ class OptionCriticTrainer:
             self.all_stats["episode_termination_counts"].append(episode_termination_counter)
             self.all_stats["episode_entropy_mean"].append(np.mean(episode_entropies) if episode_entropies else 0.0)
             self.all_stats["episode_score"].append(episode_score)
+
+            # ====================================================================
+            # DIAGNOSIS LOGGING: Episode completion summary
+            # ====================================================================
+            self.logger.info(f"[DIAGNOSIS] Episode {episode_num+1} Completed:")
+            self.logger.info(f"  - Episode Score: {episode_score:.4f}")
+            self.logger.info(f"  - Episode Total Reward: {episode_total_reward:.4f}")
+            self.logger.info(f"  - Num Options Executed: {len(episode_opt_lengths)}")
+            self.logger.info(f"  - Avg Option Length: {np.mean(episode_opt_lengths) if episode_opt_lengths else 0.0:.2f}")
+            self.logger.info(f"  - Terminations: beta={episode_termination_counter['beta']}, max_len={episode_termination_counter['max_len']}, min_section={episode_termination_counter['minimum_section']}")
+
+            # Check for duplicate scores
+            if len(self.all_stats["episode_score"]) >= 2:
+                recent_scores = self.all_stats["episode_score"][-10:]  # Last 10 scores
+                unique_scores = len(set([round(s, 2) for s in recent_scores]))
+                self.logger.info(f"  - Score diversity (last 10): {unique_scores} unique values out of {len(recent_scores)}")
+                if unique_scores <= 2:
+                    self.logger.warning(f"  ⚠️ WARNING: Only {unique_scores} unique score values detected in recent episodes!")
+            self.logger.info(f"====================================================================")
+            # ====================================================================
 
             # Generate training behavior visualization after each episode
             self.plot_training_behaviors(episode_num)

@@ -190,16 +190,37 @@ class Environment:
                 story_height = np.random.randint(0, 11) * 100 + 3000
 
             elif self.structure_shape == "random":
+                # ================================================================
+                # DIAGNOSIS LOGGING: Random number generation
+                # ================================================================
+                self.logger.info(f"[DIAGNOSIS] Generating random structure parameters:")
+
                 x_span_num = np.random.randint(2, 7)
+                self.logger.info(f"  - x_span_num generated: {x_span_num} (range: 2-6)")
+
                 z_span_num = np.random.randint(2, 7)
+                self.logger.info(f"  - z_span_num generated: {z_span_num} (range: 2-6)")
+
                 x_span_len = np.random.randint(6, 9) * 1000
+                self.logger.info(f"  - x_span_len generated: {x_span_len} (range: 6000-8000)")
+
                 z_span_len = np.random.randint(6, 9) * 1000
+                self.logger.info(f"  - z_span_len generated: {z_span_len} (range: 6000-8000)")
+
                 x_span_lens = [x_span_len for i in range(x_span_num)]
                 z_span_lens = [z_span_len for i in range(z_span_num)]
-                story_num = np.random.randint(4, 8)
-                story_height = 3200
 
-        story_level_sections = initial_design if initial_design is not None else new_strategy.sample_initial_story_sections(x_span_num, x_span_len, z_span_num, z_span_len, story_num, thickest_prob=1.0)            
+                story_num = np.random.randint(4, 8)
+                self.logger.info(f"  - story_num generated: {story_num} (range: 4-7)")
+
+                story_height = 3200
+                self.logger.info(f"  - story_height (fixed): {story_height}")
+                # ================================================================
+
+        # DIAGNOSIS LOGGING: Initial design sampling
+        self.logger.info(f"[DIAGNOSIS] Sampling initial story sections...")
+        story_level_sections = initial_design if initial_design is not None else new_strategy.sample_initial_story_sections(x_span_num, x_span_len, z_span_num, z_span_len, story_num, thickest_prob=1.0)
+        self.logger.info(f"  - Generated story_level_sections (len={len(story_level_sections)}): {story_level_sections}")            
         structure_kwargs = {"x_span_num": x_span_num, "x_span_lens": x_span_lens, 
                             "z_span_num": z_span_num, "z_span_lens": z_span_lens, 
                             "story_num": story_num, "story_height": story_height,

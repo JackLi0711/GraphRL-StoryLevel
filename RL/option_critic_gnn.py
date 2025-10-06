@@ -220,15 +220,17 @@ class OptionCriticGNN(nn.Module):
         )
 
         story_level_features = features
-        graph_level_features = features[:, self.hidden_dim:]
-        
+        graph_level_features_all = features[:, self.hidden_dim:]
+
         # StateGNN returns [total_story_member_num, member_state_dim*2]
         # For Option-Critic, we need both story-level AND global states:
         # - Story-level for intra-option policies (like DQN)
         # - Global for policy-over-options and termination functions
-        
-        global_states = graph_level_features[0: ] # shape: [1, member_state_dim]
-        return story_level_features, graph_level_features
+
+        # Extract global state as the first element to ensure consistent shape [1, member_state_dim]
+        # This ensures Q network always receives the same input shape regardless of building size
+        global_state = graph_level_features_all[0:1]  # shape: [1, member_state_dim]
+        return story_level_features, global_state
     
     def get_Q(self, global_state: torch.Tensor) -> torch.Tensor:
         """
@@ -571,23 +573,54 @@ def critic_loss(model: OptionCriticGNN,
     if isinstance(obs, (tuple, list)) and len(obs) >= 4:
         graph_x, graph_edge_index, graph_edge_attr, story_batch = obs[:4]
         next_graph_x, next_graph_edge_index, next_graph_edge_attr, next_story_batch = next_obs[:4]
-        
+
         # Move to model device if needed
-        graph_x = graph_x.to(model.device)
+        # Note: graph_x and other components are now lists (for dynamic graph sizes)
+        if isinstance(graph_x, list):
+            graph_x = [x.to(model.device) for x in graph_x]
+        else:
+            graph_x = graph_x.to(model.device)
+
         if graph_edge_index is not None:
-            graph_edge_index = graph_edge_index.to(model.device)
+            if isinstance(graph_edge_index, list):
+                graph_edge_index = [ei.to(model.device) for ei in graph_edge_index]
+            else:
+                graph_edge_index = graph_edge_index.to(model.device)
+
         if graph_edge_attr is not None:
-            graph_edge_attr = graph_edge_attr.to(model.device)
+            if isinstance(graph_edge_attr, list):
+                graph_edge_attr = [ea.to(model.device) for ea in graph_edge_attr]
+            else:
+                graph_edge_attr = graph_edge_attr.to(model.device)
+
         if story_batch is not None:
-            story_batch = story_batch.to(model.device)
-        
-        next_graph_x = next_graph_x.to(model.device)
+            if isinstance(story_batch, list):
+                story_batch = [sb.to(model.device) for sb in story_batch]
+            else:
+                story_batch = story_batch.to(model.device)
+
+        if isinstance(next_graph_x, list):
+            next_graph_x = [x.to(model.device) for x in next_graph_x]
+        else:
+            next_graph_x = next_graph_x.to(model.device)
+
         if next_graph_edge_index is not None:
-            next_graph_edge_index = next_graph_edge_index.to(model.device)
+            if isinstance(next_graph_edge_index, list):
+                next_graph_edge_index = [ei.to(model.device) for ei in next_graph_edge_index]
+            else:
+                next_graph_edge_index = next_graph_edge_index.to(model.device)
+
         if next_graph_edge_attr is not None:
-            next_graph_edge_attr = next_graph_edge_attr.to(model.device)
+            if isinstance(next_graph_edge_attr, list):
+                next_graph_edge_attr = [ea.to(model.device) for ea in next_graph_edge_attr]
+            else:
+                next_graph_edge_attr = next_graph_edge_attr.to(model.device)
+
         if next_story_batch is not None:
-            next_story_batch = next_story_batch.to(model.device)
+            if isinstance(next_story_batch, list):
+                next_story_batch = [sb.to(model.device) for sb in next_story_batch]
+            else:
+                next_story_batch = next_story_batch.to(model.device)
     else:
         # Handle tensor observations
         if isinstance(obs, (tuple, list)):
@@ -615,14 +648,25 @@ def critic_loss(model: OptionCriticGNN,
         # Current state processing
         if graph_edge_index is not None:
             # Extract single graph from batch
-            single_graph_x = graph_x[i:i+1]
-            single_edge_index = graph_edge_index[i:i+1] if graph_edge_index.dim() > 2 else graph_edge_index
-            single_edge_attr = graph_edge_attr[i:i+1] if graph_edge_attr.dim() > 2 else graph_edge_attr
-            single_story_batch = story_batch[i:i+1] if story_batch.dim() > 1 else story_batch
-            
+            # Handle list format (for dynamic graph sizes)
+            if isinstance(graph_x, list):
+                single_graph_x = graph_x[i]
+                single_edge_index = graph_edge_index[i] if isinstance(graph_edge_index, list) else graph_edge_index
+                single_edge_attr = graph_edge_attr[i] if isinstance(graph_edge_attr, list) else graph_edge_attr
+                single_story_batch = story_batch[i] if isinstance(story_batch, list) else story_batch
+            else:
+                single_graph_x = graph_x[i:i+1]
+                single_edge_index = graph_edge_index[i:i+1] if graph_edge_index.dim() > 2 else graph_edge_index
+                single_edge_attr = graph_edge_attr[i:i+1] if graph_edge_attr.dim() > 2 else graph_edge_attr
+                single_story_batch = story_batch[i:i+1] if story_batch.dim() > 1 else story_batch
+
             # Use global state for critic loss computation
-            _, state = model.get_state(single_graph_x.squeeze(0), single_edge_index.squeeze(0), 
-                                      single_edge_attr.squeeze(0), single_story_batch.squeeze(0), None)
+            if isinstance(graph_x, list):
+                _, state = model.get_state(single_graph_x, single_edge_index,
+                                          single_edge_attr, single_story_batch, None)
+            else:
+                _, state = model.get_state(single_graph_x.squeeze(0), single_edge_index.squeeze(0),
+                                          single_edge_attr.squeeze(0), single_story_batch.squeeze(0), None)
         else:
             state = model.feature_processor(graph_x[i:i+1])
         
@@ -636,16 +680,29 @@ def critic_loss(model: OptionCriticGNN,
         
         # Next state processing
         if next_graph_edge_index is not None:
-            next_single_graph_x = next_graph_x[i:i+1]
-            next_single_edge_index = next_graph_edge_index[i:i+1] if next_graph_edge_index.dim() > 2 else next_graph_edge_index
-            next_single_edge_attr = next_graph_edge_attr[i:i+1] if next_graph_edge_attr.dim() > 2 else next_graph_edge_attr
-            next_single_story_batch = next_story_batch[i:i+1] if next_story_batch.dim() > 1 else next_story_batch
-            
+            # Handle list format (for dynamic graph sizes)
+            if isinstance(next_graph_x, list):
+                next_single_graph_x = next_graph_x[i]
+                next_single_edge_index = next_graph_edge_index[i] if isinstance(next_graph_edge_index, list) else next_graph_edge_index
+                next_single_edge_attr = next_graph_edge_attr[i] if isinstance(next_graph_edge_attr, list) else next_graph_edge_attr
+                next_single_story_batch = next_story_batch[i] if isinstance(next_story_batch, list) else next_story_batch
+            else:
+                next_single_graph_x = next_graph_x[i:i+1]
+                next_single_edge_index = next_graph_edge_index[i:i+1] if next_graph_edge_index.dim() > 2 else next_graph_edge_index
+                next_single_edge_attr = next_graph_edge_attr[i:i+1] if next_graph_edge_attr.dim() > 2 else next_graph_edge_attr
+                next_single_story_batch = next_story_batch[i:i+1] if next_story_batch.dim() > 1 else next_story_batch
+
             # Use global state for critic loss computation
-            _, next_state_prime = model_prime.get_state(next_single_graph_x.squeeze(0), next_single_edge_index.squeeze(0),
-                                                       next_single_edge_attr.squeeze(0), next_single_story_batch.squeeze(0), None)
-            _, next_state = model.get_state(next_single_graph_x.squeeze(0), next_single_edge_index.squeeze(0),
-                                           next_single_edge_attr.squeeze(0), next_single_story_batch.squeeze(0), None)
+            if isinstance(next_graph_x, list):
+                _, next_state_prime = model_prime.get_state(next_single_graph_x, next_single_edge_index,
+                                                           next_single_edge_attr, next_single_story_batch, None)
+                _, next_state = model.get_state(next_single_graph_x, next_single_edge_index,
+                                               next_single_edge_attr, next_single_story_batch, None)
+            else:
+                _, next_state_prime = model_prime.get_state(next_single_graph_x.squeeze(0), next_single_edge_index.squeeze(0),
+                                                           next_single_edge_attr.squeeze(0), next_single_story_batch.squeeze(0), None)
+                _, next_state = model.get_state(next_single_graph_x.squeeze(0), next_single_edge_index.squeeze(0),
+                                               next_single_edge_attr.squeeze(0), next_single_story_batch.squeeze(0), None)
         else:
             next_state_prime = model_prime.feature_processor(next_graph_x[i:i+1])
             next_state = model.feature_processor(next_graph_x[i:i+1])

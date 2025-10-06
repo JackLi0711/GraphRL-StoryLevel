@@ -51,43 +51,48 @@ class ReplayBuffer(object):
     def sample(self, batch_size: int) -> Tuple:
         """
         Sample a batch of transitions.
-        
+
         Args:
             batch_size: Number of transitions to sample
-            
+
         Returns:
             Tuple of (observations, options, rewards, next_observations, dones)
         """
         if len(self.buffer) < batch_size:
             batch_size = len(self.buffer)
-            
+
         batch = self.rng.sample(self.buffer, batch_size)
         obs, option, reward, next_obs, done = zip(*batch)
-        
+
         # Handle graph data tuples or single tensors
         def stack_observations(obs_list):
             if isinstance(obs_list[0], (tuple, list)):
-                # Graph data tuples - stack each component
+                # Graph data tuples - for dynamic graph sizes (random structure_shape),
+                # we keep graph components as lists instead of stacking them.
+                # This allows graphs with different numbers of nodes/edges to coexist in a batch.
                 stacked = []
                 for i in range(len(obs_list[0])):
                     components = [obs[i] for obs in obs_list]
-                    if torch.is_tensor(components[0]):
-                        stacked.append(torch.stack(components))
-                    elif components[0] is not None:
-                        stacked.append(torch.stack([torch.tensor(c) if not torch.is_tensor(c) else c for c in components]))
+                    # Keep graph tensors as list (for graph_x, edge_index, edge_attr, story_batch)
+                    # The loss functions (critic_loss, actor_loss) will process them individually
+                    if components[0] is not None:
+                        # Convert to tensors if needed, but keep as list
+                        tensor_components = [torch.tensor(c) if not torch.is_tensor(c) else c
+                                           for c in components]
+                        stacked.append(tensor_components)
                     else:
-                        stacked.append(None)
+                        stacked.append([None] * len(components))
                 return tuple(stacked)
             else:
-                # Single tensor observations
+                # Single tensor observations (non-graph case)
                 if torch.is_tensor(obs_list[0]):
                     return torch.stack(obs_list)
                 else:
                     return np.stack(obs_list)
-        
+
         obs_stacked = stack_observations(obs)
         next_obs_stacked = stack_observations(next_obs)
-        
+
         return obs_stacked, option, reward, next_obs_stacked, done
 
     def __len__(self) -> int:
