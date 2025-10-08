@@ -68,6 +68,16 @@ def apply_primitive_action(base_env, structure, action: int, logger=None):
         if logger:
             logger.debug(f"apply_primitive_action: structure has {len(structure.story_level_actions)} story_level_actions")
 
+    # =========================================================================
+    # 🔍 DEBUG LOGGING: Material tracking INSIDE apply_primitive_action
+    # =========================================================================
+    if logger:
+        material_before_env_step = float(structure.calculate_material_usage())
+        sections_before_env_step = list(getattr(structure, 'story_level_sections', []))
+        logger.info(f"[APPLY_ACTION_DEBUG] BEFORE base_env.step(action={action}):")
+        logger.info(f"  material_usage: {material_before_env_step:.6f} kg")
+        logger.info(f"  sections (all): {sections_before_env_step[:]}")
+
     # Call base environment step
     if logger:
         logger.debug(f"apply_primitive_action: Calling base_env.step(structure, {action})")
@@ -78,6 +88,29 @@ def apply_primitive_action(base_env, structure, action: int, logger=None):
     structure, step_reward, done, fail_name, fail_reason = result
     if logger:
         logger.debug(f"apply_primitive_action: Unpacked result - step_reward={step_reward}, done={done}, fail_reason={fail_reason}")
+
+    # =========================================================================
+    # 🔍 DEBUG LOGGING: Material tracking AFTER base_env.step
+    # =========================================================================
+    if logger:
+        material_after_env_step = float(structure.calculate_material_usage())
+        sections_after_env_step = list(getattr(structure, 'story_level_sections', []))
+        material_change = material_before_env_step - material_after_env_step
+
+        logger.info(f"[APPLY_ACTION_DEBUG] AFTER base_env.step(action={action}):")
+        logger.info(f"  material_usage: {material_after_env_step:.6f} kg")
+        logger.info(f"  sections (all): {sections_after_env_step[:]}")
+        logger.info(f"  material_change: {material_change:.6f} kg")
+        logger.info(f"  step_reward (from env.step): {step_reward:.6f}")
+        logger.info(f"  sections_changed: {sections_before_env_step != sections_after_env_step}")
+
+        # 🚨 Alert if reward doesn't match material change
+        reward_mismatch = abs(float(step_reward) - material_change) > 1e-3
+        if reward_mismatch:
+            logger.warning(f"[APPLY_ACTION_DEBUG] ⚠️ WARNING: Reward mismatch!")
+            logger.warning(f"  Expected reward (material_change): {material_change:.6f}")
+            logger.warning(f"  Actual reward (step_reward): {step_reward:.6f}")
+            logger.warning(f"  Difference: {abs(float(step_reward) - material_change):.6f}")
 
     # Derive per-step pass/minimum-section states from base env outputs
     is_minimum_section = bool(done and (fail_reason == "minimum_section"))

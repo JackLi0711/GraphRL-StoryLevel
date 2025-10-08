@@ -573,6 +573,27 @@ class OptionCriticTrainer:
             self.logger.info(f"  - Avg Option Length: {np.mean(episode_opt_lengths) if episode_opt_lengths else 0.0:.2f}")
             self.logger.info(f"  - Terminations: beta={episode_termination_counter['beta']}, max_len={episode_termination_counter['max_len']}, min_section={episode_termination_counter['minimum_section']}")
 
+            # ================================================================
+            # 🔍 REWARD DEBUG SUMMARY: Analyze zero-reward issue
+            # ================================================================
+            if len(self.training_histories["all_actions"]) > 0:
+                # Get all transitions from this episode
+                # Note: We don't have direct access to step_transitions here,
+                # but we can log warnings if score is suspiciously low
+                if episode_score < 1.0 and len(episode_opt_lengths) > 0:
+                    self.logger.warning(f"[REWARD_SUMMARY] ⚠️ Episode score very low ({episode_score:.4f})!")
+                    self.logger.warning(f"[REWARD_SUMMARY]   This suggests most rewards are zero.")
+                    self.logger.warning(f"[REWARD_SUMMARY]   Check [REWARD_DEBUG] logs above for details.")
+
+                # Log ratio of failed vs passed options
+                num_failed_options = episode_termination_counter['max_len']  # Proxy for failed
+                num_total_options = len(episode_opt_lengths)
+                if num_total_options > 0:
+                    fail_rate = num_failed_options / num_total_options * 100
+                    self.logger.info(f"[REWARD_SUMMARY] Option fail rate: {fail_rate:.1f}% ({num_failed_options}/{num_total_options})")
+                    if fail_rate > 80:
+                        self.logger.warning(f"[REWARD_SUMMARY] ⚠️ High fail rate! Most options hitting max_len.")
+
             # Check for duplicate scores
             if len(self.all_stats["episode_score"]) >= 2:
                 recent_scores = self.all_stats["episode_score"][-10:]  # Last 10 scores

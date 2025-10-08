@@ -209,10 +209,49 @@ def rollout_option(structure, base_env, device, max_option_len, current_option: 
             if logger:
                 logger.debug(f"  - converted action: {action}")
 
+        # =====================================================================
+        # 🔍 DEBUG LOGGING: Capture state BEFORE action (Hypothesis 1 & 2)
+        # =====================================================================
+        if logger:
+            sections_before = list(getattr(structure, 'story_level_sections', []))
+            material_before = float(structure.calculate_material_usage())
+            logger.info(f"[REWARD_DEBUG] BEFORE action {action}:")
+            logger.info(f"  sections (all): {sections_before[:]}")
+            logger.info(f"  material_usage: {material_before:.6f} kg")
+
         # Call with enhanced error capture
         if logger:
             logger.debug(f"Calling base_env.step(structure, {action})")
         structure, step_reward, step_pass, is_min_section, fail_reason = apply_primitive_action(base_env, structure, action, logger)
+
+        # =====================================================================
+        # 🔍 DEBUG LOGGING: Capture state AFTER action (Hypothesis 1 & 2)
+        # =====================================================================
+        if logger:
+            sections_after = list(getattr(structure, 'story_level_sections', []))
+            material_after = float(structure.calculate_material_usage())
+            material_saved = material_before - material_after
+            sections_changed = (sections_before != sections_after)
+
+            # Count how many sections changed
+            num_sections_changed = sum(1 for i in range(min(len(sections_before), len(sections_after)))
+                                      if sections_before[i] != sections_after[i])
+
+            logger.info(f"[REWARD_DEBUG] AFTER action {action}:")
+            logger.info(f"  sections (first 10): {sections_after[:10]}")
+            logger.info(f"  material_usage: {material_after:.6f} kg")
+            logger.info(f"  material_saved: {material_saved:.6f} kg")
+            logger.info(f"  step_reward (from env): {step_reward:.6f}")
+            logger.info(f"  sections_changed: {sections_changed}")
+            logger.info(f"  num_sections_changed: {num_sections_changed}")
+
+            # 🚨 Alert if no change detected
+            if not sections_changed:
+                logger.warning(f"[REWARD_DEBUG] ⚠️ WARNING: Sections did NOT change after action {action}!")
+            if abs(material_saved) < 1e-6:
+                logger.warning(f"[REWARD_DEBUG] ⚠️ WARNING: Material usage did NOT change (saved={material_saved:.9f})!")
+            if abs(step_reward) < 1e-6 and step_pass:
+                logger.warning(f"[REWARD_DEBUG] ⚠️ WARNING: step_reward is 0 but step_pass=True!")
 
         # Apply option length bonus: reward += (step_number - 1) * bonus
         # length is 0-indexed, so length equals (step_number - 1)
