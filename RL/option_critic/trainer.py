@@ -19,7 +19,7 @@ from RL.option_critic_gnn import OptionCriticGNN, critic_loss, actor_loss
 from RL.experience_replay import ReplayBuffer
 from RL.record import Record
 from Validation import normalization as nda_norm
-from Visualization.plot import plot_test_behaviors
+from Visualization.plot import plot_test_behaviors, plot_eval_score_mean_std
 
 from .utils import get_graph_data, num_actions
 from .rollout import rollout_option
@@ -262,6 +262,7 @@ class OptionCriticTrainer:
             "eval_scores": [],
             "eval_success_rates": [],
             "eval_episode_lengths": [],
+            "eval_round_episode_scores": [],
             "actor_losses": [],
             "critic_losses": [],
         }
@@ -510,6 +511,14 @@ class OptionCriticTrainer:
         )
 
         # Update evaluation statistics
+        # Store per-episode evaluation scores (list for this round)
+        try:
+            round_scores = [float(s) for s in eval_history.get("scores", [])]
+            self.all_stats["eval_round_episode_scores"].append(round_scores)
+        except Exception:
+            # Fallback to empty list if any issue occurs
+            self.all_stats["eval_round_episode_scores"].append([])
+
         self.all_stats["eval_scores"].append(avg_score)
         self.all_stats["eval_success_rates"].append(success_rate)
         self.all_stats["eval_episode_lengths"].append(avg_episode_length)
@@ -545,6 +554,16 @@ class OptionCriticTrainer:
 
         # Generate option preview visualization for best episode
         self.generate_option_preview_visualization(episode_num, eval_history)
+
+        # Generate mean±std curve of test eval scores per round
+        try:
+            plot_eval_score_mean_std(
+                self.all_stats.get("eval_round_episode_scores", []),
+                self.evaluation_histories.get("round_numbers", []),
+                self.ckpt_dir
+            )
+        except Exception as e:
+            self.logger.error(f"Error plotting eval score mean/std: {str(e)}")
 
         return avg_score, avg_episode_length, success_rate
 

@@ -281,6 +281,49 @@ def plot_test_behaviors(rec: Record, env: Environment, checkpoint_dir: Path) -> 
 
 
 
+def plot_eval_score_mean_std(eval_round_episode_scores: List[List[float]], round_numbers: List[int], checkpoint_dir: Path) -> None:
+    """Plot mean test eval score per round with ±1 std shaded region.
+
+    Args:
+        eval_round_episode_scores: List of lists, each inner list holds per-episode scores for a round
+        round_numbers: Training episode indices corresponding to each evaluation round
+        checkpoint_dir: Directory to save the plot
+    """
+    if eval_round_episode_scores is None or len(eval_round_episode_scores) == 0:
+        return
+
+    means = []
+    stds = []
+    for scores in eval_round_episode_scores:
+        arr = np.array(scores, dtype=float) if scores is not None and len(scores) > 0 else np.array([np.nan])
+        means.append(float(np.nanmean(arr)))
+        stds.append(float(np.nanstd(arr)))
+
+    # X-axis: use round_numbers if valid, else simple 1..N
+    if isinstance(round_numbers, (list, tuple)) and len(round_numbers) == len(means) and len(round_numbers) > 0:
+        x = np.array(round_numbers, dtype=float)
+        x_label = "Trained Episode (evaluation round)"
+    else:
+        x = np.arange(1, len(means) + 1, dtype=float)
+        x_label = "Evaluation Round"
+
+    means = np.array(means, dtype=float)
+    stds = np.array(stds, dtype=float)
+
+    plt.figure(figsize=(10, 5))
+    plt.plot(x, means, color='tab:blue', linewidth=2, label='mean test eval score')
+    plt.fill_between(x, means - stds, means + stds, color='tab:blue', alpha=0.2, label='±1 std')
+    plt.grid(True, linestyle='--', alpha=0.4)
+    plt.xlabel(x_label, fontsize=14)
+    plt.ylabel('Test eval score', fontsize=14)
+    plt.xticks(fontsize=12)
+    plt.yticks(fontsize=12)
+    plt.legend(loc='best', fontsize=12)
+    plt.tight_layout()
+    plt.savefig(checkpoint_dir / "test_eval_scores_mean_std.png", dpi=300)
+    plt.close()
+
+
 if __name__ == "__main__":
     train_fail_reasons = ["minimum_section", "minimum_section", "drift_ratio", "beam_moment", "minimum_section", "column_tension", "drift_ratio", "minimum_section"]
     test_fail_reasons = ["strong_column_weak_beam", "column_compression", "soft_story", "drift_ratio", "beam_moment", "minimum_section", "column_tension", "drift_ratio", "minimum_section"]

@@ -34,12 +34,12 @@ def parse_args():
     parser.add_argument("--update_frequency", type=int, default=5)
     parser.add_argument("--freeze_interval", type=int, default=512) # 512
     parser.add_argument("--batch_size", type=int, default=256)
-    parser.add_argument("--lr", type=float, default=1e-4) # 1e-4
-    parser.add_argument("--actor_lr", type=float, default=1e-4) # 1e-4
-    parser.add_argument("--critic_lr", type=float, default=1e-4) # 1e-4
+    parser.add_argument("--lr", type=float, default=3e-4) # 1e-4
+    parser.add_argument("--actor_lr", type=float, default=3e-4) # 1e-4
+    parser.add_argument("--critic_lr", type=float, default=3e-4) # 1e-4
     parser.add_argument("--grad_clip", type=float, default=10.0)
     parser.add_argument("--device", type=str, default="cuda")
-    parser.add_argument("--epochs", type=int, default=50)
+    parser.add_argument("--epochs", type=int, default=250)
     parser.add_argument("--hidden_dim", type=int, default=128) # 128
     parser.add_argument("--num_layers", type=int, default=3)  # 3
     parser.add_argument("--termination_reg", type=float, default=0.01)
