@@ -12,7 +12,7 @@ from .rollout import rollout_option
 from .logger import termination_logger
 
 
-def evaluate_model(base_env, oc_model, device, num_episodes, max_option_len, logger=None, seed=42):
+def evaluate_model(base_env, oc_model, device, num_episodes, max_option_len, logger=None, seed=42, option_length_bonus=0.0):
     """
     Evaluate the model performance over multiple test episodes and collect action/option histories.
 
@@ -24,6 +24,7 @@ def evaluate_model(base_env, oc_model, device, num_episodes, max_option_len, log
         max_option_len: Maximum option length
         logger: Logger instance
         seed: Random seed for reproducibility
+        option_length_bonus: Bonus reward for longer options (default 0.0 for backward compatibility)
 
     Returns:
         avg_score: average testing score
@@ -78,7 +79,7 @@ def evaluate_model(base_env, oc_model, device, num_episodes, max_option_len, log
                     curr_option = greedy_option
 
             structure, next_state, option_done, episode_done, o_stats, step_transitions, termination_reason = rollout_option(
-                structure, base_env, device, max_option_len, curr_option, oc_model, None, logger, 0.0
+                structure, base_env, device, max_option_len, curr_option, oc_model, None, logger, option_length_bonus
             )
 
             # Collect actions and options from step transitions
@@ -97,8 +98,9 @@ def evaluate_model(base_env, oc_model, device, num_episodes, max_option_len, log
                 option_total_reward = sum(tr["original_reward"] for tr in step_transitions)
                 episode_score += float(option_total_reward)
 
-                option_total_real_reward = sum(tr["reward"] for tr in step_transitions)
-                episode_total_reward += float(option_total_real_reward)
+            # Accumulate total reward from ALL options (including failed ones with penalties)
+            option_total_real_reward = sum(tr["reward"] for tr in step_transitions)
+            episode_total_reward += float(option_total_real_reward)
 
             episode_option_count += 1
 
@@ -157,6 +159,7 @@ def evaluate_model(base_env, oc_model, device, num_episodes, max_option_len, log
     # Prepare evaluation history for visualization
     eval_history = {
         "scores": episode_scores,
+        "total_rewards": episode_total_rewards,
         "actions": episode_actions,
         "options": episode_options,
         "option_instances": episode_option_instances,  # Include option instance data

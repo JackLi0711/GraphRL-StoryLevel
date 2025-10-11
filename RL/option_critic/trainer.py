@@ -19,7 +19,7 @@ from RL.option_critic_gnn import OptionCriticGNN, critic_loss, actor_loss
 from RL.experience_replay import ReplayBuffer
 from RL.record import Record
 from Validation import normalization as nda_norm
-from Visualization.plot import plot_test_behaviors, plot_eval_score_mean_std
+from Visualization.plot import plot_test_behaviors, plot_eval_score_mean_std, plot_eval_reward_mean_std, plot_training_losses, plot_training_episode_rewards
 
 from .utils import get_graph_data, num_actions
 from .rollout import rollout_option
@@ -263,6 +263,7 @@ class OptionCriticTrainer:
             "eval_success_rates": [],
             "eval_episode_lengths": [],
             "eval_round_episode_scores": [],
+            "eval_round_episode_rewards": [],
             "actor_losses": [],
             "critic_losses": [],
         }
@@ -507,7 +508,7 @@ class OptionCriticTrainer:
         """Evaluate model and save if best."""
         avg_score, avg_episode_length, success_rate, eval_history = evaluate_model(
             self.base_env, self.oc, self.device, self.args.eval_episodes,
-            self.args.max_option_len, self.logger, seed=42
+            self.args.max_option_len, self.logger, seed=42, option_length_bonus=self.args.option_length_bonus
         )
 
         # Update evaluation statistics
@@ -518,6 +519,14 @@ class OptionCriticTrainer:
         except Exception:
             # Fallback to empty list if any issue occurs
             self.all_stats["eval_round_episode_scores"].append([])
+
+        # Store per-episode evaluation total rewards (list for this round)
+        try:
+            round_rewards = [float(r) for r in eval_history.get("total_rewards", [])]
+            self.all_stats["eval_round_episode_rewards"].append(round_rewards)
+        except Exception:
+            # Fallback to empty list if any issue occurs
+            self.all_stats["eval_round_episode_rewards"].append([])
 
         self.all_stats["eval_scores"].append(avg_score)
         self.all_stats["eval_success_rates"].append(success_rate)
@@ -564,6 +573,16 @@ class OptionCriticTrainer:
             )
         except Exception as e:
             self.logger.error(f"Error plotting eval score mean/std: {str(e)}")
+
+        # Generate mean±std curve of test eval total rewards per round
+        try:
+            plot_eval_reward_mean_std(
+                self.all_stats.get("eval_round_episode_rewards", []),
+                self.evaluation_histories.get("round_numbers", []),
+                self.ckpt_dir
+            )
+        except Exception as e:
+            self.logger.error(f"Error plotting eval reward mean/std: {str(e)}")
 
         return avg_score, avg_episode_length, success_rate
 
@@ -626,6 +645,25 @@ class OptionCriticTrainer:
             # Generate training behavior visualization after each episode
             self.plot_training_behaviors(episode_num)
 
+            # Plot training losses after each episode
+            try:
+                plot_training_losses(
+                    self.all_stats.get("actor_losses", []),
+                    self.all_stats.get("critic_losses", []),
+                    self.ckpt_dir
+                )
+            except Exception as e:
+                self.logger.debug(f"Error plotting training losses: {str(e)}")
+
+            # Plot training episode rewards after each episode
+            try:
+                plot_training_episode_rewards(
+                    self.all_stats.get("episode_rewards", []),
+                    self.ckpt_dir
+                )
+            except Exception as e:
+                self.logger.debug(f"Error plotting training episode rewards: {str(e)}")
+
             # Save statistics every episode (like original implementation)
             self._save_episode_stats()
 
@@ -641,6 +679,29 @@ class OptionCriticTrainer:
         # Final evaluation and save
         self.logger.info("Training completed, performing final evaluation")
         self.evaluate_and_save(self.args.epochs - 1)
+
+        # Plot training losses before saving stats
+        try:
+            self.logger.info("Generating training losses plot...")
+            plot_training_losses(
+                self.all_stats.get("actor_losses", []),
+                self.all_stats.get("critic_losses", []),
+                self.ckpt_dir
+            )
+            self.logger.info(f"Training losses plot saved to {self.ckpt_dir / 'training_losses.png'}")
+        except Exception as e:
+            self.logger.error(f"Error plotting training losses: {str(e)}")
+
+        # Plot training episode rewards
+        try:
+            self.logger.info("Generating training episode rewards plot...")
+            plot_training_episode_rewards(
+                self.all_stats.get("episode_rewards", []),
+                self.ckpt_dir
+            )
+            self.logger.info(f"Training episode rewards plot saved to {self.ckpt_dir / 'training_episode_rewards.png'}")
+        except Exception as e:
+            self.logger.error(f"Error plotting training episode rewards: {str(e)}")
 
         # Save final statistics
         termination_logger.save_stats()

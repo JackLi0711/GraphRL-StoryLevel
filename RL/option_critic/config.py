@@ -44,7 +44,7 @@ def parse_args():
     parser.add_argument("--num_layers", type=int, default=3)  # 3
     parser.add_argument("--termination_reg", type=float, default=0.01)
     parser.add_argument("--entropy_reg", type=float, default=0.01)
-    parser.add_argument("--option_length_bonus", type=float, default=0.01, help="Bonus reward for longer options: reward += (step-1) * bonus")
+    parser.add_argument("--option_length_bonus", type=float, default=0.008, help="Bonus reward for longer options: reward += (step-1) * bonus")
     parser.add_argument("--termination_lr_ratio", type=float, default=0.01, help="Termination learning rate as ratio of actor_lr (termination_lr = actor_lr * ratio)")
     parser.add_argument("--eval_frequency", type=int, default=10, help="Evaluate model every N training episodes")
     parser.add_argument("--eval_episodes", type=int, default=10, help="Number of episodes for evaluation")
