@@ -113,6 +113,30 @@ def rollout_option(structure, base_env, device, max_option_len, current_option: 
         else:
             print(f"DEBUG: {log_msg}")
 
+        # Check if there are any valid actions left
+        if valid_mask.sum() == 0:
+            # No valid actions - check current structure constraints
+            if logger:
+                logger.debug("No valid actions available - checking current structure constraints")
+
+            from .utils import check_constraints_without_update
+            whether_pass, check_fail_reason = check_constraints_without_update(structure, base_env)
+
+            if whether_pass:
+                # Structure passes all constraints - successful termination
+                if logger:
+                    logger.debug("Structure passes constraints - terminating as minimum_section")
+                set_termination_reason("minimum_section", "no_valid_actions_passed")
+            else:
+                # Structure fails constraints - mark as failed
+                if logger:
+                    logger.debug(f"Structure fails constraints - fail_reason: {check_fail_reason}")
+                step_pass = False
+                # termination_reason will be set to "max_len" after loop
+
+            episode_done = True
+            break
+
         # intra-option action with valid actions mask
         log_msg = f"Getting action for option {current_option}"
         if logger:
