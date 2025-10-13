@@ -25,7 +25,7 @@ def parse_args() -> Namespace:
 	# with doNDA: "./Results/AdjustedSections/2023_05_07__11_39_51__test/model.pt"
 	parser.add_argument("--trained_model_path", type=Path, default="./models/DQN/20250605_RSA_model_HighestScore.pt")
 	# checkpoint directory
-	parser.add_argument("--ckpt_dir", type=Path, default="./Results/DQN_inference_6F33")
+	parser.add_argument("--ckpt_dir", type=Path, default="./Results/DQN_inference_5F33")
 
 	# chances
 	parser.add_argument("--chances", type=int, default=0)

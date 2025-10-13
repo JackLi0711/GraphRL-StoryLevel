@@ -56,6 +56,9 @@ class OptionCriticTrainer:
         self.buffer = ReplayBuffer(capacity=100000)
         self.all_stats = self._initialize_stats()
 
+        # Global step counter (action steps, not option steps)
+        self.global_steps = 0
+
         # Best model tracking
         self.best_model_score = float('-inf')
         self.best_model_path = self.ckpt_dir / "best_model.pt"
@@ -295,7 +298,6 @@ class OptionCriticTrainer:
         option_termination = True
         curr_option = 0
         greedy_option = 0
-        steps = 0
 
         episode_opt_lengths = []
         episode_termination_counter = {"beta": 0, "max_len": 0, "minimum_section": 0}
@@ -356,8 +358,8 @@ class OptionCriticTrainer:
             for tr in step_transitions:
                 self.buffer.push(tr["obs"], tr["option"], tr["reward"], tr["next_obs"], tr["done"])
 
-            # Training updates
-            self._perform_updates(step_transitions, steps)
+            # Training updates (now using action-level step counting)
+            self._perform_updates(step_transitions)
 
             # Update state for next iteration
             if not episode_done:
@@ -377,7 +379,6 @@ class OptionCriticTrainer:
                 )
 
             done = episode_done
-            steps += 1
 
         # Store training episode data
         if len(episode_action_sequence) > 0:
@@ -426,83 +427,95 @@ class OptionCriticTrainer:
         # Return updated values
         return episode_score, episode_total_reward, last_pass_sections, last_pass_saved_material
 
-    def _perform_updates(self, step_transitions, steps):
-        """Perform actor and critic updates."""
-        # Accumulate actor losses
+    def _perform_updates(self, step_transitions):
+        """
+        Perform actor and critic updates based on action steps.
+
+        This method now increments self.global_steps for each action step,
+        aligning with the standard Option-Critic implementation.
+        """
+        # Accumulate actor losses for all transitions in this option
         accumulated_actor_losses = []
-        if len(step_transitions) > 0:
+
+        for tr in step_transitions:
             # =========================================================================
             # Debug logging: Monitor Q_U values (Stage 6)
             # =========================================================================
-            if hasattr(self.args, 'debug_logging') and self.args.debug_logging and len(step_transitions) > 0:
-                # Sample first 3 transitions for monitoring
-                for idx, tr in enumerate(step_transitions[:3]):
-                    if isinstance(tr["obs"], (tuple, list)) and len(tr["obs"]) >= 4:
-                        _, state = self.oc.get_state(*tr["obs"][:4], None)
-                        _, next_state = self.oc_prime.get_state(*tr["next_obs"][:4], None)
+            if hasattr(self.args, 'debug_logging') and self.args.debug_logging:
+                if isinstance(tr["obs"], (tuple, list)) and len(tr["obs"]) >= 4:
+                    _, state = self.oc.get_state(*tr["obs"][:4], None)
+                    _, next_state = self.oc_prime.get_state(*tr["next_obs"][:4], None)
 
-                        Q_U = self.oc.compute_Q_U(
-                            global_state=state,
-                            option=tr["option"],
-                            action=tr["action"],
-                            reward=tr["reward"],
-                            next_global_state=next_state,
-                            gamma=self.args.gamma
-                        )
+                    Q_U = self.oc.compute_Q_U(
+                        global_state=state,
+                        option=tr["option"],
+                        action=tr["action"],
+                        reward=tr["reward"],
+                        next_global_state=next_state,
+                        gamma=self.args.gamma
+                    )
 
-                        self.logger.debug(
-                            f"[Q_U Monitor] Sample {idx}: "
-                            f"ω={tr['option']}, a={tr['action']}, "
-                            f"r={tr['reward']:.4f}, Q_U={Q_U.item():.4f}"
-                        )
+                    self.logger.debug(
+                        f"[Q_U Monitor] Step {self.global_steps}: "
+                        f"ω={tr['option']}, a={tr['action']}, "
+                        f"r={tr['reward']:.4f}, Q_U={Q_U.item():.4f}"
+                    )
 
-            for tr in step_transitions:
-                a_loss = actor_loss(
-                    tr["obs"],
-                    tr["option"],
-                    tr["action"],  # ✅ NEW: Pass action for Q_U computation
-                    tr["logp"],
-                    tr["entropy"],
-                    tr["reward"],
-                    tr["done"],
-                    tr["next_obs"],
-                    self.oc,
-                    self.oc_prime,
-                    self.args.gamma,
-                    self.args.termination_reg,
-                    self.args.entropy_reg
-                )
-                accumulated_actor_losses.append(a_loss)
+            # Compute actor loss for this transition
+            a_loss = actor_loss(
+                tr["obs"],
+                tr["option"],
+                tr["action"],
+                tr["logp"],
+                tr["entropy"],
+                tr["reward"],
+                tr["done"],
+                tr["next_obs"],
+                self.oc,
+                self.oc_prime,
+                self.args.gamma,
+                self.args.termination_reg,
+                self.args.entropy_reg
+            )
+            accumulated_actor_losses.append(a_loss)
 
-        # Synchronous updates
-        should_update = len(self.buffer) > self.args.batch_size and (steps % self.args.update_frequency == 0)
-        if should_update:
-            # Actor update
-            if len(accumulated_actor_losses) > 0:
-                total_actor_loss = sum(accumulated_actor_losses) / len(accumulated_actor_losses)
+            # Increment global step counter (action-level)
+            self.global_steps += 1
 
-                self.actor_optimizer.zero_grad()
-                total_actor_loss.backward()
+            # Check if we should perform network updates
+            should_update = len(self.buffer) > self.args.batch_size and (self.global_steps % self.args.update_frequency == 0)
+
+            if should_update:
+                # Actor update (using accumulated losses from current option)
+                if len(accumulated_actor_losses) > 0:
+                    total_actor_loss = sum(accumulated_actor_losses) / len(accumulated_actor_losses)
+
+                    self.actor_optimizer.zero_grad()
+                    total_actor_loss.backward()
+                    if self.args.grad_clip is not None and self.args.grad_clip > 0:
+                        torch.nn.utils.clip_grad_norm_(self.oc.parameters(), max_norm=self.args.grad_clip)
+                    self.actor_optimizer.step()
+
+                    self.all_stats["actor_losses"].append(float(total_actor_loss.item()))
+
+                    # Clear accumulated losses after backward to avoid reusing freed graph
+                    accumulated_actor_losses = []
+
+                # Critic update
+                data_batch = self.buffer.sample(self.args.batch_size)
+                c_loss = critic_loss(self.oc, self.oc_prime, data_batch, self.args.gamma)
+                self.critic_optimizer.zero_grad()
+                c_loss.backward()
                 if self.args.grad_clip is not None and self.args.grad_clip > 0:
                     torch.nn.utils.clip_grad_norm_(self.oc.parameters(), max_norm=self.args.grad_clip)
-                self.actor_optimizer.step()
+                self.critic_optimizer.step()
 
-                self.all_stats["actor_losses"].append(float(total_actor_loss.item()))
+                self.all_stats["critic_losses"].append(float(c_loss.item()))
 
-            # Critic update
-            data_batch = self.buffer.sample(self.args.batch_size)
-            c_loss = critic_loss(self.oc, self.oc_prime, data_batch, self.args.gamma)
-            self.critic_optimizer.zero_grad()
-            c_loss.backward()
-            if self.args.grad_clip is not None and self.args.grad_clip > 0:
-                torch.nn.utils.clip_grad_norm_(self.oc.parameters(), max_norm=self.args.grad_clip)
-            self.critic_optimizer.step()
-
-            self.all_stats["critic_losses"].append(float(c_loss.item()))
-
-            # Update target network
-            if steps % self.args.freeze_interval == 0:
+            # Check if we should update target network
+            if self.global_steps % self.args.freeze_interval == 0:
                 self.oc_prime.load_state_dict(self.oc.state_dict())
+                self.logger.info(f"Updated target network at step {self.global_steps}")
 
     def evaluate_and_save(self, episode_num):
         """Evaluate model and save if best."""
