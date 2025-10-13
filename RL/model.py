@@ -62,12 +62,22 @@ class StateGNN(nn.Module):
         
         return state
 
-    def forward(self, x, edge_index, edge_attr, batch, story_batch, structure_story_ptr) -> torch.Tensor:
+    def forward(self, x, edge_index, edge_attr, batch, story_batch, structure_story_ptr, return_attention_weights=False) -> torch.Tensor:
         t_start = time.time()
         # node embedding
         x = self.encoder_mlp(x)
+
+        # Process GAT layers, extract attention from last layer if requested
+        attention_weights = None
         for i in range(self.num_layers):
-            x = self.conv_layers[i](x, edge_index, edge_attr)
+            # Extract attention weights from the last layer
+            if return_attention_weights and i == self.num_layers - 1:
+                x, (att_edge_index, att_weights) = self.conv_layers[i](
+                    x, edge_index, edge_attr, return_attention_weights=True
+                )
+                attention_weights = (att_edge_index, att_weights)
+            else:
+                x = self.conv_layers[i](x, edge_index, edge_attr)
             x = F.relu(x)
         node_embedding = self.decoder_mlp(x)  # shape: [total node_num, hidden_dim]
 
@@ -87,6 +97,9 @@ class StateGNN(nn.Module):
         state = self._state_global_aggregation(story_embedding, graph_embedding, structure_story_ptr)  # shape: [total story_member_num, member_state_dim*2]
         t_end = time.time()
         print(f"\tused time StateGNN.forward(): {t_end - t_start:.3f} sec")
+
+        if return_attention_weights:
+            return state, attention_weights
         return state
 
 
