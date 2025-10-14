@@ -12,7 +12,7 @@ from .rollout import rollout_option
 from .logger import termination_logger
 
 
-def evaluate_model(base_env, oc_model, device, num_episodes, max_option_len, logger=None, seed=42, option_length_bonus=0.0):
+def evaluate_model(base_env, oc_model, device, num_episodes, max_option_len, logger=None, seed=42, option_length_bonus=0.0, failure_penalty=1.0):
     """
     Evaluate the model performance over multiple test episodes and collect action/option histories.
 
@@ -79,7 +79,7 @@ def evaluate_model(base_env, oc_model, device, num_episodes, max_option_len, log
                     curr_option = greedy_option
 
             structure, next_state, option_done, episode_done, o_stats, step_transitions, termination_reason = rollout_option(
-                structure, base_env, device, max_option_len, curr_option, oc_model, None, logger, option_length_bonus
+                structure, base_env, device, max_option_len, curr_option, oc_model, None, logger, option_length_bonus, failure_penalty
             )
 
             # Collect actions and options from step transitions

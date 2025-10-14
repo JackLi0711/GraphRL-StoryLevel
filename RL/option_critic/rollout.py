@@ -10,7 +10,7 @@ from .utils import get_graph_data, apply_primitive_action
 from .logger import termination_logger
 
 
-def rollout_option(structure, base_env, device, max_option_len, current_option: int, oc_model, epsilon: float = None, logger=None, option_length_bonus: float = 0.0):
+def rollout_option(structure, base_env, device, max_option_len, current_option: int, oc_model, epsilon: float = None, logger=None, option_length_bonus: float = 0.0, failure_penalty: float = 1.0):
     """
     Execute a single option composed of a sequence of primitive actions.
     Now returns step-level transitions for step-based critic updates.
@@ -406,11 +406,11 @@ def rollout_option(structure, base_env, device, max_option_len, current_option: 
         episode_done = True
         # Apply penalty reward to the last step that caused the failure
         if len(step_transitions) > 0:
-            step_transitions[-1]["reward"] = -1 # -1000.0
-            step_transitions[-1]["original_reward"] = -1 # -1000.0
+            step_transitions[-1]["reward"] = -failure_penalty
+            step_transitions[-1]["original_reward"] = -failure_penalty
             step_transitions[-1]["done"] = True
             if logger:
-                logger.debug("Updated last step transition with penalty reward")
+                logger.debug(f"Updated last step transition with penalty reward: -{failure_penalty}")
 
     if logger:
         logger.debug(f"Option execution completed, passed={passed}")

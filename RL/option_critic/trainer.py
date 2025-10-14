@@ -331,7 +331,7 @@ class OptionCriticTrainer:
 
             structure, next_state, option_done, episode_done, o_stats, step_transitions, termination_reason = rollout_option(
                 structure, self.base_env, self.device, self.args.max_option_len,
-                curr_option, self.oc, epsilon, self.logger, self.args.option_length_bonus
+                curr_option, self.oc, epsilon, self.logger, self.args.option_length_bonus, self.args.failure_penalty
             )
 
             # Collect training behavior data
@@ -521,7 +521,7 @@ class OptionCriticTrainer:
         """Evaluate model and save if best."""
         avg_score, avg_episode_length, success_rate, eval_history = evaluate_model(
             self.base_env, self.oc, self.device, self.args.eval_episodes,
-            self.args.max_option_len, self.logger, seed=42, option_length_bonus=self.args.option_length_bonus
+            self.args.max_option_len, self.logger, seed=42, option_length_bonus=self.args.option_length_bonus, failure_penalty=self.args.failure_penalty
         )
 
         # Update evaluation statistics
