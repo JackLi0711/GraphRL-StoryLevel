@@ -25,19 +25,24 @@ class Record:
         }
 
         self.testing_record = {
-            "geometry": [],     
+            "geometry": [],
             "initial_design": [],
             "initial_volume": [],
 
-            "score": [],  
+            "score": [],
             "final_design": [],
             "final_volume": [],
-            "action": [], 
-            "action_SCWB": [], 
-            "saved_material": [],      
+            "action": [],
+            "action_SCWB": [],
+            "saved_material": [],
             "saved_material_SCWB": [],
-            "fail_name": [],   
-            "fail_reason": [] 
+            "fail_name": [],
+            "fail_reason": [],
+
+            # For A2C/PPO testing statistics
+            "score_mean": [],    # Mean score of test runs
+            "score_std": [],     # Std score of test runs
+            "best_designs": []   # Best designs from test runs
         }
 
         self.learn_losses = [[]]
