@@ -103,6 +103,11 @@ def test_episode(agent, env, rec, logger):
         score: float
         design_process: list of dicts
     """
+    # Set models to eval mode
+    agent.state_gnn.eval()
+    agent.policy_net.eval()
+    agent.value_net.eval()
+
     structure = env.reset(testing=True)
     rec.record_in_beginning(structure, testing=True)
 
@@ -141,6 +146,11 @@ def test_episode(agent, env, rec, logger):
     final_structure = structure if fail_reason == "minimum_section" else original_structure
     rec.record_in_end(final_structure, env, testing=True)
 
+    # Set models back to train mode
+    agent.state_gnn.train()
+    agent.policy_net.train()
+    agent.value_net.train()
+
     return score, design_process
 
 
@@ -162,9 +172,9 @@ def plot_training_testing_curves(rec, ckpt_dir, test_frequency):
 
     # Testing curve (mean ± std)
     if "score_mean" in rec.testing_record and len(rec.testing_record["score_mean"]) > 0:
-        test_episodes = range(test_frequency,
-                             len(rec.training_record["score"]) + 1,
-                             test_frequency)
+        # Use actual number of test points
+        num_tests = len(rec.testing_record["score_mean"])
+        test_episodes = list(range(test_frequency, test_frequency * num_tests + 1, test_frequency))
         test_means = rec.testing_record["score_mean"]
         test_stds = rec.testing_record["score_std"]
 

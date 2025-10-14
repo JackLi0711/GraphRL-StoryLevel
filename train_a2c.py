@@ -226,6 +226,7 @@ def main(args):
             # Output and plot
             rec.output(args.ckpt_dir)
             plot_training_testing_curves(rec, args.ckpt_dir, args.test_frequency)
+            plot.plot_test_behaviors(rec, env, args.ckpt_dir)
 
             # Save model
             save_model(a2c_agent, args.ckpt_dir, episode)

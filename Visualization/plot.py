@@ -120,7 +120,7 @@ def plot_test_behaviors(rec: Record, env: Environment, checkpoint_dir: Path) -> 
     train_scores = rec.training_record["score"]
     test_scores = rec.testing_record["score"]
     test_actions, test_actions_SCWB = rec.testing_record["action"], rec.testing_record["action_SCWB"]
-    test_options = rec.testing_record["option"]  # Get option sequences
+    test_options = rec.testing_record.get("option", None)  # Get option sequences (optional for hierarchical RL)
     test_option_instances = rec.testing_record.get("option_instances", None)  # Get option instance data
     story_num = env._testing_structure.story_num
     
@@ -222,7 +222,7 @@ def plot_test_behaviors(rec: Record, env: Environment, checkpoint_dir: Path) -> 
                     option_start = j
     
     # Fall back to old method if new method was not used or failed
-    if not use_new_method:
+    if not use_new_method and test_options is not None:
         # Fall back to old method using option index changes
         for i, (actions, options) in enumerate(zip(test_actions, test_options)):
             if len(options) == 0:
