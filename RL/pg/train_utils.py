@@ -165,18 +165,22 @@ def plot_training_testing_curves(rec, ckpt_dir, test_frequency):
 
     fig, ax = plt.subplots(figsize=(10, 6))
 
-    # Training curve
-    episodes = range(1, len(rec.training_record["score"]) + 1)
-    ax.plot(episodes, rec.training_record["score"],
-            label='Training Score', alpha=0.6, color='blue')
-
     # Testing curve (mean ± std)
     if "score_mean" in rec.testing_record and len(rec.testing_record["score_mean"]) > 0:
         # Use actual number of test points
         num_tests = len(rec.testing_record["score_mean"])
-        test_episodes = list(range(test_frequency, test_frequency * num_tests + 1, test_frequency))
+        test_episodes = [(i+1) * test_frequency for i in range(num_tests)]
         test_means = rec.testing_record["score_mean"]
         test_stds = rec.testing_record["score_std"]
+
+        # Only plot training data up to the last test episode
+        last_test_episode = test_episodes[-1]
+        training_scores = rec.training_record["score"][:last_test_episode]
+        episodes = range(1, len(training_scores) + 1)
+
+        # Training curve
+        ax.plot(episodes, training_scores,
+                label='Training Score', alpha=0.6, color='blue')
 
         ax.plot(test_episodes, test_means,
                 label='Testing Score (mean)', color='red', linewidth=2)
@@ -184,6 +188,11 @@ def plot_training_testing_curves(rec, ckpt_dir, test_frequency):
                          np.array(test_means) - np.array(test_stds),
                          np.array(test_means) + np.array(test_stds),
                          alpha=0.3, color='red', label='Testing Score (±std)')
+    else:
+        # If no testing data, plot all training data
+        episodes = range(1, len(rec.training_record["score"]) + 1)
+        ax.plot(episodes, rec.training_record["score"],
+                label='Training Score', alpha=0.6, color='blue')
 
     ax.set_xlabel('Episode')
     ax.set_ylabel('Score')
