@@ -62,7 +62,9 @@ def train_episode(agent, env, rec, logger):
             log_prob=log_prob,
             value=value,
             entropy=entropy,
-            valid_mask=valid_mask
+            valid_mask=valid_mask,
+            graph=graph.clone(),  # Store graph for recomputing features
+            structure=structure   # Store structure for recomputing features
         )
 
         # Update
@@ -109,18 +111,34 @@ def test_episode(agent, env, rec, logger):
     agent.value_net.eval()
 
     structure = env.reset(testing=True)
+
+    # === DIAGNOSTIC: Log initial structure ===
+    if logger:
+        logger.info(f"  [DIAGNOSTIC TEST] Initial structure story_level_sections: {structure.story_level_sections}")
+        logger.info(f"  [DIAGNOSTIC TEST] Structure shape: x_span={structure.x_span_num}, z_span={structure.z_span_num}, stories={structure.story_num}")
+
     rec.record_in_beginning(structure, testing=True)
 
     graph = structure.graph.clone()
     score = 0
     done = False
     design_process = []  # 記錄設計過程
+    step_count = 0
 
     while not done:
         original_structure = deepcopy(structure)
 
         # Get features
         story_features, global_features = agent.get_features(graph, structure)
+
+        # === DIAGNOSTIC: Get action probabilities ===
+        with torch.no_grad():
+            action_scores = agent.policy_net(story_features)
+            valid_mask = torch.ones(story_features.shape[0], dtype=torch.bool, device=agent.device)
+            if len(structure.already_minimum_section_story_indexes) > 0:
+                valid_mask[structure.already_minimum_section_story_indexes] = False
+            masked_scores = action_scores.masked_fill(~valid_mask, -1e9)
+            probs = torch.nn.functional.softmax(masked_scores, dim=0)
 
         # Choose action (greedy)
         action, _, _, _ = agent.choose_action(
@@ -129,6 +147,14 @@ def test_episode(agent, env, rec, logger):
             structure,
             greedy=True
         )
+
+        # === DIAGNOSTIC: Log action details ===
+        if logger and step_count < 3:  # Only log first 3 steps to avoid spam
+            top_3_probs, top_3_indices = torch.topk(probs, min(3, len(probs)))
+            logger.info(f"  [DIAGNOSTIC TEST] Step {step_count}: Action={action}, "
+                       f"Action_prob={probs[action].item():.4f}")
+            logger.info(f"    Top 3 actions: {top_3_indices.cpu().tolist()}, "
+                       f"probs: {[f'{p:.4f}' for p in top_3_probs.cpu().tolist()]}")
 
         # Record design step (only store serializable data)
         design_process.append({
@@ -141,6 +167,7 @@ def test_episode(agent, env, rec, logger):
 
         graph = structure.graph.clone()
         score += reward
+        step_count += 1
 
     # Final structure
     final_structure = structure if fail_reason == "minimum_section" else original_structure

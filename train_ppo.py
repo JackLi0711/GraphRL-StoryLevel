@@ -61,7 +61,7 @@ def parse_args() -> Namespace:
     parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--gamma", type=float, default=0.99)
     parser.add_argument("--clip_epsilon", type=float, default=0.2)
-    parser.add_argument("--value_loss_coef", type=float, default=0.5)
+    parser.add_argument("--value_loss_coef", type=float, default=0.001)
     parser.add_argument("--entropy_coef_initial", type=float, default=0.01)
     parser.add_argument("--entropy_decay", type=float, default=0.99)
     parser.add_argument("--max_grad_norm", type=float, default=0.5)
@@ -183,6 +183,15 @@ def main(args):
     with open(args.ckpt_dir / "args.json", "w") as f:
         json.dump(vars(args), f, indent=4, default=str)
 
+    # === DIAGNOSTIC: Track initial parameters ===
+    initial_state_gnn_param = list(ppo_agent.state_gnn.parameters())[0].clone().detach()
+    initial_policy_param = list(ppo_agent.policy_net.parameters())[0].clone().detach()
+    initial_value_param = list(ppo_agent.value_net.parameters())[0].clone().detach()
+    logger.critical("[DIAGNOSTIC] Initial parameter norms - "
+                   f"StateGNN: {torch.norm(initial_state_gnn_param).item():.6f}, "
+                   f"Policy: {torch.norm(initial_policy_param).item():.6f}, "
+                   f"Value: {torch.norm(initial_value_param).item():.6f}")
+
     # Training loop
     logger.critical("Start training PPO...")
     for episode in range(args.num_epoch):
@@ -203,18 +212,39 @@ def main(args):
 
         # Testing
         if (episode + 1) % args.test_frequency == 0:
+            # === DIAGNOSTIC: Check parameter changes from initial ===
+            current_state_gnn_param = list(ppo_agent.state_gnn.parameters())[0].clone().detach()
+            current_policy_param = list(ppo_agent.policy_net.parameters())[0].clone().detach()
+            current_value_param = list(ppo_agent.value_net.parameters())[0].clone().detach()
+
+            state_gnn_total_change = torch.norm(current_state_gnn_param - initial_state_gnn_param).item()
+            policy_total_change = torch.norm(current_policy_param - initial_policy_param).item()
+            value_total_change = torch.norm(current_value_param - initial_value_param).item()
+
+            logger.critical(f"[DIAGNOSTIC] Total parameter changes from initial (Episode {episode+1}): "
+                          f"StateGNN: {state_gnn_total_change:.6f}, "
+                          f"Policy: {policy_total_change:.6f}, "
+                          f"Value: {value_total_change:.6f}")
+
             logger.critical(f"Testing at episode {episode+1}...")
             test_scores = []
             test_designs = []
 
+            # === DIAGNOSTIC: Only log first test run in detail ===
             for run in range(args.test_runs):
-                test_score, design_process = test_episode(ppo_agent, env, rec, logger)
+                if run == 0:
+                    logger.critical(f"  [DIAGNOSTIC] Detailed output for test run 1/{args.test_runs}:")
+                test_score, design_process = test_episode(ppo_agent, env, rec, logger if run == 0 else None)
                 test_scores.append(test_score)
                 test_designs.append(design_process)
 
             # Compute statistics
             mean_score = np.mean(test_scores)
             std_score = np.std(test_scores)
+
+            # === DIAGNOSTIC: Log all test scores ===
+            logger.critical(f"[DIAGNOSTIC] All test scores: {[f'{s:.4f}' for s in test_scores]}")
+            logger.critical(f"[DIAGNOSTIC] Test score variance: {np.var(test_scores):.6f}")
 
             # Record mean ± std
             rec.testing_record["score_mean"].append(mean_score)
