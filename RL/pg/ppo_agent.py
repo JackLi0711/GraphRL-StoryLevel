@@ -11,6 +11,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 from torch.distributions import Categorical
+from torch_geometric.data import Batch
 
 from .base_agent import BasePGAgent
 
@@ -54,13 +55,65 @@ class PPOAgent(BasePGAgent):
         self.max_grad_norm = max_grad_norm
         self.ppo_epochs = ppo_epochs
 
-        # Single optimizer for all networks (一起訓練)
-        self.optimizer = optim.Adam(
-            list(self.state_gnn.parameters()) +
+        # Separate optimizers with different learning rates
+        # StateGNN gets 10x higher LR to compensate for smaller gradients
+        self.state_gnn_optimizer = optim.Adam(
+            self.state_gnn.parameters(),
+            lr=lr * 10
+        )
+        self.policy_value_optimizer = optim.Adam(
             list(self.policy_net.parameters()) +
             list(self.value_net.parameters()),
             lr=lr
         )
+
+        if self.logger:
+            self.logger.info(f"[OPTIMIZER] StateGNN LR: {lr * 10:.6f}, Policy/Value LR: {lr:.6f}")
+
+    def _batch_all_graphs(self, all_graphs, all_structures):
+        """
+        Batch所有graphs成一個大batch並準備相關數據
+
+        Args:
+            all_graphs: List of graph objects
+            all_structures: List of structure data dicts
+
+        Returns:
+            batched_graph: Batched PyG graph
+            batched_story_batch: Batched story_batch tensor
+            structure_story_ptr: Pointer array for each structure's story range
+            num_stories_per_graph: List of story counts for each graph
+        """
+        # 1. 使用PyG的Batch合併所有graphs
+        data_list = [g.to(self.device) for g in all_graphs]
+        batched_graph = Batch.from_data_list(data_list)
+
+        # 2. 準備batched story_batch（需要調整offset）
+        story_batch_list = [s['story_batch'] for s in all_structures]
+        story_batch_offset = 0
+        all_story_batches = []
+        num_stories_per_graph = []
+
+        for sb in story_batch_list:
+            # 計算當前graph的story數量
+            num_stories = sb.max().item() + 1
+            num_stories_per_graph.append(num_stories)
+
+            # 調整offset
+            adjusted_sb = sb + story_batch_offset
+            all_story_batches.append(adjusted_sb)
+
+            # 更新offset
+            story_batch_offset += num_stories
+
+        batched_story_batch = torch.cat(all_story_batches).to(self.device)
+
+        # 3. 創建structure_story_ptr
+        structure_story_ptr = [0]
+        for num_stories in num_stories_per_graph:
+            structure_story_ptr.append(structure_story_ptr[-1] + num_stories)
+
+        return batched_graph, batched_story_batch, structure_story_ptr, num_stories_per_graph
 
     def update(self):
         """
@@ -123,32 +176,63 @@ class PPOAgent(BasePGAgent):
         entropies_list = []
 
         for epoch in range(self.ppo_epochs):
-            # Re-compute with current policy (有梯度)
+            # === BATCH OPTIMIZATION: 一次forward所有graphs ===
+
+            # 1. Batch所有graphs
+            batched_graph, batched_story_batch, structure_story_ptr, num_stories_per_graph = \
+                self._batch_all_graphs(all_graphs, all_structures)
+
+            if self.logger and epoch == 0:
+                self.logger.info(f"  [BATCH] Processing {len(all_graphs)} graphs in one forward pass")
+                self.logger.info(f"  [BATCH] Total nodes: {batched_graph.x.shape[0]}, "
+                               f"Total edges: {batched_graph.edge_index.shape[1]//2}")
+
+            # 2. Create edge-level batch index from node-level batch index
+            # batched_graph.batch is [num_nodes], we need [num_edges]
+            # For each edge, get the batch index from its source node
+            edge_batch = batched_graph.batch[batched_graph.edge_index[0]]  # [num_edges*2]
+            # StateGNN uses edge_index[::2], so we also take edge_batch[::2]
+            edge_batch_half = edge_batch[::2]  # [num_edges]
+
+            # 3. 一次forward StateGNN處理所有graphs（關鍵：只forward一次！）
+            all_story_features_batched = self.state_gnn(
+                batched_graph.x,
+                batched_graph.edge_index,
+                batched_graph.edge_attr,
+                edge_batch_half,  # Edge-level batch index
+                batched_story_batch,
+                structure_story_ptr
+            )  # [total_story_members_all_timesteps, hidden_dim*2]
+
+            # 4. 分割batched features回individual timesteps
+            story_features_list = []
+            global_features_list = []
+            start_idx = 0
+
+            for num_stories in num_stories_per_graph:
+                end_idx = start_idx + num_stories
+
+                # 提取當前timestep的features
+                story_feat = all_story_features_batched[start_idx:end_idx]
+                global_feat = story_feat.mean(dim=0, keepdim=True)
+
+                story_features_list.append(story_feat)
+                global_features_list.append(global_feat)
+
+                start_idx = end_idx
+
+            # 5. 使用cached features計算loss（這些features有梯度連接到StateGNN）
             new_log_probs = []
             new_values = []
             new_entropies = []
 
             for t in range(len(all_states)):
-                graph = all_graphs[t]
-                structure_data = all_structures[t]
+                story_features = story_features_list[t]  # 重用已計算的features（有梯度）
+                global_features = global_features_list[t]
                 action = all_actions[t]
                 valid_mask = all_valid_masks[t]
 
-                # === KEY FIX: Recompute features through StateGNN (WITH gradients) ===
-                graph = graph.to(self.device)
-                story_features = self.state_gnn(
-                    graph.x,
-                    graph.edge_index,
-                    graph.edge_attr,
-                    None,  # batch
-                    structure_data['story_batch'].to(self.device),
-                    None   # structure_story_ptr
-                )  # [N, hidden_dim*2]
-
-                # Global feature: mean pooling
-                global_features = story_features.mean(dim=0, keepdim=True)  # [1, hidden_dim*2]
-
-                # Forward pass through policy and value networks (有梯度)
+                # Forward pass through policy and value networks
                 action_scores = self.policy_net(story_features)
                 masked_scores = action_scores.masked_fill(~valid_mask, -1e9)
                 probs = F.softmax(masked_scores, dim=0)
@@ -185,7 +269,8 @@ class PPOAgent(BasePGAgent):
                          entropy_coef * entropy_loss)
 
             # Optimization
-            self.optimizer.zero_grad()
+            self.state_gnn_optimizer.zero_grad()
+            self.policy_value_optimizer.zero_grad()
             total_loss.backward()
 
             # === DIAGNOSTIC: Check gradients ===
@@ -205,13 +290,26 @@ class PPOAgent(BasePGAgent):
                     self.logger.info(f"  [DIAGNOSTIC] Gradient norms - StateGNN: {grad_norms['state_gnn']:.6f}, "
                                    f"Policy: {grad_norms['policy_net']:.6f}, Value: {grad_norms['value_net']:.6f}")
 
+                    # 額外診斷：計算梯度提升倍數
+                    if grad_norms['state_gnn'] > 0:
+                        ratio_to_policy = grad_norms['state_gnn'] / (grad_norms['policy_net'] + 1e-8)
+                        self.logger.info(f"  [DIAGNOSTIC] StateGNN/Policy gradient ratio: {ratio_to_policy:.4f} "
+                                       f"(should be ~0.3-1.0 after batching)")
+
+            # Clip gradients separately for each optimizer
             nn.utils.clip_grad_norm_(
-                list(self.state_gnn.parameters()) +
+                self.state_gnn.parameters(),
+                self.max_grad_norm
+            )
+            nn.utils.clip_grad_norm_(
                 list(self.policy_net.parameters()) +
                 list(self.value_net.parameters()),
                 self.max_grad_norm
             )
-            self.optimizer.step()
+
+            # Step both optimizers
+            self.state_gnn_optimizer.step()
+            self.policy_value_optimizer.step()
 
             # Record
             policy_losses.append(policy_loss.item())
@@ -240,9 +338,15 @@ class PPOAgent(BasePGAgent):
                 f"  [DIAGNOSTIC] Parameter changes - StateGNN: {state_gnn_change:.6f}, "
                 f"Policy: {policy_change:.6f}, Value: {value_change:.6f}"
             )
-            # Check if StateGNN is now updating properly
+
+            # 更詳細的診斷
             if state_gnn_change > 0:
-                self.logger.info("  [DIAGNOSTIC] ✓ StateGNN is updating correctly!")
+                ratio = state_gnn_change / (policy_change + 1e-8)
+                self.logger.info(f"  [DIAGNOSTIC] ✓ StateGNN is updating! Change ratio (StateGNN/Policy): {ratio:.4f}")
+                if ratio > 0.1:
+                    self.logger.info("  [DIAGNOSTIC] ✓✓ Batch optimization working well!")
+                else:
+                    self.logger.warning("  [DIAGNOSTIC] ⚠ StateGNN update still weak, may need higher learning rate")
             else:
                 self.logger.warning("  [DIAGNOSTIC] ✗ WARNING: StateGNN still not updating!")
 
