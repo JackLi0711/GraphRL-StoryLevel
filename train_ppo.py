@@ -63,8 +63,8 @@ def parse_args() -> Namespace:
     parser.add_argument("--clip_epsilon", type=float, default=0.2)
     parser.add_argument("--value_loss_coef", type=float, default=0.001)
     parser.add_argument("--entropy_coef_initial", type=float, default=0.01)
-    parser.add_argument("--entropy_decay", type=float, default=0.99)
-    parser.add_argument("--max_grad_norm", type=float, default=0.5)
+    parser.add_argument("--entropy_decay", type=float, default=0.995)
+    parser.add_argument("--max_grad_norm", type=float, default=2.0)
     parser.add_argument("--ppo_epochs", type=int, default=4)
     parser.add_argument("--accumulate_episodes", type=int, default=5)
 
@@ -260,7 +260,7 @@ def main(args):
             # Output and plot
             rec.output(args.ckpt_dir)
             plot_training_testing_curves(rec, args.ckpt_dir, args.test_frequency)
-            plot.plot_test_behaviors(rec, env, args.ckpt_dir)
+            plot.plot_test_behaviors(rec, env, args.ckpt_dir, args.test_frequency)
 
             # Save model
             save_model(ppo_agent, args.ckpt_dir, episode)

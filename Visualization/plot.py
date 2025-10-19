@@ -116,18 +116,27 @@ def plot_fail_reasons(train_fail_reasons: List[str], test_fail_reasons: List[str
     plt.close()
 
 
-def plot_test_behaviors(rec: Record, env: Environment, checkpoint_dir: Path) -> None:
+def plot_test_behaviors(rec: Record, env: Environment, checkpoint_dir: Path, test_frequency: int = None) -> None:
     train_scores = rec.training_record["score"]
-    test_scores = rec.testing_record["score"]
-    test_actions, test_actions_SCWB = rec.testing_record["action"], rec.testing_record["action_SCWB"]
+    # Use score_mean instead of all test scores
+    test_scores = rec.testing_record.get("score_mean", [])
+    # Use best_designs instead of all test runs
+    best_designs = rec.testing_record.get("best_designs", [])
     test_options = rec.testing_record.get("option", None)  # Get option sequences (optional for hierarchical RL)
     test_option_instances = rec.testing_record.get("option_instances", None)  # Get option instance data
     story_num = env._testing_structure.story_num
-    
+
 
     # If there is no test data, skip plotting
-    if len(test_scores) == 0 or len(test_actions) == 0:
+    if len(test_scores) == 0 or len(best_designs) == 0:
         return
+
+    # Extract actions from best_designs (design_process format)
+    test_actions = []
+    for design_process in best_designs:
+        # design_process is a list of {'action': action, 'story_level_sections': sections}
+        actions = [step['action'] for step in design_process]
+        test_actions.append(actions)
 
     action_types = []
     for action in test_actions:
@@ -150,12 +159,19 @@ def plot_test_behaviors(rec: Record, env: Environment, checkpoint_dir: Path) -> 
             else: action_type = "in-col"
             types.append(action_type)
         action_types.append(types)
-        
-    # robust episode mapping
-    if len(train_scores) > 0:
+
+    # Calculate x-axis positions for test episodes
+    # If test_frequency is provided, use it to calculate exact episode numbers
+    # Otherwise, fall back to linear spacing
+    if test_frequency is not None:
+        # Test episodes occur at: test_frequency, 2*test_frequency, 3*test_frequency, ...
+        test_episodes = np.array([(i+1) * test_frequency for i in range(len(test_scores))])
+    elif len(train_scores) > 0:
+        # Fall back to linear spacing if test_frequency not provided
         test_episodes = np.linspace(1, len(train_scores), num=len(test_scores))
     else:
         test_episodes = np.arange(1, len(test_scores)+1, 1)
+
     color_mapping = {'xdir-beam': 'dodgerblue', 'zdir-beam': 'yellowgreen', 'out-col': 'orange', 'in-col': 'red'}
 
     fig, ax1 = plt.subplots(figsize=(10, 8))

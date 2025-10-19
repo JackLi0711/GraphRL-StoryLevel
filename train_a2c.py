@@ -67,9 +67,9 @@ def parse_args() -> Namespace:
     parser.add_argument("--accumulate_episodes", type=int, default=1)
 
     # training
-    parser.add_argument("--num_epoch", type=int, default=1000, help="epoch == episode")
-    parser.add_argument("--test_frequency", type=int, default=5)
-    parser.add_argument("--test_runs", type=int, default=10)
+    parser.add_argument("--num_epoch", type=int, default=10, help="epoch == episode")
+    parser.add_argument("--test_frequency", type=int, default=2)
+    parser.add_argument("--test_runs", type=int, default=1)
     parser.add_argument("--random_seed", type=int, default=731)
 
     args = parser.parse_args()
@@ -226,7 +226,7 @@ def main(args):
             # Output and plot
             rec.output(args.ckpt_dir)
             plot_training_testing_curves(rec, args.ckpt_dir, args.test_frequency)
-            plot.plot_test_behaviors(rec, env, args.ckpt_dir)
+            plot.plot_test_behaviors(rec, env, args.ckpt_dir, args.test_frequency)
 
             # Save model
             save_model(a2c_agent, args.ckpt_dir, episode)

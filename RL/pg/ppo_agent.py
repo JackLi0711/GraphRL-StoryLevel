@@ -56,10 +56,10 @@ class PPOAgent(BasePGAgent):
         self.ppo_epochs = ppo_epochs
 
         # Separate optimizers with different learning rates
-        # StateGNN gets 10x higher LR to compensate for smaller gradients
+        # StateGNN gets 100x higher LR to compensate for smaller gradients
         self.state_gnn_optimizer = optim.Adam(
             self.state_gnn.parameters(),
-            lr=lr * 10
+            lr=lr * 100
         )
         self.policy_value_optimizer = optim.Adam(
             list(self.policy_net.parameters()) +
@@ -68,7 +68,7 @@ class PPOAgent(BasePGAgent):
         )
 
         if self.logger:
-            self.logger.info(f"[OPTIMIZER] StateGNN LR: {lr * 10:.6f}, Policy/Value LR: {lr:.6f}")
+            self.logger.info(f"[OPTIMIZER] StateGNN LR: {lr * 100:.6f}, Policy/Value LR: {lr:.6f}")
 
     def _batch_all_graphs(self, all_graphs, all_structures):
         """

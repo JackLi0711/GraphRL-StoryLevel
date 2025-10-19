@@ -149,14 +149,14 @@ class BasePGAgent:
 
     def compute_returns(self, rewards, gamma):
         """
-        計算 Monte Carlo returns
+        計算 Monte Carlo returns (with normalization)
 
         輸入:
             - rewards: List[float], length T
             - gamma: discount factor
 
         輸出:
-            - returns: Tensor [T]
+            - returns: Tensor [T], normalized
         """
         T = len(rewards)
         returns = torch.zeros(T, device=self.device)
@@ -166,6 +166,10 @@ class BasePGAgent:
         for t in reversed(range(T)):
             R = rewards[t] + gamma * R
             returns[t] = R
+
+        # Normalize returns to stabilize value learning
+        if len(returns) > 1:
+            returns = (returns - returns.mean()) / (returns.std() + 1e-8)
 
         return returns
 
