@@ -135,7 +135,8 @@ def main(args):
 
     # A2C Agent
     node_feature_dim = 8 if args.add_structure_geometry else 5
-    edge_feature_dim = 13 if args.add_response_features else 11
+    # A2C uses extended edge features with member type and floor information
+    edge_feature_dim = 18 if args.add_response_features else 16
 
     a2c_agent = A2CAgent(
         node_feature_dim=node_feature_dim,

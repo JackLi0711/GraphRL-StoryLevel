@@ -2,7 +2,8 @@
   "permissions": {
     "allow": [
       "Bash(conda info:*)",
-      "Bash(find:*)"
+      "Bash(find:*)",
+      "Bash(python test_new_features.py)"
     ],
     "deny": [],
     "ask": []

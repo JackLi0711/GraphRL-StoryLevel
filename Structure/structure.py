@@ -717,6 +717,68 @@ class Structure:
         return beta_x, beta_z
 
 
+    def _get_member_type_for_member(self, member_index: int) -> str:
+        """
+        獲取構件類型: 'xdir_beam', 'zdir_beam', 'outer_column', 'inner_column'
+
+        Args:
+            member_index: 構件索引 (0-based)
+
+        Returns:
+            str: 構件類型
+        """
+        # 檢查是否為 X 方向樑
+        for story_members in self.story_xdir_beam_member:
+            if member_index in story_members:
+                return 'xdir_beam'
+
+        # 檢查是否為 Z 方向樑
+        for story_members in self.story_zdir_beam_member:
+            if member_index in story_members:
+                return 'zdir_beam'
+
+        # 檢查是否為外柱
+        for story_members in self.story_outer_column_member:
+            if member_index in story_members:
+                return 'outer_column'
+
+        # 檢查是否為內柱
+        for story_members in self.story_inner_column_member:
+            if member_index in story_members:
+                return 'inner_column'
+
+        # 不應該到達這裡
+        raise ValueError(f"Member {member_index} not found in any story member lists")
+
+
+    def _get_story_index_for_member(self, member_index: int) -> int:
+        """
+        獲取構件所在樓層 (1-based)
+
+        Args:
+            member_index: 構件索引 (0-based)
+
+        Returns:
+            int: 樓層號 (1 到 story_num)
+        """
+        member_name = f"E{member_index+1}"
+
+        # 從 member_to_nodeIndex_dict 獲取構件連接的節點
+        node1_index, node2_index = self.member_to_nodeIndex_dict[member_name][:2]
+        node1_name = f"N{node1_index+1}"
+        node2_name = f"N{node2_index+1}"
+
+        # 從 node_grid_coord_dict 獲取節點的網格坐標 (x_index, story, z_index)
+        _, story1, _ = self.node_grid_coord_dict[node1_name]
+        _, story2, _ = self.node_grid_coord_dict[node2_name]
+
+        # 對於樑: 兩個節點在同一樓層
+        # 對於柱: 兩個節點在相鄰樓層,取較高的樓層
+        story = max(story1, story2)
+
+        return story
+
+
     def init_graph_GraphRL(self, static_response_features: dict[str, torch.Tensor]=None, dynamic_response_features: dict[str, torch.Tensor]=None) -> None:
         # new node feature: if fix, if top, if side, beta_x, beta_z
         node_feature_num = 8 if self.add_structure_geometry else 5
@@ -753,10 +815,11 @@ class Structure:
 
                     node_index += 1
 
-                            
+
         # edge feature:     is_col, is_beam, L, (A, Iz, Iy, Zz), (A', Iz', Iy', Zz')
         # new edge feature: is_col, is_beam, L, (A, Iz, Iy, Zz), (A', Iz', Iy', Zz'), tanh(stress_ratio), tanh(drift_ratio)
-        edge_feature_num = 13 if self.add_response_features else 11
+        # PPO/A2C extension: + is_xdir_beam, is_zdir_beam, is_outer_column, is_inner_column, normalized_floor
+        edge_feature_num = 18 if self.add_response_features else 16
         edge_feature = torch.zeros(self.member_number * 2, edge_feature_num)
 
         for original_member_index in range(self.member_number):
@@ -791,6 +854,28 @@ class Structure:
             if self.add_response_features:
                 edge_feature[member_index, 11] = torch.tanh(static_response_features["max_stress_ratio"][original_member_index])
                 edge_feature[member_index, 12] = torch.tanh(static_response_features["max_drift_ratio"][original_member_index])
+
+            # === PPO/A2C Extension: Add member type and floor information ===
+            # Get member type (xdir_beam/zdir_beam/outer_column/inner_column)
+            member_type = self._get_member_type_for_member(original_member_index)
+
+            # Get floor number (1-based)
+            story_index = self._get_story_index_for_member(original_member_index)
+            normalized_floor = story_index / self.story_num
+
+            # One-hot encoding for member type
+            base_idx = 11 if not self.add_response_features else 13
+            if member_type == 'xdir_beam':
+                edge_feature[member_index, base_idx] = 1
+            elif member_type == 'zdir_beam':
+                edge_feature[member_index, base_idx + 1] = 1
+            elif member_type == 'outer_column':
+                edge_feature[member_index, base_idx + 2] = 1
+            elif member_type == 'inner_column':
+                edge_feature[member_index, base_idx + 3] = 1
+
+            # Normalized floor number
+            edge_feature[member_index, base_idx + 4] = normalized_floor
 
             # add another direction of edge feature back
             edge_feature[member_index+1, :] = edge_feature[member_index, :]
@@ -1144,10 +1229,10 @@ class Structure:
     def update_graph_GraphRL(self, static_response_features: dict[str, torch.Tensor]=None, dynamic_response_features: dict[str, torch.Tensor]=None) -> None:
         t_start = time.time()
         # update node features
-        if self.add_response_features: 
+        if self.add_response_features:
             beta_x = torch.tanh(1.0 / static_response_features["min_SCWB_ratio_x"])
             beta_z = torch.tanh(1.0 / static_response_features["min_SCWB_ratio_z"])
-        else: 
+        else:
             beta_x, beta_z = self._strongColumn_weakBeam_beta()
         self.graph.x[:, 3] = beta_x
         self.graph.x[:, 4] = beta_z
@@ -1170,6 +1255,9 @@ class Structure:
             if self.add_response_features:
                 self.graph.edge_attr[member_index*2, 11] = torch.tanh(static_response_features["max_stress_ratio"][member_index])
                 self.graph.edge_attr[member_index*2, 12] = torch.tanh(static_response_features["max_drift_ratio"][member_index])
+
+            # === PPO/A2C Extension: Member type and floor are static, no need to update ===
+            # They remain the same throughout the optimization process
 
             self.graph.edge_attr[member_index*2+1, :] = self.graph.edge_attr[member_index*2, :]
         t_end = time.time()

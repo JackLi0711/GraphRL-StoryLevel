@@ -69,9 +69,9 @@ def parse_args() -> Namespace:
     parser.add_argument("--accumulate_episodes", type=int, default=5)
 
     # training
-    parser.add_argument("--num_epoch", type=int, default=1000, help="epoch == episode")
-    parser.add_argument("--test_frequency", type=int, default=5)
-    parser.add_argument("--test_runs", type=int, default=10)
+    parser.add_argument("--num_epoch", type=int, default=10, help="epoch == episode")
+    parser.add_argument("--test_frequency", type=int, default=2)
+    parser.add_argument("--test_runs", type=int, default=1)
     parser.add_argument("--random_seed", type=int, default=731)
 
     args = parser.parse_args()
@@ -137,7 +137,8 @@ def main(args):
 
     # PPO Agent
     node_feature_dim = 8 if args.add_structure_geometry else 5
-    edge_feature_dim = 13 if args.add_response_features else 11
+    # PPO uses extended edge features with member type and floor information
+    edge_feature_dim = 18 if args.add_response_features else 16
 
     ppo_agent = PPOAgent(
         node_feature_dim=node_feature_dim,
