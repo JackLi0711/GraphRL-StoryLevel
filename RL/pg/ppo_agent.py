@@ -41,6 +41,7 @@ class PPOAgent(BasePGAgent):
                  max_grad_norm: float = 0.5,
                  ppo_epochs: int = 4,
                  accumulate_episodes: int = 5,
+                 state_gnn_lr_multiplier: float = 100.0,
                  device: str = "cuda",
                  logger = None):
 
@@ -56,10 +57,10 @@ class PPOAgent(BasePGAgent):
         self.ppo_epochs = ppo_epochs
 
         # Separate optimizers with different learning rates
-        # StateGNN gets 100x higher LR to compensate for smaller gradients
+        # StateGNN gets higher LR to compensate for smaller gradients
         self.state_gnn_optimizer = optim.Adam(
             self.state_gnn.parameters(),
-            lr=lr * 100
+            lr=lr * state_gnn_lr_multiplier
         )
         self.policy_value_optimizer = optim.Adam(
             list(self.policy_net.parameters()) +
@@ -68,7 +69,7 @@ class PPOAgent(BasePGAgent):
         )
 
         if self.logger:
-            self.logger.info(f"[OPTIMIZER] StateGNN LR: {lr * 100:.6f}, Policy/Value LR: {lr:.6f}")
+            self.logger.info(f"[OPTIMIZER] StateGNN LR: {lr * state_gnn_lr_multiplier:.6f}, Policy/Value LR: {lr:.6f}")
 
     def _batch_all_graphs(self, all_graphs, all_structures):
         """

@@ -168,6 +168,7 @@ class BasePGAgent:
             returns[t] = R
 
         # Normalize returns to stabilize value learning
+        # This is IMPORTANT: helps value network learn by keeping targets in reasonable range
         if len(returns) > 1:
             returns = (returns - returns.mean()) / (returns.std() + 1e-8)
 

@@ -65,6 +65,7 @@ def parse_args() -> Namespace:
     parser.add_argument("--entropy_decay", type=float, default=0.99)
     parser.add_argument("--max_grad_norm", type=float, default=0.5)
     parser.add_argument("--accumulate_episodes", type=int, default=1)
+    parser.add_argument("--state_gnn_lr_multiplier", type=float, default=100.0, help="StateGNN learning rate multiplier")
 
     # training
     parser.add_argument("--num_epoch", type=int, default=10, help="epoch == episode")
@@ -150,6 +151,7 @@ def main(args):
         entropy_decay=args.entropy_decay,
         max_grad_norm=args.max_grad_norm,
         accumulate_episodes=args.accumulate_episodes,
+        state_gnn_lr_multiplier=args.state_gnn_lr_multiplier,
         device=device,
         logger=logger
     )

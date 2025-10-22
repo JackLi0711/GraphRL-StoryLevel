@@ -35,6 +35,7 @@ class A2CAgent(BasePGAgent):
                  entropy_decay: float = 0.99,
                  max_grad_norm: float = 0.5,
                  accumulate_episodes: int = 1,
+                 state_gnn_lr_multiplier: float = 100.0,
                  device: str = "cuda",
                  logger = None):
 
@@ -47,13 +48,20 @@ class A2CAgent(BasePGAgent):
         self.value_loss_coef = value_loss_coef
         self.max_grad_norm = max_grad_norm
 
-        # Single optimizer for all networks (一起訓練)
-        self.optimizer = optim.Adam(
-            list(self.state_gnn.parameters()) +
+        # Separate optimizers with different learning rates
+        # StateGNN gets higher LR to compensate for smaller gradients
+        self.state_gnn_optimizer = optim.Adam(
+            self.state_gnn.parameters(),
+            lr=lr * state_gnn_lr_multiplier
+        )
+        self.policy_value_optimizer = optim.Adam(
             list(self.policy_net.parameters()) +
             list(self.value_net.parameters()),
             lr=lr
         )
+
+        if self.logger:
+            self.logger.info(f"[OPTIMIZER] StateGNN LR: {lr * state_gnn_lr_multiplier:.6f}, Policy/Value LR: {lr:.6f}")
 
     def update(self):
         """
@@ -111,15 +119,24 @@ class A2CAgent(BasePGAgent):
                      entropy_coef * entropy_loss)
 
         # Optimization step
-        self.optimizer.zero_grad()
+        self.state_gnn_optimizer.zero_grad()
+        self.policy_value_optimizer.zero_grad()
         total_loss.backward()
+
+        # Clip gradients separately for each optimizer
         nn.utils.clip_grad_norm_(
-            list(self.state_gnn.parameters()) +
+            self.state_gnn.parameters(),
+            self.max_grad_norm
+        )
+        nn.utils.clip_grad_norm_(
             list(self.policy_net.parameters()) +
             list(self.value_net.parameters()),
             self.max_grad_norm
         )
-        self.optimizer.step()
+
+        # Step both optimizers
+        self.state_gnn_optimizer.step()
+        self.policy_value_optimizer.step()
 
         # Log
         if self.logger:
