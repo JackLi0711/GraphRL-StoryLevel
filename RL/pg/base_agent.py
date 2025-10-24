@@ -149,14 +149,18 @@ class BasePGAgent:
 
     def compute_returns(self, rewards, gamma):
         """
-        計算 Monte Carlo returns (with normalization)
+        計算 Monte Carlo returns (without normalization)
 
         輸入:
             - rewards: List[float], length T
             - gamma: discount factor
 
         輸出:
-            - returns: Tensor [T], normalized
+            - returns: Tensor [T], unnormalized (preserves absolute value scale)
+
+        Note: Returns are NOT normalized to preserve the true value scale.
+              This allows the value network to learn the actual state values,
+              which is especially important for varying structure sizes.
         """
         T = len(rewards)
         returns = torch.zeros(T, device=self.device)
@@ -167,11 +171,7 @@ class BasePGAgent:
             R = rewards[t] + gamma * R
             returns[t] = R
 
-        # Normalize returns to stabilize value learning
-        # This is IMPORTANT: helps value network learn by keeping targets in reasonable range
-        if len(returns) > 1:
-            returns = (returns - returns.mean()) / (returns.std() + 1e-8)
-
+        # Returns are kept unnormalized for proper value learning
         return returns
 
     def compute_advantages(self, returns, values):
