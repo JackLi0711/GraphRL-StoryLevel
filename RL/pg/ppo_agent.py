@@ -175,6 +175,9 @@ class PPOAgent(BasePGAgent):
         policy_losses = []
         value_losses = []
         entropies_list = []
+        state_gnn_grads = []
+        policy_grads = []
+        value_grads = []
 
         for epoch in range(self.ppo_epochs):
             # === BATCH OPTIMIZATION: 一次forward所有graphs ===
@@ -297,6 +300,26 @@ class PPOAgent(BasePGAgent):
                         self.logger.info(f"  [DIAGNOSTIC] StateGNN/Policy gradient ratio: {ratio_to_policy:.4f} "
                                        f"(should be ~0.3-1.0 after batching)")
 
+            # Record gradient norms BEFORE clipping
+            state_gnn_grad_norm = 0.0
+            policy_grad_norm = 0.0
+            value_grad_norm = 0.0
+
+            for p in self.state_gnn.parameters():
+                if p.grad is not None:
+                    state_gnn_grad_norm += p.grad.norm().item() ** 2
+            state_gnn_grad_norm = state_gnn_grad_norm ** 0.5
+
+            for p in self.policy_net.parameters():
+                if p.grad is not None:
+                    policy_grad_norm += p.grad.norm().item() ** 2
+            policy_grad_norm = policy_grad_norm ** 0.5
+
+            for p in self.value_net.parameters():
+                if p.grad is not None:
+                    value_grad_norm += p.grad.norm().item() ** 2
+            value_grad_norm = value_grad_norm ** 0.5
+
             # Clip gradients separately for each optimizer
             nn.utils.clip_grad_norm_(
                 self.state_gnn.parameters(),
@@ -316,6 +339,9 @@ class PPOAgent(BasePGAgent):
             policy_losses.append(policy_loss.item())
             value_losses.append(value_loss.item())
             entropies_list.append(-entropy_loss.item())
+            state_gnn_grads.append(state_gnn_grad_norm)
+            policy_grads.append(policy_grad_norm)
+            value_grads.append(value_grad_norm)
 
         # === DIAGNOSTIC: Check parameter changes ===
         state_gnn_params_after = [p.clone().detach() for p in self.state_gnn.parameters()]
@@ -362,5 +388,8 @@ class PPOAgent(BasePGAgent):
             'total_loss': np.mean(policy_losses) + np.mean(value_losses),
             'state_gnn_param_change': state_gnn_change,
             'policy_param_change': policy_change,
-            'value_param_change': value_change
+            'value_param_change': value_change,
+            'state_gnn_grad_norm': np.mean(state_gnn_grads),
+            'policy_grad_norm': np.mean(policy_grads),
+            'value_grad_norm': np.mean(value_grads)
         }

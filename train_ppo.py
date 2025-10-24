@@ -23,7 +23,7 @@ sys.path.append("Visualization")
 sys.path.append("NonlinearDynamicAnalysisSimulator/")
 
 from RL.pg import PPOAgent
-from RL.pg.train_utils import train_episode, test_episode, plot_training_testing_curves, save_model
+from RL.pg.train_utils import train_episode, test_episode, plot_training_testing_curves, save_model, plot_loss_curves, plot_gradient_norms
 from RL import environment, record
 from Visualization import plot, visualize
 from NonlinearDynamicAnalysisSimulator import load_simulator
@@ -205,6 +205,22 @@ def main(args):
         rec.training_record["score"].append(score)
         if loss_dict:
             rec.learn_losses.append(loss_dict.get('total_loss', 0))
+
+            # Record loss and gradient for plotting
+            rec.loss_record['episodes'].append(episode + 1)
+            rec.loss_record['policy_loss'].append(loss_dict.get('policy_loss', 0))
+            rec.loss_record['value_loss'].append(loss_dict.get('value_loss', 0))
+            rec.loss_record['entropy_loss'].append(loss_dict.get('entropy', 0))
+            rec.loss_record['total_loss'].append(loss_dict.get('total_loss', 0))
+
+            rec.gradient_record['episodes'].append(episode + 1)
+            rec.gradient_record['state_gnn_grad'].append(loss_dict.get('state_gnn_grad_norm', 0))
+            rec.gradient_record['policy_grad'].append(loss_dict.get('policy_grad_norm', 0))
+            rec.gradient_record['value_grad'].append(loss_dict.get('value_grad_norm', 0))
+
+            # Plot loss and gradient curves (overwrite each time)
+            plot_loss_curves(rec, args.ckpt_dir)
+            plot_gradient_norms(rec, args.ckpt_dir)
 
         logger.info(f"Episode {episode+1}/{args.num_epoch}, Score: {score:.4f}, "
                    f"Entropy Coef: {ppo_agent.get_entropy_coef():.6f}")

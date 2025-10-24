@@ -48,6 +48,23 @@ class Record:
         self.learn_losses = [[]]
         self.Q_values = [[], []]  # Q_values[0] for training, Q_values[1] for testing
 
+        # Loss tracking for PPO/A2C
+        self.loss_record = {
+            'episodes': [],
+            'policy_loss': [],
+            'value_loss': [],
+            'entropy_loss': [],
+            'total_loss': []
+        }
+
+        # Gradient tracking
+        self.gradient_record = {
+            'episodes': [],
+            'state_gnn_grad': [],
+            'policy_grad': [],
+            'value_grad': []
+        }
+
 
     def record_in_beginning(self, structure: Structure, testing: bool=False):
         """
@@ -90,5 +107,7 @@ class Record:
         with open(ckpt_dir / "testing_record.txt", "w") as f: json.dump(self.testing_record, f)
         with open(ckpt_dir / "learn_losses.txt", "w") as f: json.dump(self.learn_losses, f)
         with open(ckpt_dir / "Q_values.txt", "w") as f: json.dump(self.Q_values, f)
+        with open(ckpt_dir / "loss_record.txt", "w") as f: json.dump(self.loss_record, f)
+        with open(ckpt_dir / "gradient_record.txt", "w") as f: json.dump(self.gradient_record, f)
 
 

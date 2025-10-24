@@ -247,3 +247,78 @@ def save_model(agent, ckpt_dir, episode):
 
     if agent.logger:
         agent.logger.info(f"Model saved to {save_path}")
+
+
+def plot_loss_curves(rec, ckpt_dir):
+    """
+    繪製所有loss在同一張圖上
+
+    Args:
+        rec: Record object with loss_record
+        ckpt_dir: Directory to save the plot
+    """
+    import matplotlib.pyplot as plt
+
+    if len(rec.loss_record['episodes']) == 0:
+        return
+
+    fig, ax = plt.subplots(figsize=(12, 6))
+
+    episodes = rec.loss_record['episodes']
+
+    # Plot different losses
+    ax.plot(episodes, rec.loss_record['policy_loss'],
+            label='Policy Loss', linewidth=2, marker='o', markersize=4)
+    ax.plot(episodes, rec.loss_record['value_loss'],
+            label='Value Loss', linewidth=2, marker='s', markersize=4)
+    ax.plot(episodes, rec.loss_record['entropy_loss'],
+            label='Entropy Loss', linewidth=2, marker='^', markersize=4)
+    ax.plot(episodes, rec.loss_record['total_loss'],
+            label='Total Loss', linewidth=2, marker='d', markersize=4, linestyle='--')
+
+    ax.set_xlabel('Episode', fontsize=12)
+    ax.set_ylabel('Loss', fontsize=12)
+    ax.set_title('Training Loss Curves', fontsize=14, fontweight='bold')
+    ax.legend(fontsize=10, loc='best')
+    ax.grid(True, alpha=0.3, linestyle='--')
+
+    plt.tight_layout()
+    plt.savefig(ckpt_dir / 'loss_curves.png', dpi=150, bbox_inches='tight')
+    plt.close()
+
+
+def plot_gradient_norms(rec, ckpt_dir):
+    """
+    繪製所有gradient norms在同一張圖上 (使用log scale)
+
+    Args:
+        rec: Record object with gradient_record
+        ckpt_dir: Directory to save the plot
+    """
+    import matplotlib.pyplot as plt
+
+    if len(rec.gradient_record['episodes']) == 0:
+        return
+
+    fig, ax = plt.subplots(figsize=(12, 6))
+
+    episodes = rec.gradient_record['episodes']
+
+    # Plot gradient norms
+    ax.plot(episodes, rec.gradient_record['state_gnn_grad'],
+            label='StateGNN Gradient', linewidth=2, marker='o', markersize=4)
+    ax.plot(episodes, rec.gradient_record['policy_grad'],
+            label='Policy Network Gradient', linewidth=2, marker='s', markersize=4)
+    ax.plot(episodes, rec.gradient_record['value_grad'],
+            label='Value Network Gradient', linewidth=2, marker='^', markersize=4)
+
+    ax.set_xlabel('Episode', fontsize=12)
+    ax.set_ylabel('Gradient Norm (log scale)', fontsize=12)
+    ax.set_title('Gradient Norms During Training', fontsize=14, fontweight='bold')
+    ax.set_yscale('log')  # Use log scale for better visualization
+    ax.legend(fontsize=10, loc='best')
+    ax.grid(True, alpha=0.3, linestyle='--', which='both')
+
+    plt.tight_layout()
+    plt.savefig(ckpt_dir / 'gradient_norms.png', dpi=150, bbox_inches='tight')
+    plt.close()
