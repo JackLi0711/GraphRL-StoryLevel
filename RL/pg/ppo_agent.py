@@ -147,17 +147,33 @@ class PPOAgent(BasePGAgent):
         all_graphs = []           # Store graphs for recomputing features
         all_structures = []       # Store structures for recomputing features
 
-        for episode in episodes:
-            # Compute returns and advantages
-            returns = self.compute_returns(episode['rewards'], self.gamma)
-            advantages = self.compute_advantages(returns, episode['values'])
+        for idx, episode in enumerate(episodes):
+            # Step 1: Compute unnormalized returns
+            returns_unnormalized = self.compute_returns(episode['rewards'], self.gamma)
 
-            # Store
+            # Step 2: Per-episode normalization of returns
+            returns_mean = returns_unnormalized.mean()
+            returns_std = returns_unnormalized.std() + 1e-8
+            returns_normalized = (returns_unnormalized - returns_mean) / returns_std
+
+            # Step 3: Compute advantages using normalized returns
+            # (compute_advantages will do a second normalization internally, which is correct)
+            advantages = self.compute_advantages(returns_normalized, episode['values'])
+
+            # Diagnostic logging (first episode only)
+            if self.logger and idx == 0:
+                self.logger.info(f"  [NORMALIZATION] Episode returns before norm: "
+                               f"mean={returns_mean:.2f}, std={returns_std:.2f}, "
+                               f"range=[{returns_unnormalized.min():.2f}, {returns_unnormalized.max():.2f}]")
+                self.logger.info(f"  [NORMALIZATION] Episode returns after norm: "
+                               f"mean={returns_normalized.mean():.4f}, std={returns_normalized.std():.4f}")
+
+            # Store normalized returns and advantages
             all_states.extend(episode['states'])
             all_global_states.extend(episode['global_states'])
             all_actions.extend(episode['actions'])
             all_old_log_probs.extend(episode['log_probs'])
-            all_returns.append(returns)
+            all_returns.append(returns_normalized)
             all_advantages.append(advantages)
             all_valid_masks.extend(episode['valid_masks'])
             all_graphs.extend(episode['graphs'])
@@ -167,6 +183,14 @@ class PPOAgent(BasePGAgent):
         old_log_probs = torch.stack(all_old_log_probs).detach()
         returns = torch.cat(all_returns)
         advantages = torch.cat(all_advantages)
+
+        # Diagnostic: Check distribution of mixed returns
+        if self.logger:
+            self.logger.info(f"  [NORMALIZATION] Mixed returns distribution: "
+                           f"mean={returns.mean():.4f}, std={returns.std():.4f}, "
+                           f"range=[{returns.min():.4f}, {returns.max():.4f}]")
+            self.logger.info(f"  [NORMALIZATION] Mixed advantages distribution: "
+                           f"mean={advantages.mean():.4f}, std={advantages.std():.4f}")
 
         # Get current entropy coefficient
         entropy_coef = self.get_entropy_coef()

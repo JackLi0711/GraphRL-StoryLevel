@@ -1,10 +1,3 @@
-"""
-Training script for PPO (Proximal Policy Optimization)
-
-Author: Claude Code
-Date: 2025-10-14
-"""
-
 import json
 import torch
 import random
@@ -60,18 +53,18 @@ def parse_args() -> Namespace:
     # PPO hyperparameters
     parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--gamma", type=float, default=0.99)
-    parser.add_argument("--clip_epsilon", type=float, default=0.2)
-    parser.add_argument("--value_loss_coef", type=float, default=0.001)
-    parser.add_argument("--entropy_coef_initial", type=float, default=0.01)
-    parser.add_argument("--entropy_decay", type=float, default=0.995)
+    parser.add_argument("--clip_epsilon", type=float, default=0.3)
+    parser.add_argument("--value_loss_coef", type=float, default=0.5)
+    parser.add_argument("--entropy_coef_initial", type=float, default=0.02)
+    parser.add_argument("--entropy_decay", type=float, default=0.9995)
     parser.add_argument("--max_grad_norm", type=float, default=2.0)
     parser.add_argument("--ppo_epochs", type=int, default=4)
     parser.add_argument("--accumulate_episodes", type=int, default=5)
     parser.add_argument("--state_gnn_lr_multiplier", type=float, default=100.0, help="StateGNN learning rate multiplier")
 
     # training
-    parser.add_argument("--num_epoch", type=int, default=10, help="epoch == episode")
-    parser.add_argument("--test_frequency", type=int, default=2)
+    parser.add_argument("--num_epoch", type=int, default=2000, help="epoch == episode")
+    parser.add_argument("--test_frequency", type=int, default=10)
     parser.add_argument("--test_runs", type=int, default=1)
     parser.add_argument("--random_seed", type=int, default=731)
 
