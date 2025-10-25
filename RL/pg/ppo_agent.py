@@ -151,22 +151,23 @@ class PPOAgent(BasePGAgent):
             # Step 1: Compute unnormalized returns
             returns_unnormalized = self.compute_returns(episode['rewards'], self.gamma)
 
-            # Step 2: Per-episode normalization of returns
-            returns_mean = returns_unnormalized.mean()
-            returns_std = returns_unnormalized.std() + 1e-8
-            returns_normalized = (returns_unnormalized - returns_mean) / returns_std
+            # Step 2: Normalize returns by initial material usage
+            initial_material = episode['initial_material_usage']
+            returns_normalized = returns_unnormalized / (initial_material + 1e-8)
 
             # Step 3: Compute advantages using normalized returns
-            # (compute_advantages will do a second normalization internally, which is correct)
+            # (compute_advantages will do Z-score normalization internally)
             advantages = self.compute_advantages(returns_normalized, episode['values'])
 
             # Diagnostic logging (first episode only)
             if self.logger and idx == 0:
+                self.logger.info(f"  [NORMALIZATION] Episode initial_material_usage: {initial_material:.2f}")
                 self.logger.info(f"  [NORMALIZATION] Episode returns before norm: "
-                               f"mean={returns_mean:.2f}, std={returns_std:.2f}, "
+                               f"mean={returns_unnormalized.mean():.2f}, std={returns_unnormalized.std():.2f}, "
                                f"range=[{returns_unnormalized.min():.2f}, {returns_unnormalized.max():.2f}]")
-                self.logger.info(f"  [NORMALIZATION] Episode returns after norm: "
-                               f"mean={returns_normalized.mean():.4f}, std={returns_normalized.std():.4f}")
+                self.logger.info(f"  [NORMALIZATION] Episode returns after norm (÷ initial_material): "
+                               f"mean={returns_normalized.mean():.4f}, std={returns_normalized.std():.4f}, "
+                               f"range=[{returns_normalized.min():.4f}, {returns_normalized.max():.4f}]")
 
             # Store normalized returns and advantages
             all_states.extend(episode['states'])

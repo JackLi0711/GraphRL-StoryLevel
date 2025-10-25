@@ -149,7 +149,7 @@ class BasePGAgent:
 
     def compute_returns(self, rewards, gamma):
         """
-        計算 Monte Carlo returns (to be normalized per-episode in PPO)
+        計算 Monte Carlo returns (to be normalized by initial_material_usage in PPO)
 
         輸入:
             - rewards: List[float], length T
@@ -159,11 +159,11 @@ class BasePGAgent:
             - returns: Tensor [T], unnormalized
 
         Note: Returns are computed without normalization here.
-              PPO will apply per-episode normalization before using them
-              for value loss and advantage computation. This approach:
-              - Makes value network learn relative values within each episode
-              - Stabilizes training across varying structure sizes
-              - Ensures small and large structures are treated equally
+              PPO will normalize returns by dividing by initial_material_usage
+              before using them for value loss and advantage computation. This approach:
+              - Makes returns comparable across different structure sizes
+              - Value network learns relative values scaled by initial material usage
+              - Larger structures naturally have larger absolute returns, this normalization accounts for that
         """
         T = len(rewards)
         returns = torch.zeros(T, device=self.device)

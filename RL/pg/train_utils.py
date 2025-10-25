@@ -28,6 +28,10 @@ def train_episode(agent, env, rec, logger):
     structure = env.reset()
     rec.record_in_beginning(structure, testing=False)
 
+    # Get initial material usage for returns normalization
+    initial_material_usage = env.material_usage_record[0]
+    agent.buffer.initial_material_usage = initial_material_usage
+
     graph = structure.graph.clone()
     score = 0
     done = False

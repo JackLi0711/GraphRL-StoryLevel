@@ -29,6 +29,9 @@ class ExperienceBuffer:
         self.entropies = []        # List of tensors
         self.valid_masks = []      # List of [N_i] bool tensors
 
+        # Episode metadata for normalization
+        self.initial_material_usage = None  # Initial material usage for returns normalization
+
         # Raw inputs for recomputing features (for StateGNN training)
         self.graphs = []           # List of graph objects
         self.structures = []       # List of structure objects (store needed attributes)
@@ -82,7 +85,8 @@ class ExperienceBuffer:
             'entropies': self.entropies,
             'valid_masks': self.valid_masks,
             'graphs': self.graphs,
-            'structures': self.structures
+            'structures': self.structures,
+            'initial_material_usage': self.initial_material_usage  # Save for returns normalization
         }
         self.episodes.append(episode_data)
 
@@ -97,6 +101,7 @@ class ExperienceBuffer:
         self.valid_masks = []
         self.graphs = []
         self.structures = []
+        self.initial_material_usage = None
 
     def get_all_episodes(self):
         """獲取所有收集的 episodes"""
@@ -115,6 +120,7 @@ class ExperienceBuffer:
         self.valid_masks = []
         self.graphs = []
         self.structures = []
+        self.initial_material_usage = None
 
     def __len__(self):
         """返回收集的 episodes 數量"""
