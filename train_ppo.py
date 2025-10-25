@@ -61,6 +61,10 @@ def parse_args() -> Namespace:
     parser.add_argument("--ppo_epochs", type=int, default=4)
     parser.add_argument("--accumulate_episodes", type=int, default=5)
     parser.add_argument("--state_gnn_lr_multiplier", type=float, default=100.0, help="StateGNN learning rate multiplier")
+    # PPO enhancements
+    parser.add_argument("--gae_lambda", type=float, default=0.95)
+    parser.add_argument("--value_clip_epsilon", type=float, default=0.2)
+    parser.add_argument("--minibatch_size", type=int, default=64)
 
     # training
     parser.add_argument("--num_epoch", type=int, default=2000, help="epoch == episode")
@@ -149,6 +153,9 @@ def main(args):
         ppo_epochs=args.ppo_epochs,
         accumulate_episodes=args.accumulate_episodes,
         state_gnn_lr_multiplier=args.state_gnn_lr_multiplier,
+            gae_lambda=args.gae_lambda,
+            value_clip_epsilon=args.value_clip_epsilon,
+            minibatch_size=args.minibatch_size,
         device=device,
         logger=logger
     )

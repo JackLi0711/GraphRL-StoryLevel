@@ -42,6 +42,9 @@ class PPOAgent(BasePGAgent):
                  ppo_epochs: int = 4,
                  accumulate_episodes: int = 5,
                  state_gnn_lr_multiplier: float = 100.0,
+                 gae_lambda: float = 0.95,
+                 value_clip_epsilon: float = 0.2,
+                 minibatch_size: int = 64,
                  device: str = "cuda",
                  logger = None):
 
@@ -55,6 +58,9 @@ class PPOAgent(BasePGAgent):
         self.value_loss_coef = value_loss_coef
         self.max_grad_norm = max_grad_norm
         self.ppo_epochs = ppo_epochs
+        self.gae_lambda = gae_lambda
+        self.value_clip_epsilon = value_clip_epsilon
+        self.minibatch_size = minibatch_size
 
         # Separate optimizers with different learning rates
         # StateGNN gets higher LR to compensate for smaller gradients
@@ -136,62 +142,61 @@ class PPOAgent(BasePGAgent):
 
         episodes = self.buffer.get_all_episodes()
 
-        # Flatten all episodes
+        # Flatten all episodes with GAE(λ) and normalized rewards
         all_states = []
         all_global_states = []
         all_actions = []
         all_old_log_probs = []
-        all_returns = []
-        all_advantages = []
         all_valid_masks = []
         all_graphs = []           # Store graphs for recomputing features
         all_structures = []       # Store structures for recomputing features
+        all_old_values = []       # For value clipping
+        all_advantages = []
+        all_returns = []
 
         for idx, episode in enumerate(episodes):
-            # Step 1: Compute unnormalized returns
-            returns_unnormalized = self.compute_returns(episode['rewards'], self.gamma)
-
-            # Step 2: Normalize returns by initial material usage
+            rewards = torch.tensor(episode['rewards'], dtype=torch.float32, device=self.device)
+            old_values = torch.cat(episode['values']).squeeze().detach()  # [T]
             initial_material = episode['initial_material_usage']
-            returns_normalized = returns_unnormalized / (initial_material + 1e-8)
+            rewards_norm = rewards / (initial_material + 1e-8)
 
-            # Step 3: Compute advantages using normalized returns
-            # (compute_advantages will do Z-score normalization internally)
-            advantages = self.compute_advantages(returns_normalized, episode['values'])
+            # GAE(λ)
+            T = len(rewards_norm)
+            advantages = torch.zeros(T, dtype=torch.float32, device=self.device)
+            gae = 0.0
+            for t in reversed(range(T)):
+                v_t = old_values[t]
+                v_tp1 = old_values[t+1] if t+1 < T else torch.tensor(0.0, device=self.device)
+                delta = rewards_norm[t] + self.gamma * v_tp1 - v_t
+                gae = delta + self.gamma * self.gae_lambda * gae
+                advantages[t] = gae
+            returns = advantages + old_values
 
-            # Diagnostic logging (first episode only)
             if self.logger and idx == 0:
-                self.logger.info(f"  [NORMALIZATION] Episode initial_material_usage: {initial_material:.2f}")
-                self.logger.info(f"  [NORMALIZATION] Episode returns before norm: "
-                               f"mean={returns_unnormalized.mean():.2f}, std={returns_unnormalized.std():.2f}, "
-                               f"range=[{returns_unnormalized.min():.2f}, {returns_unnormalized.max():.2f}]")
-                self.logger.info(f"  [NORMALIZATION] Episode returns after norm (÷ initial_material): "
-                               f"mean={returns_normalized.mean():.4f}, std={returns_normalized.std():.4f}, "
-                               f"range=[{returns_normalized.min():.4f}, {returns_normalized.max():.4f}]")
+                self.logger.info(f"  [GAE] Episode initial_material_usage: {initial_material:.2f}")
+                self.logger.info(f"  [GAE] rewards_norm: mean={rewards_norm.mean():.4f}, std={rewards_norm.std():.4f}")
+                self.logger.info(f"  [GAE] values_old: mean={old_values.mean():.4f}, std={old_values.std():.4f}")
 
-            # Store normalized returns and advantages
+            # Collect
             all_states.extend(episode['states'])
             all_global_states.extend(episode['global_states'])
             all_actions.extend(episode['actions'])
             all_old_log_probs.extend(episode['log_probs'])
-            all_returns.append(returns_normalized)
-            all_advantages.append(advantages)
             all_valid_masks.extend(episode['valid_masks'])
             all_graphs.extend(episode['graphs'])
             all_structures.extend(episode['structures'])
+            all_old_values.append(old_values)
+            all_advantages.append(advantages)
+            all_returns.append(returns)
 
-        # Convert to tensors
         old_log_probs = torch.stack(all_old_log_probs).detach()
-        returns = torch.cat(all_returns)
+        old_values_flat = torch.cat(all_old_values).detach()
         advantages = torch.cat(all_advantages)
+        returns = torch.cat(all_returns)
 
-        # Diagnostic: Check distribution of mixed returns
-        if self.logger:
-            self.logger.info(f"  [NORMALIZATION] Mixed returns distribution: "
-                           f"mean={returns.mean():.4f}, std={returns.std():.4f}, "
-                           f"range=[{returns.min():.4f}, {returns.max():.4f}]")
-            self.logger.info(f"  [NORMALIZATION] Mixed advantages distribution: "
-                           f"mean={advantages.mean():.4f}, std={advantages.std():.4f}")
+        # Normalize advantages across episodes
+        if len(advantages) > 1:
+            advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
 
         # Get current entropy coefficient
         entropy_coef = self.get_entropy_coef()
@@ -205,9 +210,7 @@ class PPOAgent(BasePGAgent):
         value_grads = []
 
         for epoch in range(self.ppo_epochs):
-            # === BATCH OPTIMIZATION: 一次forward所有graphs ===
-
-            # 1. Batch所有graphs
+            # === 單次 StateGNN 前向（整個 epoch 保持一致圖），epoch 結尾再 backward/step 一次 ===
             batched_graph, batched_story_batch, structure_story_ptr, num_stories_per_graph = \
                 self._batch_all_graphs(all_graphs, all_structures)
 
@@ -216,151 +219,136 @@ class PPOAgent(BasePGAgent):
                 self.logger.info(f"  [BATCH] Total nodes: {batched_graph.x.shape[0]}, "
                                f"Total edges: {batched_graph.edge_index.shape[1]//2}")
 
-            # 2. Create edge-level batch index from node-level batch index
-            # batched_graph.batch is [num_nodes], we need [num_edges]
-            # For each edge, get the batch index from its source node
-            edge_batch = batched_graph.batch[batched_graph.edge_index[0]]  # [num_edges*2]
-            # StateGNN uses edge_index[::2], so we also take edge_batch[::2]
-            edge_batch_half = edge_batch[::2]  # [num_edges]
+            edge_batch = batched_graph.batch[batched_graph.edge_index[0]]
+            edge_batch_half = edge_batch[::2]
 
-            # 3. 一次forward StateGNN處理所有graphs（關鍵：只forward一次！）
             all_story_features_batched = self.state_gnn(
                 batched_graph.x,
                 batched_graph.edge_index,
                 batched_graph.edge_attr,
-                edge_batch_half,  # Edge-level batch index
+                edge_batch_half,
                 batched_story_batch,
                 structure_story_ptr
-            )  # [total_story_members_all_timesteps, hidden_dim*2]
+            )
 
-            # 4. 分割batched features回individual timesteps
+            # 分割回 timesteps
             story_features_list = []
             global_features_list = []
             start_idx = 0
-
             for num_stories in num_stories_per_graph:
                 end_idx = start_idx + num_stories
-
-                # 提取當前timestep的features
                 story_feat = all_story_features_batched[start_idx:end_idx]
                 global_feat = story_feat.mean(dim=0, keepdim=True)
-
                 story_features_list.append(story_feat)
                 global_features_list.append(global_feat)
-
                 start_idx = end_idx
 
-            # 5. 使用cached features計算loss（這些features有梯度連接到StateGNN）
-            new_log_probs = []
-            new_values = []
-            new_entropies = []
+            # === Minibatch（累加 loss，epoch 結尾一次 backward） ===
+            num_steps = len(all_states)
+            indices = np.arange(num_steps)
+            np.random.shuffle(indices)
+            mb_size = min(self.minibatch_size, num_steps)
 
-            for t in range(len(all_states)):
-                story_features = story_features_list[t]  # 重用已計算的features（有梯度）
-                global_features = global_features_list[t]
-                action = all_actions[t]
-                valid_mask = all_valid_masks[t]
+            if self.logger and epoch == 0:
+                self.logger.info(f"  [MINIBATCH] total_steps={num_steps}, minibatch_size={mb_size}, num_batches={(num_steps+mb_size-1)//mb_size}")
 
-                # Forward pass through policy and value networks
-                action_scores = self.policy_net(story_features)
-                masked_scores = action_scores.masked_fill(~valid_mask, -1e9)
-                probs = F.softmax(masked_scores, dim=0)
-                dist = Categorical(probs)
+            epoch_policy_loss_sum = 0.0
+            epoch_value_loss_sum = 0.0
+            epoch_entropy_sum = 0.0
 
-                # New log prob and entropy
-                new_log_prob = dist.log_prob(torch.tensor(action, device=self.device))
-                new_log_probs.append(new_log_prob)
-                new_entropies.append(dist.entropy())
-
-                # New value
-                new_value = self.value_net(global_features)
-                new_values.append(new_value)
-
-            new_log_probs = torch.stack(new_log_probs)
-            new_values = torch.cat(new_values).squeeze()
-            new_entropies = torch.stack(new_entropies)
-
-            # PPO clipped loss
-            ratio = torch.exp(new_log_probs - old_log_probs)
-            surr1 = ratio * advantages.detach()
-            surr2 = torch.clamp(ratio, 1 - self.clip_epsilon, 1 + self.clip_epsilon) * advantages.detach()
-            policy_loss = -torch.min(surr1, surr2).mean()
-
-            # Value loss
-            value_loss = F.mse_loss(new_values, returns)
-
-            # Entropy loss
-            entropy_loss = -new_entropies.mean()
-
-            # Total loss
-            total_loss = (policy_loss +
-                         self.value_loss_coef * value_loss +
-                         entropy_coef * entropy_loss)
-
-            # Optimization
+            # 清零梯度（整個 epoch 聚合梯度）
             self.state_gnn_optimizer.zero_grad()
             self.policy_value_optimizer.zero_grad()
+
+            for start in range(0, num_steps, mb_size):
+                mb_idx = indices[start:start+mb_size]
+
+                new_log_probs_mb = []
+                entropies_mb = []
+                new_values_mb = []
+
+                for t in mb_idx:
+                    story_features = story_features_list[t]
+                    global_features = global_features_list[t]
+                    valid_mask = all_valid_masks[t]
+                    action = all_actions[t]
+
+                    # 防呆：至少一個可行動作
+                    assert valid_mask.any().item(), "valid_mask is all False at a timestep"
+
+                    action_scores = self.policy_net(story_features)
+                    masked_scores = action_scores.masked_fill(~valid_mask, -1e9)
+                    probs = F.softmax(masked_scores, dim=0)
+                    dist = Categorical(probs)
+
+                    new_log_probs_mb.append(dist.log_prob(torch.tensor(action, device=self.device)))
+                    entropies_mb.append(dist.entropy())
+                    new_values_mb.append(self.value_net(global_features))
+
+                new_log_probs_mb = torch.stack(new_log_probs_mb)
+                entropies_mb = torch.stack(entropies_mb)
+                new_values_mb = torch.cat(new_values_mb).squeeze()
+
+                old_log_probs_mb = old_log_probs[mb_idx]
+                returns_mb = returns[mb_idx]
+                advantages_mb = advantages[mb_idx]
+                old_values_mb = old_values_flat[mb_idx]
+
+                # Policy loss (clipped)
+                ratio = torch.exp(new_log_probs_mb - old_log_probs_mb)
+                surr1 = ratio * advantages_mb.detach()
+                surr2 = torch.clamp(ratio, 1 - self.clip_epsilon, 1 + self.clip_epsilon) * advantages_mb.detach()
+                policy_loss_mb = -torch.min(surr1, surr2).mean()
+
+                # Value loss (clipped)
+                v_pred = new_values_mb
+                v_old = old_values_mb
+                v_clipped = v_old + torch.clamp(v_pred - v_old, -self.value_clip_epsilon, self.value_clip_epsilon)
+                value_loss_unclipped = (v_pred - returns_mb).pow(2)
+                value_loss_clipped = (v_clipped - returns_mb).pow(2)
+                value_loss_mb = torch.max(value_loss_unclipped, value_loss_clipped).mean()
+
+                entropy_loss_mb = -entropies_mb.mean()
+
+                # 累加（取和，再除以批次數得到平均）
+                epoch_policy_loss_sum = epoch_policy_loss_sum + policy_loss_mb
+                epoch_value_loss_sum = epoch_value_loss_sum + value_loss_mb
+                epoch_entropy_sum = epoch_entropy_sum + entropy_loss_mb
+
+            num_batches = max(1, (num_steps + mb_size - 1) // mb_size)
+            policy_loss = epoch_policy_loss_sum / num_batches
+            value_loss = epoch_value_loss_sum / num_batches
+            entropy_loss = epoch_entropy_sum / num_batches
+            total_loss = policy_loss + self.value_loss_coef * value_loss + self.get_entropy_coef() * entropy_loss
+
+            # 反傳與最佳化（單次）
             total_loss.backward()
 
-            # === DIAGNOSTIC: Check gradients ===
-            if epoch == 0:  # Only check first epoch to avoid spam
-                grad_norms = {}
-                for name, param in [
-                    ('state_gnn', list(self.state_gnn.parameters())[0]),
-                    ('policy_net', list(self.policy_net.parameters())[0]),
-                    ('value_net', list(self.value_net.parameters())[0])
-                ]:
-                    if param.grad is not None:
-                        grad_norms[name] = param.grad.norm().item()
-                    else:
-                        grad_norms[name] = 0.0
-
-                if self.logger:
-                    self.logger.info(f"  [DIAGNOSTIC] Gradient norms - StateGNN: {grad_norms['state_gnn']:.6f}, "
-                                   f"Policy: {grad_norms['policy_net']:.6f}, Value: {grad_norms['value_net']:.6f}")
-
-                    # 額外診斷：計算梯度提升倍數
-                    if grad_norms['state_gnn'] > 0:
-                        ratio_to_policy = grad_norms['state_gnn'] / (grad_norms['policy_net'] + 1e-8)
-                        self.logger.info(f"  [DIAGNOSTIC] StateGNN/Policy gradient ratio: {ratio_to_policy:.4f} "
-                                       f"(should be ~0.3-1.0 after batching)")
-
-            # Record gradient norms BEFORE clipping
+            # 記錄梯度範圍（pre-clipping）
             state_gnn_grad_norm = 0.0
-            policy_grad_norm = 0.0
-            value_grad_norm = 0.0
-
             for p in self.state_gnn.parameters():
                 if p.grad is not None:
                     state_gnn_grad_norm += p.grad.norm().item() ** 2
             state_gnn_grad_norm = state_gnn_grad_norm ** 0.5
 
+            policy_grad_norm = 0.0
             for p in self.policy_net.parameters():
                 if p.grad is not None:
                     policy_grad_norm += p.grad.norm().item() ** 2
             policy_grad_norm = policy_grad_norm ** 0.5
 
+            value_grad_norm = 0.0
             for p in self.value_net.parameters():
                 if p.grad is not None:
                     value_grad_norm += p.grad.norm().item() ** 2
             value_grad_norm = value_grad_norm ** 0.5
 
-            # Clip gradients separately for each optimizer
-            nn.utils.clip_grad_norm_(
-                self.state_gnn.parameters(),
-                self.max_grad_norm
-            )
-            nn.utils.clip_grad_norm_(
-                list(self.policy_net.parameters()) +
-                list(self.value_net.parameters()),
-                self.max_grad_norm
-            )
+            nn.utils.clip_grad_norm_(self.state_gnn.parameters(), self.max_grad_norm)
+            nn.utils.clip_grad_norm_(list(self.policy_net.parameters()) + list(self.value_net.parameters()), self.max_grad_norm)
 
-            # Step both optimizers
             self.state_gnn_optimizer.step()
             self.policy_value_optimizer.step()
 
-            # Record
             policy_losses.append(policy_loss.item())
             value_losses.append(value_loss.item())
             entropies_list.append(-entropy_loss.item())
@@ -373,9 +361,12 @@ class PPOAgent(BasePGAgent):
         policy_params_after = [p.clone().detach() for p in self.policy_net.parameters()]
         value_params_after = [p.clone().detach() for p in self.value_net.parameters()]
 
-        state_gnn_change = torch.norm(state_gnn_params_after[0] - state_gnn_params_before[0]).item()
-        policy_change = torch.norm(policy_params_after[0] - policy_params_before[0]).item()
-        value_change = torch.norm(value_params_after[0] - value_params_before[0]).item()
+        def _param_change(before_list, after_list):
+            return torch.sqrt(sum((a - b).pow(2).sum() for b, a in zip(before_list, after_list))).item()
+
+        state_gnn_change = _param_change(state_gnn_params_before, state_gnn_params_after)
+        policy_change = _param_change(policy_params_before, policy_params_after)
+        value_change = _param_change(value_params_before, value_params_after)
 
         # Log
         if self.logger:

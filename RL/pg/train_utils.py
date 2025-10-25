@@ -42,7 +42,12 @@ def train_episode(agent, env, rec, logger):
         # Get features (no grad)
         story_features, global_features = agent.get_features(graph, structure)
 
-        # Choose action
+        # Build valid mask based on pre-step (original) structure to align with action selection
+        pre_valid_mask = torch.ones(story_features.shape[0], dtype=torch.bool, device=agent.device)
+        if len(original_structure.already_minimum_section_story_indexes) > 0:
+            pre_valid_mask[original_structure.already_minimum_section_story_indexes] = False
+
+        # Choose action (based on pre-step features/state)
         action, log_prob, value, entropy = agent.choose_action(
             story_features,
             global_features,
@@ -50,14 +55,10 @@ def train_episode(agent, env, rec, logger):
             greedy=False
         )
 
-        # Step environment
-        structure, reward, done, fail_name, fail_reason = env.step(structure, action)
+        # Step environment -> post-step structure
+        after_structure, reward, done, fail_name, fail_reason = env.step(structure, action)
 
-        # Store experience
-        valid_mask = torch.ones(story_features.shape[0], dtype=torch.bool, device=agent.device)
-        if len(structure.already_minimum_section_story_indexes) > 0:
-            valid_mask[structure.already_minimum_section_story_indexes] = False
-
+        # Store experience aligned to pre-step state/mask
         agent.buffer.add_step(
             state=story_features,
             global_state=global_features,
@@ -66,13 +67,14 @@ def train_episode(agent, env, rec, logger):
             log_prob=log_prob,
             value=value,
             entropy=entropy,
-            valid_mask=valid_mask,
-            graph=graph.clone(),  # Store graph for recomputing features
-            structure=structure   # Store structure for recomputing features
+            valid_mask=pre_valid_mask,
+            graph=graph.clone(),
+            structure=original_structure
         )
 
         # Update
-        graph = structure.graph.clone()
+        graph = after_structure.graph.clone()
+        structure = after_structure
         score += reward
 
         if logger:
