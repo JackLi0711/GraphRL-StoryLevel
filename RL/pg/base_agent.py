@@ -51,7 +51,7 @@ class BasePGAgent:
         # Policy and Value networks
         state_dim = hidden_dim * 2
         self.policy_net = PolicyNetwork(state_dim, hidden_dim).to(device)
-        self.value_net = ValueNetwork(state_dim, hidden_dim).to(device)
+        self.value_net = ValueNetwork(hidden_dim, hidden_dim).to(device)
 
         # Training parameters
         self.gamma = gamma

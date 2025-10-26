@@ -36,6 +36,7 @@ class PPOAgent(BasePGAgent):
                  lr: float = 3e-4,
                  gamma: float = 0.99,
                  clip_epsilon: float = 0.2,
+                 policy_loss_coef: float = 10.0,
                  value_loss_coef: float = 0.5,
                  entropy_coef_initial: float = 0.01,
                  entropy_decay: float = 0.99,
@@ -56,6 +57,7 @@ class PPOAgent(BasePGAgent):
         )
 
         self.clip_epsilon = clip_epsilon
+        self.policy_loss_coef = policy_loss_coef
         self.value_loss_coef = value_loss_coef
         self.max_grad_norm = max_grad_norm
         self.ppo_epochs = ppo_epochs
@@ -340,7 +342,7 @@ class PPOAgent(BasePGAgent):
             policy_loss = epoch_policy_loss_sum / num_batches
             value_loss = epoch_value_loss_sum / num_batches
             entropy_loss = epoch_entropy_sum / num_batches
-            total_loss = policy_loss + self.value_loss_coef * value_loss + self.get_entropy_coef() * entropy_loss
+            total_loss = self.policy_loss_coef * policy_loss + self.value_loss_coef * value_loss + self.get_entropy_coef() * entropy_loss
 
             # 反傳與最佳化（單次）
             total_loss.backward()

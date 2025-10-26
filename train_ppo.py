@@ -54,7 +54,8 @@ def parse_args() -> Namespace:
     parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--gamma", type=float, default=0.99)
     parser.add_argument("--clip_epsilon", type=float, default=0.3)
-    parser.add_argument("--value_loss_coef", type=float, default=0.5)
+    parser.add_argument("--policy_loss_coef", type=float, default=10.0)
+    parser.add_argument("--value_loss_coef", type=float, default=0.3)
     parser.add_argument("--entropy_coef_initial", type=float, default=0.03)
     parser.add_argument("--entropy_decay", type=float, default=0.9995)
     parser.add_argument("--max_grad_norm", type=float, default=2.0)
@@ -148,6 +149,7 @@ def main(args):
         lr=args.lr,
         gamma=args.gamma,
         clip_epsilon=args.clip_epsilon,
+        policy_loss_coef=args.policy_loss_coef,
         value_loss_coef=args.value_loss_coef,
         entropy_coef_initial=args.entropy_coef_initial,
         entropy_decay=args.entropy_decay,
