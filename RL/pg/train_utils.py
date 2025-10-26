@@ -91,11 +91,18 @@ def train_episode(agent, env, rec, logger):
     if len(agent.buffer) >= agent.accumulate_episodes:
         loss_dict = agent.update()
 
+    # Compute final score = initial_material_usage - final_material_usage (exclude penalty entirely)
+    try:
+        final_material_usage = env.material_usage_record[-1]
+    except Exception:
+        final_material_usage = structure.calculate_material_usage()
+    score_final = float(initial_material_usage - final_material_usage)
+
     # Record
     final_structure = structure if fail_reason == "minimum_section" else original_structure
     rec.record_in_end(final_structure, env, testing=False)
 
-    return score, loss_dict
+    return score_final, loss_dict
 
 
 def test_episode(agent, env, rec, logger):
@@ -173,7 +180,7 @@ def test_episode(agent, env, rec, logger):
         structure, reward, done, fail_name, fail_reason = env.step(structure, action)
 
         graph = structure.graph.clone()
-        # Score uses material-saving only (exclude penalty)
+        # (keep step-level score for logging if needed)
         score += env.get_last_score_delta()
         step_count += 1
 
@@ -186,7 +193,15 @@ def test_episode(agent, env, rec, logger):
     agent.policy_net.train()
     agent.value_net.train()
 
-    return score, design_process
+    # Compute final test score = initial_material_usage - final_material_usage
+    try:
+        final_material_usage = env.material_usage_record[-1]
+    except Exception:
+        final_material_usage = final_structure.calculate_material_usage()
+    initial_material_usage = env.material_usage_record[0]
+    score_final = float(initial_material_usage - final_material_usage)
+
+    return score_final, design_process
 
 
 def plot_training_testing_curves(rec, ckpt_dir, test_frequency):

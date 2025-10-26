@@ -93,7 +93,8 @@ class BasePGAgent:
             )  # [N, hidden_dim*2]
 
             # Global feature: mean pooling
-            global_features = story_features.mean(dim=0, keepdim=True)  # [1, hidden_dim*2]
+            story_feature_dim = story_features.shape[1]
+            global_features = story_features[0 , story_feature_dim//2: ]
 
         return story_features, global_features
 

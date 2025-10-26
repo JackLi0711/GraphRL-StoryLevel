@@ -60,13 +60,13 @@ def parse_args() -> Namespace:
     parser.add_argument("--max_grad_norm", type=float, default=2.0)
     parser.add_argument("--ppo_epochs", type=int, default=4)
     parser.add_argument("--accumulate_episodes", type=int, default=5)
-    parser.add_argument("--state_gnn_lr_multiplier", type=float, default=30.0, help="StateGNN learning rate multiplier")
+    parser.add_argument("--state_gnn_lr_multiplier", type=float, default=3, help="StateGNN learning rate multiplier")
     # PPO enhancements
     parser.add_argument("--gae_lambda", type=float, default=0.95)
     parser.add_argument("--value_clip_epsilon", type=float, default=0.2)
     parser.add_argument("--minibatch_size", type=int, default=64)
     # Failure penalty (alpha)
-    parser.add_argument("--failure_penalty_ratio", type=float, default=2)
+    parser.add_argument("--failure_penalty_ratio", type=float, default=0.2)
 
     # training
     parser.add_argument("--num_epoch", type=int, default=2000, help="epoch == episode")

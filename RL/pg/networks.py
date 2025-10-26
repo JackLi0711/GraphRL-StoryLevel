@@ -49,7 +49,7 @@ class ValueNetwork(nn.Module):
 
     輸入: global_features [1, state_dim]
         - 整個建築的全局特徵 (mean pooling from story_features)
-        - state_dim: StateGNN 輸出維度 (hidden_dim * 2)
+        - state_dim: StateGNN 輸出後面一半 (hidden_dim * 1)
 
     輸出: value [1]
         - 當前狀態的價值估計 V(s)
@@ -57,7 +57,7 @@ class ValueNetwork(nn.Module):
     def __init__(self, state_dim: int, hidden_dim: int):
         super().__init__()
         self.value_head = nn.Sequential(
-            nn.Linear(state_dim, hidden_dim),
+            nn.Linear(hidden_dim, hidden_dim),
             nn.ReLU(),
             nn.Linear(hidden_dim, hidden_dim // 2),
             nn.ReLU(),

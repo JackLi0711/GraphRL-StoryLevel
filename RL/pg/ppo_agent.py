@@ -12,6 +12,7 @@ import torch.nn.functional as F
 import torch.optim as optim
 from torch.distributions import Categorical
 from torch_geometric.data import Batch
+import pandas as pd
 
 from .base_agent import BasePGAgent
 
@@ -170,6 +171,9 @@ class PPOAgent(BasePGAgent):
                 delta = rewards_norm[t] + self.gamma * v_tp1 - v_t
                 gae = delta + self.gamma * self.gae_lambda * gae
                 advantages[t] = gae
+
+            print(f'advantages.shape: {advantages.shape}')
+            print(f'old_values.shape: {old_values.shape}')
             returns = advantages + old_values
 
             if self.logger and idx == 0:
@@ -230,7 +234,22 @@ class PPOAgent(BasePGAgent):
                 batched_story_batch,
                 structure_story_ptr
             )
+            # self.logger.info('=' * 60)
+            # self.logger.info(f'batched_graph.x.shape: {batched_graph.x.shape}')
+            # self.logger.info(f'batched_graph.edge_index.shape: {batched_graph.edge_index.shape}')
+            # self.logger.info(f'batched_graph.edge_attr.shape: {batched_graph.edge_attr.shape}')
+            # self.logger.info(f'edge_batch_half.shape: {edge_batch_half.shape}')
+            # self.logger.info(f'batched_story_batch.shape: {batched_story_batch.shape}')
+            # self.logger.info(f'structure_story_ptr: {structure_story_ptr}')
+            # self.logger.info(f'num_stories_per_graph: {num_stories_per_graph}')
+            # self.logger.info(f'all_story_features_batched.shape: {all_story_features_batched.shape}')
+            # self.logger.info(f'all_story_features_batched: {all_story_features_batched}')
+            # self.logger.info('=' * 60)
 
+            # 幫我把 all_story_features_batched 存成一個csv file
+            pd.DataFrame(all_story_features_batched.detach().cpu().numpy()).to_csv('all_story_features_batched.csv', index=False)
+
+            
             # 分割回 timesteps
             story_features_list = []
             global_features_list = []
@@ -238,7 +257,9 @@ class PPOAgent(BasePGAgent):
             for num_stories in num_stories_per_graph:
                 end_idx = start_idx + num_stories
                 story_feat = all_story_features_batched[start_idx:end_idx]
-                global_feat = story_feat.mean(dim=0, keepdim=True)
+                # global_feat = story_feat.mean(dim=0, keepdim=True)
+                story_feature_dim = story_feat.shape[1]
+                global_feat = story_feat[0 , story_feature_dim//2: ]
                 story_features_list.append(story_feat)
                 global_features_list.append(global_feat)
                 start_idx = end_idx
