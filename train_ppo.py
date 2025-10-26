@@ -55,16 +55,18 @@ def parse_args() -> Namespace:
     parser.add_argument("--gamma", type=float, default=0.99)
     parser.add_argument("--clip_epsilon", type=float, default=0.3)
     parser.add_argument("--value_loss_coef", type=float, default=0.5)
-    parser.add_argument("--entropy_coef_initial", type=float, default=0.02)
+    parser.add_argument("--entropy_coef_initial", type=float, default=0.03)
     parser.add_argument("--entropy_decay", type=float, default=0.9995)
     parser.add_argument("--max_grad_norm", type=float, default=2.0)
     parser.add_argument("--ppo_epochs", type=int, default=4)
     parser.add_argument("--accumulate_episodes", type=int, default=5)
-    parser.add_argument("--state_gnn_lr_multiplier", type=float, default=100.0, help="StateGNN learning rate multiplier")
+    parser.add_argument("--state_gnn_lr_multiplier", type=float, default=30.0, help="StateGNN learning rate multiplier")
     # PPO enhancements
     parser.add_argument("--gae_lambda", type=float, default=0.95)
     parser.add_argument("--value_clip_epsilon", type=float, default=0.2)
     parser.add_argument("--minibatch_size", type=int, default=64)
+    # Failure penalty (alpha)
+    parser.add_argument("--failure_penalty_ratio", type=float, default=2)
 
     # training
     parser.add_argument("--num_epoch", type=int, default=2000, help="epoch == episode")
@@ -176,7 +178,8 @@ def main(args):
         MCE_ground_motion_set=MCE_ground_motion_set,
         checkpoint_dir=args.ckpt_dir,
         logger=logger,
-        device=device
+        device=device,
+        failure_penalty_ratio=args.failure_penalty_ratio
     )
 
     # Record

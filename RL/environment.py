@@ -27,7 +27,8 @@ class Environment:
                  MCE_ground_motion_set: list[torch.Tensor],
                  checkpoint_dir: Path,
                  logger: logging.Logger,
-                 device: torch.device) -> None:
+                 device: torch.device,
+                 failure_penalty_ratio: float = 0.0) -> None:
         
         self.structure_shape = structure_shape
         self.add_structure_geometry = add_structure_geometry
@@ -42,6 +43,9 @@ class Environment:
         self.MCE_ground_motion_set = MCE_ground_motion_set
         self.logger = logger
         self.device = device
+        self.failure_penalty_ratio = failure_penalty_ratio
+        # track per-step score increment (exclude penalty)
+        self._last_score_delta = 0.0
         
         # checkpoint path
         self.checkpoint_dir = checkpoint_dir
@@ -262,6 +266,13 @@ class Environment:
                 if "total" in self.reward_type: reward += volume_saved_SCWB
                 if "normalized" in self.reward_type: reward /= self.material_usage_record[0]
 
+            # for score (exclude penalty), align with material-based positive component
+            score_delta = volume_saved
+            if "material" in self.reward_type and "total" in self.reward_type:
+                score_delta = volume_saved + volume_saved_SCWB
+            if "material" in self.reward_type and "normalized" in self.reward_type:
+                score_delta = score_delta / (self.material_usage_record[0] + 1e-8)
+
             if "combined" in self.reward_type:
                 delta_v = volume_saved + volume_saved_SCWB
                 stress_ratio_range = self.static_response_record[-1][0] - self.static_response_record[-1][1]  # max_stress_ratio - min_stress_ratio
@@ -283,11 +294,21 @@ class Environment:
                 else:
                     reward = (acc_decrement_x + acc_decrement_z)
         else: 
-            reward = 0.0
+            # proportion to initial material usage; optional early-failure scaling can be added later
+            penalty = self.failure_penalty_ratio * (self.material_usage_record[0] + 1e-8)
+            reward = -penalty
+            # failure step contributes no positive material saving to score
+            score_delta = 0.0
 
+        # persist per-step values
         self.reward_record.append(reward)
+        self._last_score_delta = float(score_delta)
 
         return reward
+
+    def get_last_score_delta(self) -> float:
+        """Return last step's score increment (excludes penalty)."""
+        return self._last_score_delta
 
 
     def step(self, structure: structure.Structure, action: int) -> typing.Tuple[structure.Structure, float, bool, str, str]:

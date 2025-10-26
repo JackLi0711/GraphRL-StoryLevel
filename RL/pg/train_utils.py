@@ -75,7 +75,8 @@ def train_episode(agent, env, rec, logger):
         # Update
         graph = after_structure.graph.clone()
         structure = after_structure
-        score += reward
+        # Score uses material-saving only (exclude penalty)
+        score += env.get_last_score_delta()
 
         if logger:
             logger.info(f"Episode {agent._number_episodes+1}, Step {len(agent.buffer.rewards)}, "
@@ -172,7 +173,8 @@ def test_episode(agent, env, rec, logger):
         structure, reward, done, fail_name, fail_reason = env.step(structure, action)
 
         graph = structure.graph.clone()
-        score += reward
+        # Score uses material-saving only (exclude penalty)
+        score += env.get_last_score_delta()
         step_count += 1
 
     # Final structure
