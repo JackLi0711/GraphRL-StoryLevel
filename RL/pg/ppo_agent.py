@@ -163,25 +163,31 @@ class PPOAgent(BasePGAgent):
             initial_material = episode['initial_material_usage']
             rewards_norm = rewards / (initial_material + 1e-8)
 
-            # GAE(λ)
+            # === FIX: Normalize old_values to match rewards_norm scale ===
+            old_values_norm = old_values / (initial_material + 1e-8)
+
+            # GAE(λ) - using normalized values
             T = len(rewards_norm)
             advantages = torch.zeros(T, dtype=torch.float32, device=self.device)
             gae = 0.0
             for t in reversed(range(T)):
-                v_t = old_values[t]
-                v_tp1 = old_values[t+1] if t+1 < T else torch.tensor(0.0, device=self.device)
+                v_t = old_values_norm[t]  # Use normalized values
+                v_tp1 = old_values_norm[t+1] if t+1 < T else torch.tensor(0.0, device=self.device)
                 delta = rewards_norm[t] + self.gamma * v_tp1 - v_t
                 gae = delta + self.gamma * self.gae_lambda * gae
                 advantages[t] = gae
 
             print(f'advantages.shape: {advantages.shape}')
             print(f'old_values.shape: {old_values.shape}')
-            returns = advantages + old_values
+            returns = advantages + old_values_norm  # Use normalized values
 
             if self.logger and idx == 0:
                 self.logger.info(f"  [GAE] Episode initial_material_usage: {initial_material:.2f}")
                 self.logger.info(f"  [GAE] rewards_norm: mean={rewards_norm.mean():.4f}, std={rewards_norm.std():.4f}")
-                self.logger.info(f"  [GAE] values_old: mean={old_values.mean():.4f}, std={old_values.std():.4f}")
+                self.logger.info(f"  [GAE] values_old (unnorm): mean={old_values.mean():.4f}, std={old_values.std():.4f}")
+                self.logger.info(f"  [GAE] values_old (norm): mean={old_values_norm.mean():.4f}, std={old_values_norm.std():.4f}")
+                self.logger.info(f"  [GAE] advantages: mean={advantages.mean():.4f}, std={advantages.std():.4f}")
+                self.logger.info(f"  [GAE] returns: mean={returns.mean():.4f}, std={returns.std():.4f}")
 
             # Collect
             all_states.extend(episode['states'])
@@ -191,12 +197,12 @@ class PPOAgent(BasePGAgent):
             all_valid_masks.extend(episode['valid_masks'])
             all_graphs.extend(episode['graphs'])
             all_structures.extend(episode['structures'])
-            all_old_values.append(old_values)
+            all_old_values.append(old_values_norm)  # Store normalized values
             all_advantages.append(advantages)
             all_returns.append(returns)
 
         old_log_probs = torch.stack(all_old_log_probs).detach()
-        old_values_flat = torch.cat(all_old_values).detach()
+        old_values_flat = torch.cat(all_old_values).detach()  # Now contains normalized values
         advantages = torch.cat(all_advantages)
         returns = torch.cat(all_returns)
 
@@ -366,8 +372,10 @@ class PPOAgent(BasePGAgent):
                     value_grad_norm += p.grad.norm().item() ** 2
             value_grad_norm = value_grad_norm ** 0.5
 
+            # === FIX: Clip gradients separately to avoid cross-network interference ===
             nn.utils.clip_grad_norm_(self.state_gnn.parameters(), self.max_grad_norm)
-            nn.utils.clip_grad_norm_(list(self.policy_net.parameters()) + list(self.value_net.parameters()), self.max_grad_norm)
+            nn.utils.clip_grad_norm_(self.policy_net.parameters(), self.max_grad_norm)
+            nn.utils.clip_grad_norm_(self.value_net.parameters(), self.max_grad_norm)
 
             self.state_gnn_optimizer.step()
             self.policy_value_optimizer.step()
@@ -400,6 +408,14 @@ class PPOAgent(BasePGAgent):
                 f"Entropy: {np.mean(entropies_list):.4f}, "
                 f"Entropy Coef: {entropy_coef:.6f}"
             )
+
+            # Gradient information (pre-clipping)
+            self.logger.info(
+                f"  [GRADIENT] Pre-clip - StateGNN: {np.mean(state_gnn_grads):.4f}, "
+                f"Policy: {np.mean(policy_grads):.4f}, Value: {np.mean(value_grads):.4f}"
+            )
+
+            # Parameter changes
             self.logger.info(
                 f"  [DIAGNOSTIC] Parameter changes - StateGNN: {state_gnn_change:.6f}, "
                 f"Policy: {policy_change:.6f}, Value: {value_change:.6f}"
@@ -415,6 +431,15 @@ class PPOAgent(BasePGAgent):
                     self.logger.warning("  [DIAGNOSTIC] ⚠ StateGNN update still weak, may need higher learning rate")
             else:
                 self.logger.warning("  [DIAGNOSTIC] ✗ WARNING: StateGNN still not updating!")
+
+            # Advantages and returns diagnostics
+            self.logger.info(
+                f"  [DIAGNOSTIC] Advantages: mean={advantages.mean():.4f}, std={advantages.std():.4f}, "
+                f"min={advantages.min():.4f}, max={advantages.max():.4f}"
+            )
+            self.logger.info(
+                f"  [DIAGNOSTIC] Returns: mean={returns.mean():.4f}, std={returns.std():.4f}"
+            )
 
         # Clear buffer
         self.buffer.clear()
