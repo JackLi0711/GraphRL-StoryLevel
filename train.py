@@ -31,7 +31,7 @@ def parse_args() -> Namespace:
 
 	# checkpoint
 	parser.add_argument("--ckpt_dir", type=Path, default="./Results/AdjustedMoreSections/RandomShape/OpenSees_RSA")
-	parser.add_argument("--suffix", type=str, default="TaiModifiedModel_MatReward_SoftUpdate_LinearDecay010_Buffer10000_Batch256_Epoch1000")
+	parser.add_argument("--suffix", type=str, default="TaiModifiedModel_MatReward_StaResFeatures_SoftUpdate_LinearDecay010_Buffer10000_Batch256_Epoch1000")
 
 	# nonlinear dynamic analysis simulator
 	parser.add_argument("--do_nonlinear_dynamic_analysis", action="store_true", default=False)
@@ -44,7 +44,7 @@ def parse_args() -> Namespace:
 	# structure
 	parser.add_argument("--structure_shape", type=str, default="random", help="fixed, small_random, random")
 	parser.add_argument("--add_structure_geometry", action="store_true", default=True)
-	parser.add_argument("--add_response_features", action="store_true", default=False)
+	parser.add_argument("--add_response_features", action="store_true", default=True)
 	parser.add_argument("--reward_type", type=str, default="material", help="material, acceleration, displacement, normalized, total, combined")
 	parser.add_argument("--restrict_action", action="store_true", default=False)
 	parser.add_argument("--scwb_driven_design", action="store_true", default=False)

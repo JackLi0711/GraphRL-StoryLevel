@@ -23,11 +23,13 @@ def get_response(structure: Structure, analysis_dir: Path) -> tuple[list[load.No
     structure.node_first_mode_shape, structure.node_second_mode_shape, structure.node_third_mode_shape = np.hsplit(mode_shapes, 3)
     
     load_cases = load.get_load_cases(structure)
+    structure.load_cases = load_cases
     # responses = []
     # for load_case in load_cases:
     #     response = pisa.run_load_case(structure, load_case, analysis_dir)
     #     responses.append(response)
     responses = opensees.run_response_spectrum_analysis(structure, load_cases, analysis_dir)
+    structure.static_responses = responses
     t_end = time.time()
     print(f"\tused time for check.get_response(): {t_end - t_start:.3f} sec")
     return load_cases, responses

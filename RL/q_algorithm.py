@@ -3,7 +3,7 @@ import torch
 import typing
 import numpy as np
 from torch import nn
-from model import StateGNN, Q_Network, GraphEmbedding
+from RL.model import StateGNN, Q_Network, GraphEmbedding
 
 
 def select_greedy_actions(next_states: torch.Tensor,

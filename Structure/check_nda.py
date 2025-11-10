@@ -26,6 +26,7 @@ def get_response(structure: Structure, nda_simulator: torch.nn.Module, ground_mo
     # feed 11 gms as mini-batch
     gm_num = len(ground_motion_set)
     ground_motions = torch.cat(ground_motion_set, dim=0).to(device)
+    structure.ground_motions = ground_motions
     timesteps = ground_motions.shape[1]  # ground_motions.shape: (11, 500, 10+10)
 
     # graph settings for foward propagation
@@ -45,6 +46,7 @@ def get_response(structure: Structure, nda_simulator: torch.nn.Module, ground_mo
 
     # reshape response from [batch_node, timesteps, output_dim] to [gm_num, node_num, timesteps, output_dim]
     responses = responses.reshape(gm_num, node_num, timesteps, -1)
+    structure.dynamic_responses = responses
     t_end = time.time()
     print(f"\tused time for check_nda.get_response(): {t_end - t_start:.3f} sec")
     return responses

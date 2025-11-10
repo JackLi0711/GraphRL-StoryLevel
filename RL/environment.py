@@ -55,7 +55,7 @@ class Environment:
         # the prescribed, test generalization ability
         self._testing_structure = None
     
-        # initiaization
+        # initialization
         self._init_testing_structure()
         self.init_check_setting(check_acceleration, check_displacement)
         
@@ -276,13 +276,14 @@ class Environment:
 
         # 1-1. update structure, graph and get saved material amount(m^3) (ORIGINAL)
         material_saved = structure.update_action(action)
-        before_SCWB_structure = deepcopy(structure)
         # 1-2. update structure, graph and get saved material amount(m^3) (STRONG-COLUMN-WEAK-BEAM)
         if self.scwb_driven_design:
+            before_SCWB_structure = deepcopy(structure)
             material_saved_SCWB, update_actions_SCWB, auxiliary_values, load_cases, static_responses = new_strategy.strong_column_weak_beam_driven_update(structure, self.code_analysis_dir, self.logger)
             if material_saved_SCWB != 0:
                 print(f"before_SCWB_update, story_level_sections: {before_SCWB_structure.story_level_sections}")
                 print(f"after_SCWB_update,  story_level_sections: {structure.story_level_sections}")
+            del before_SCWB_structure
         else:
             material_saved_SCWB = 0
             update_actions_SCWB = []

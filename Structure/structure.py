@@ -573,8 +573,11 @@ class Structure:
         self.node_Ezp_ratio_dict = node_Ezp_ratio_dict
         self.node_Ey_ratio_dict = node_Ey_ratio_dict
 
+        # store analysis results as attributes of Structure object
         self.first_mode_period, self.second_mode_period, self.third_mode_period = None, None, None
         self.node_first_mode_shape, self.node_second_mode_shape, self.node_third_mode_shape = None, None, None
+        self.load_cases, self.static_responses = None, None
+        self.ground_motions, self.dynamic_responses = None, None
 
 
     def _calculate_node_distributed_area(self, node_name) -> float:

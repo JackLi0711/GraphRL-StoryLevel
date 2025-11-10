@@ -11,6 +11,10 @@ Validation/useless_analyze_file/
 Validation/design_earthquake_force_comparison
 Validation/Final_Design_Comparison/
 
+VIPER/check.ipynb
+VIPER/*example*.py
+VIPER/results
+
 *PISA3D_Batch_500nodes.exe
 
 .DS_Store
