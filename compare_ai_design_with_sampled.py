@@ -13,35 +13,39 @@ def parse_args() -> Namespace:
 	parser = ArgumentParser()
 
 	# trained model path
-	# without doNDA: "./Results/AdjustedSections/2023_05_06__21_36_03__3d_storyLevel_random_shape_addYfeature_epoch_1000_buffer_10000_batch_size_256_gamma_099/model.pt"
-	# with doNDA: "./Results/AdjustedSections/2023_05_07__11_39_51__3d_storyLevel_random_shape_doNDA_addYfeature_epoch_1000_buffer_10000_batch_size_256_gamma_099/model.pt"
-	parser.add_argument("--trained_model_path", type=Path, default="./Results/AdjustedMoreSections/RandomShape/OpenSees_RSA/2025_06_05__21_45_28__TaiModifiedModel_MatReward_StaResFeatures_SoftUpdate_LinearDecay010_Buffer10000_Batch256_Epoch1000/models/model_HighestScore.pt")
+	parser.add_argument("--trained_model_path", type=Path, 
+		default="./Results/AdjustedMoreSections/RandomShape/OpenSees_RSA/2025_06_05__21_45_28__TaiModifiedModel_MatReward_StaResFeatures_SoftUpdate_LinearDecay010_Buffer10000_Batch256_Epoch1000/models/model_HighestScore.pt"
+	)
 	# checkpoint directory
-	parser.add_argument("--ckpt_dir", type=Path, default="./Results/AdjustedMoreSections/RandomShape/OpenSees_RSA/")
+	parser.add_argument("--ckpt_dir", type=Path, 
+		default="./Results/AdjustedMoreSections/RandomShape/OpenSees_RSA/"
+	)
 
 	# chances
 	parser.add_argument("--chances", type=int, default=0)
 
 	# nonlinear dynamic analysis simulator
-	parser.add_argument("--do_nonlinear_dynamic_analysis", action="store_true", default=False)
-	parser.add_argument("--check_acceleration", action="store_true", default=False)
-	parser.add_argument("--check_displacement", action="store_true", default=True)
-	# RelAcc: "./NonlinearDynamicAnalysisSimulator/trained_GraphLSTM/2023_07_20__15_43_32/"
-	# AbsAcc: "./NonlinearDynamicAnalysisSimulator/trained_GraphLSTM/2023_07_20__22_46_09/"
-	parser.add_argument("--graph_lstm_dir", type=Path, default=None)  # "./NonlinearDynamicAnalysisSimulator/trained_GraphLSTM/2025_04_23__13_18_19/"
-	parser.add_argument("--ground_motion_dir", type=Path, default=None)  # "./NonlinearDynamicAnalysisSimulator/ground_motions/selected_ground_motions_World_processed_one_scaling_MCE/"
-	parser.add_argument("--ground_motion_number", type=int, default=11, help="ASCE says 11 is better")
+	parser.add_argument("--do_nda", action="store_true", default=False)
+	parser.add_argument("--check_acc", action="store_true", default=False)
+	parser.add_argument("--check_disp", action="store_true", default=True)
+	parser.add_argument("--graph_lstm_dir", type=Path, 
+		default=None  # "./NonlinearDynamicAnalysisSimulator/trained_GraphLSTM/2025_04_23__13_18_19/"
+	)
+	parser.add_argument("--gm_dir", type=Path, 
+		default=None  # "./NonlinearDynamicAnalysisSimulator/ground_motions/selected_ground_motions_World_processed_one_scaling_MCE/"
+	)
+	parser.add_argument("--gm_num", type=int, default=11, help="ASCE says 11 is better")
 
 	# structure
-	parser.add_argument("--structure_shape", type=str, default="random", help="fixed, small_random, random")
-	parser.add_argument("--add_structure_geometry", action="store_true", default=True)
-	parser.add_argument("--add_response_features", action="store_true", default=True)
-	parser.add_argument("--reward_type", type=str, default="material", help="material, acceleration, displacement, normalized, total, combined")
+	parser.add_argument("--structure_shape", type=str, default="random", choices=["fixed", "small_random", "random"])
+	parser.add_argument("--add_geometry_feature", action="store_true", default=True)
+	parser.add_argument("--add_response_feature", action="store_true", default=True)
+	parser.add_argument("--reward_type", type=str, default="material", choices=["material", "acceleration", "displacement", "normalized", "total", "combined"])
 	parser.add_argument("--restrict_action", action="store_true", default=False)
 	parser.add_argument("--scwb_driven_design", action="store_true", default=False)
 	
 	# sample number
-	parser.add_argument("--random_seed", type=int, default=731, help="fixed random seed")
+	parser.add_argument("--random_seed", type=int, default=731)
 	parser.add_argument("--sample_num", type=int, default=100)  # paper: 1000
 
 	args = parser.parse_args()
@@ -73,9 +77,9 @@ def main(args):
 	nda_norm_dict = None
 	DBE_ground_motion_set = None
 	MCE_ground_motion_set = None
-	if args.do_nonlinear_dynamic_analysis:
+	if args.do_nda:
 		nda_simulator, nda_norm_dict = load_simulator.load_nonlinear_dynamic_analysis_simulator(args.graph_lstm_dir, device)
-		DBE_ground_motion_set, MCE_ground_motion_set = load_simulator.load_ground_motions(args.ground_motion_dir, args.ground_motion_number, nda_norm_dict)
+		DBE_ground_motion_set, MCE_ground_motion_set = load_simulator.load_ground_motions(args.gm_dir, args.gm_num, nda_norm_dict)
 
 
 	# read the AI scores from file
@@ -117,7 +121,7 @@ def main(args):
 								 "x_span_num": x_span_num, "x_span_lens": x_span_lens, 
 								 "z_span_num": z_span_num, "z_span_lens": z_span_lens,
 								 "story_num": story_num, "story_height": 3200,
-								 "do_nonlinear_dynamic_analysis": args.do_nonlinear_dynamic_analysis,
+								 "do_nonlinear_dynamic_analysis": args.do_nda,
 								 "nda_norm_dict": nda_norm_dict, 
 								 "analysis_dir": args.ckpt_dir / "Modal_Analysis"}
 				# print(f"---Generating {args.sample_num} sampled structures")
@@ -127,12 +131,12 @@ def main(args):
 				# # check each sampled structure				
 				check_kwargs = {#"structures": structures, "rewards": rewards, 
 		    					"code_analysis_dir": args.ckpt_dir / "Code_Analysis",
-								"do_nonlinear_dynamic_analysis": args.do_nonlinear_dynamic_analysis, 
+								"do_nonlinear_dynamic_analysis": args.do_nda, 
 								"nda_simulator": nda_simulator, 
 								"DBE_ground_motion_set": DBE_ground_motion_set, 
 								"MCE_ground_motion_set": MCE_ground_motion_set,
-								"check_acceleration": args.check_acceleration,
-								"check_displacement": args.check_displacement,
+								"check_acceleration": args.check_acc,
+								"check_displacement": args.check_disp,
 								"nda_norm_dict": nda_norm_dict, "device": device, 
 								"save_root": save_result_root}
 				# print(f"---Checking {args.sample_num} sampled structures")

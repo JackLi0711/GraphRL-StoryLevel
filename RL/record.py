@@ -7,7 +7,7 @@ from RL.environment import Environment
 
 
 class Record:
-    def __init__(self):
+    def __init__(self, additional_info: dict = None) -> None:
         self.training_record = {
             "geometry": [],      
             "initial_design": [],  
@@ -40,8 +40,9 @@ class Record:
             "fail_reason": [] 
         }
 
-        self.learn_losses = [[]]
-        self.Q_values = [[], []]  # Q_values[0] for training, Q_values[1] for testing
+        if additional_info is not None:
+            for key, value in additional_info.items():
+                setattr(self, key, value)
 
 
     def record_in_beginning(self, structure: Structure, testing: bool=False):
@@ -83,7 +84,8 @@ class Record:
     def output(self, ckpt_dir: Path):
         with open(ckpt_dir / "training_record.txt", "w") as f: json.dump(self.training_record, f)
         with open(ckpt_dir / "testing_record.txt", "w") as f: json.dump(self.testing_record, f)
-        with open(ckpt_dir / "learn_losses.txt", "w") as f: json.dump(self.learn_losses, f)
-        with open(ckpt_dir / "Q_values.txt", "w") as f: json.dump(self.Q_values, f)
 
-
+        for record_name in list(self.__dict__.keys()):
+            if record_name not in ["training_record", "testing_record"]:
+                record = getattr(self, record_name)
+                with open(ckpt_dir / f"record_{record_name}.txt", "w") as f: json.dump(record, f)

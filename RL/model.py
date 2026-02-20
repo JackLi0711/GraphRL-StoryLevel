@@ -3,6 +3,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch_geometric.nn as tgnn
+from torch.distributions import Categorical
 from torch_scatter import scatter_mean, scatter_add
 from torch_geometric.nn import global_mean_pool, global_add_pool
 
@@ -99,7 +100,7 @@ class Q_Network(nn.Module):
         #     nn.ReLU(),
         #     nn.Linear(hidden_dim, q_value_dim),
         # )
-        self.l2_1 = nn.Linear(member_state_dim, q_value_dim, bias=False)
+        self.q_stream = nn.Linear(member_state_dim, q_value_dim, bias=False)
         # self._initialize_weight()
 
     def _initialize_weight(self):
@@ -111,8 +112,21 @@ class Q_Network(nn.Module):
         # edge_state = self.batch_norm(edge_state)  # shape: [total story_member_num, member_state_dim]
         # q_value = self.q_network(edge_state)  # shape: [total story_member_num, q_value_dim]
 
-        q_value = self.l2_1(edge_state)  # shape: [total story_member_num, q_value_dim]
+        q_value = self.q_stream(edge_state)  # shape: [total story_member_num, q_value_dim]
 
+        return q_value
+    
+class Dueling_Q_Network(nn.Module):
+    def __init__(self, member_state_dim, hidden_dim, q_value_dim):
+        super().__init__()
+        self.value_stream = nn.Linear(member_state_dim, 1, bias=False)
+        self.advantage_stream = nn.Linear(member_state_dim, q_value_dim, bias=False)
+
+    def forward(self, edge_state) -> torch.Tensor:
+        value = self.value_stream(edge_state)  # shape: [total story_member_num, 1]
+        advantage = self.advantage_stream(edge_state)  # shape: [total story_member_num, q_value_dim]
+        q_value = value + (advantage - advantage.mean(dim=0, keepdim=True))  # shape: [total story_member_num, q_value_dim]
+        
         return q_value
 
 
@@ -125,6 +139,39 @@ def soft_update_q_network_parameters(target_q_network: nn.Module, online_q_netwo
     """In-place, soft-update of target_q_network parameters with parameters from online_q_network."""
     for p1, p2 in zip(target_q_network.parameters(), online_q_network.parameters()):
         p1.data.copy_(soft_update_alpha * p2.data + (1 - soft_update_alpha) * p1.data)
+
+
+class Categorical_ActorCritic_Network(nn.Module):
+    def __init__(self, member_state_dim, hidden_dim, action_dim):
+        super().__init__()
+        # self.state_aggregation = nn.Sequential(
+        #     nn.Linear(member_state_dim, hidden_dim),
+        #     # nn.ReLU(),
+        # )
+        self.actor = nn.Linear(member_state_dim, action_dim, bias=False)
+        # nn.init.orthogonal_(self.actor.weight.data)
+        # self.actor.weight.data.mul_(1e-3)
+        # nn.init.constant_(self.actor.bias.data, 0)
+        self.critic = nn.Linear(member_state_dim, 1, bias=False)
+        # nn.init.orthogonal_(self.critic.weight.data)
+        # self.critic.weight.data.mul_(1e-3)
+        # nn.init.constant_(self.critic.bias.data, 0)
+
+    def forward(self, edge_state) -> tuple[torch.Tensor, torch.Tensor]:
+        # edge_state shape
+            # single: (num_actions, member_state_dim) = (4*num_stories, 200)
+            # batched: (batch_size, num_actions, member_state_dim) = (batch_size, 4*num_stories, 200)
+
+        # Actor: per-action logits
+        logits = self.actor(edge_state)  # shape: (num_actions, action_dim=1) or (batch_size, num_actions, action_dim=1)
+        # dist = Categorical(logits=logits.squeeze(-1))  # shape: (num_actions,) or (batch_size, num_actions)
+
+        # Critic: single state value
+        aggregated_state = torch.mean(edge_state, dim=-2)  # shape: (member_state_dim,) or (batch_size, member_state_dim)
+        # hidden = self.state_aggregation(aggregated_state)  # shape: (hidden_dim,)        
+        value = self.critic(aggregated_state)   # shape: (1,) or (batch_size, 1)
+        
+        return logits.squeeze(-1), value
 
 
 

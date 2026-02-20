@@ -15,8 +15,8 @@ sys.path.append("Structure/")
 sys.path.append("Visualization")
 sys.path.append("NonlinearDynamicAnalysisSimulator/")
 
-from RL import agent_DQN, environment, record
-from Visualization import plot, visualize
+from RL import agent_PPO, environment, record
+from Visualization import plot, plot_PPO
 from NonlinearDynamicAnalysisSimulator import load_simulator
 
 
@@ -24,7 +24,13 @@ def parse_args() -> Namespace:
 	parser = ArgumentParser()
  
 	# comment
-	parser.add_argument("--comment", type=str, default="reward 0 for the fail action, proportional prioritized buffer(beta-annealing), epsilon linear decay, detached target Q-network")
+	parser.add_argument("--comment", type=list[str], default=[
+		"reward 0 for the fail action",
+		"entropy weight linear decay (1e-2 to 1e-3)",
+		"testing with argmax",
+		"mask logits first before softmax",
+		"no consider target KL for early stopping", 
+	])
  
 	# pretrained model
 	parser.add_argument("--pretrained_ckpt_dir", type=Path, default=None)
@@ -34,10 +40,10 @@ def parse_args() -> Namespace:
 		default="./Results/AdjustedMoreSections/RandomShape/OpenSees_RSA"
 	)
 	parser.add_argument("--suffix", type=str, 
-		default="DouDQN_MatReward_StaResFeatures_SoftUpdate_LinearDecay010_Buffer10000_Batch256_Epoch1000"
+		default="PPO_MatReward_UseGAE095_LR5e-4_ActLossCoef10_CriLossCoef001_EntroWeiLinDecay_OptimEpoch5_Episode2000"
 	)
-
-	# nonlinear dynamic analysis simulator
+	
+    # nonlinear dynamic analysis simulator
 	parser.add_argument("--do_nda", action="store_true", default=False)
 	parser.add_argument("--check_acc", action="store_true", default=False)
 	parser.add_argument("--check_disp", action="store_true", default=True)
@@ -48,38 +54,35 @@ def parse_args() -> Namespace:
 		default=None  # "./NonlinearDynamicAnalysisSimulator/ground_motions/selected_ground_motions_World_processed_one_scaling_MCE/"
 	)
 	parser.add_argument("--gm_num", type=int, default=11, help="ASCE says 11 is better")
-
-	# structure
+	
+    # structure
 	parser.add_argument("--structure_shape", type=str, default="random", help="fixed, small_random, random")
 	parser.add_argument("--add_geometry_feature", action="store_true", default=True)
-	parser.add_argument("--add_response_feature", action="store_true", default=True)
+	parser.add_argument("--add_response_feature", action="store_true", default=False)
 	parser.add_argument("--reward_type", type=str, default="material", choices=["material", "acceleration", "displacement", "normalized", "total", "combined"])
-	parser.add_argument("--restrict_action", action="store_true", default=False)
-	parser.add_argument("--scwb_driven_design", action="store_true", default=False)
 
 	# model
-	parser.add_argument("--model_type", type=str, default="Vanilla", choices=["Vanilla", "Dueling"])
 	parser.add_argument("--hidden_dim", type=int, default=100)
 	parser.add_argument("--layer_num", type=int, default=3)
-
-	# buffer
-	parser.add_argument("--buffer_size", type=int, default=10000)
-	parser.add_argument("--update_frequency", type=int, default=1)
-	parser.add_argument("--add_experience_frequency", type=int, default=1)
-	parser.add_argument("--per_alpha", type=float, default=1.0, help="0.0: uniform sampling / 1.0: full prioritized sampling")
-	parser.add_argument("--per_beta_rate", type=float, default=0.005)
-
-	# training
+	
+    # training
+	parser.add_argument("--lr", type=float, default=5e-4)
+	parser.add_argument("--use_lr_scheduler", action="store_true", default=False)
 	parser.add_argument("--gamma", type=float, default=0.99, help="discount factor, 1.0, 0.99, 0.9")
-	parser.add_argument("--epsilon", type=float, default=0.99, help="epsilon decay factor")
-	parser.add_argument("--synchronize_steps", type=int, default=None)
-	parser.add_argument("--soft_update_alpha", type=float, default=1e-3)
-	parser.add_argument("--test_frequency", type=int, default=5)
-	parser.add_argument("--batch_size", type=int, default=256)
-	parser.add_argument("--lr", type=float, default=1e-5)
-	parser.add_argument("--num_episode", type=int, default=1000)
+	parser.add_argument("--use_gae", action="store_true", default=True, help="whether to use generalized advantage estimation")
+	parser.add_argument("--gae_tau", type=float, default=0.95, help="0.9 ~ 0.97 is recommended")
+	parser.add_argument("--target_kl", type=float, default=0.02)
+	parser.add_argument("--clip_eps", type=float, default=0.2)
+	parser.add_argument("--entropy_weight", type=float, default=0.01)
+	parser.add_argument("--actor_loss_coef", type=float, default=10.0)
+	parser.add_argument("--critic_loss_coef", type=float, default=0.01)
+	parser.add_argument("--max_grad_norm", type=float, default=None)
+	parser.add_argument("--optimization_epoch", type=int, default=5)
+	parser.add_argument("--test_frequency", type=int, default=10)
+	parser.add_argument("--train_episode_num", type=int, default=2000)
+	parser.add_argument("--test_episode_num", type=int, default=1)
 	parser.add_argument("--random_seed", type=int, default=731)
-
+	
 	args = parser.parse_args()
 	return args
 
@@ -114,27 +117,31 @@ def get_loggings(ckpt_dir):
 
 
 def main(args):
-	# set random seed
+	# Set random seed
 	set_random_seed(args.random_seed)
 
-	# set checkpoint directory
+	# Set checkpoint directory
 	if len(args.suffix) > 2:
 		args.ckpt_dir = args.ckpt_dir / f'{datetime.now().strftime("%Y_%m_%d__%H_%M_%S")}__{args.suffix}'
 	else:
 		args.ckpt_dir = args.ckpt_dir / f'{datetime.now().strftime("%Y_%m_%d__%H_%M_%S")}'
 	args.ckpt_dir.mkdir(parents=True, exist_ok=True)
 
-	# set logger
+	# Save training arguments
+	with open(args.ckpt_dir / "train_args.json", "w") as f:
+		args_dict = {k: str(v) if isinstance(v, Path) else v for k, v in vars(args).items()}
+		json.dump(args_dict, f, indent=2)
+	
+	# Set logger
 	logger = get_loggings(args.ckpt_dir)
 	logger.critical(args.ckpt_dir)
-	logger.critical(args)
 
-	# set device
+	# Set device
 	device = "cuda" if torch.cuda.is_available() else "cpu"
 	device_name = torch.cuda.get_device_name(device) if device == "cuda" else "CPU"
 	logger.critical(f"Device: {device_name}")
 
-	# setup nonlinear dynamic analysis simulator
+	# Set up nonlinear dynamic analysis simulator
 	nda_simulator = None
 	nda_norm_dict = None
 	DBE_ground_motion_set = None
@@ -143,34 +150,10 @@ def main(args):
 		nda_simulator, nda_norm_dict = load_simulator.load_nonlinear_dynamic_analysis_simulator(args.graph_lstm_dir, device)
 		DBE_ground_motion_set, MCE_ground_motion_set = load_simulator.load_ground_motions(args.gm_dir, args.gm_num, nda_norm_dict)
 
-
-	# Beta-annealing schedule
-	def exponential_annealing_schedule(num_episode, rate=0.02):
-		return 1 - np.exp(-rate * num_episode)  # 0.0: no correction in the beginning / 1.0: full correction in the end
-	beta_annealing_schedule = lambda n: exponential_annealing_schedule(n, args.per_beta_rate)
-
-	# Power decay schedule
-	def power_decay_schedule(num_episode: int, decay_factor: float, minimum_epsilon: float=1e-2) -> float:
-		return max(decay_factor ** num_episode, minimum_epsilon)
-	epsilon_decay_schedule = lambda n: power_decay_schedule(n, args.epsilon, 1e-2)
-
-	# Linear decay schedule
-	def linear_decay_schedule(num_episode: int, total_episode: int, minimum_epsilon: float=1e-1) -> float:
-		return max(1.0 - num_episode/total_episode, minimum_epsilon)
-	straight_decay_schedule = lambda n: linear_decay_schedule(n, args.num_episode, 1e-1)
-
-	# Cosine decay schedule
-	def cosine_decay_schedule(num_episode: int, total_episode: int, minimum_epsilon: float=1e-1) -> float:
-		linear_decay = 1.0 - num_episode / total_episode
-		cosine_decay = 0.75 * linear_decay + 0.25 * linear_decay * np.cos(np.pi / 100 * num_episode)
-		return max(cosine_decay, minimum_epsilon)
-	periodic_decay_schedule = lambda n: cosine_decay_schedule(n, args.num_episode, 1e-1)
-
-	# Constant epsilon schedule (Japan: RL for 2D frame)
-	def constant_epsilon_schedule(num_episode: int, constant_epsilon: float=1e-1) -> float:
-		return constant_epsilon
-	fixed_epsilon_schedule = lambda n: constant_epsilon_schedule(n, 1e-1)
-
+	# Entropy weight decay
+	linear_decay_schedule = list(np.linspace(args.entropy_weight, 1e-3, args.train_episode_num))
+	constant_schedule = list(np.ones(args.train_episode_num) * args.entropy_weight)
+	entropy_weight_schedule = lambda episode: linear_decay_schedule[episode]
 
 	# Agent
 	node_feature_dim = 8 if args.add_geometry_feature else 5
@@ -180,26 +163,24 @@ def main(args):
 		"edge_feature_dim": edge_feature_dim,
 		"hidden_dim": args.hidden_dim,
 		"num_layers": args.layer_num,
-		"model_type": args.model_type,
-		"batch_size": args.batch_size,
-		"buffer_size": args.buffer_size,
-		"per_alpha": args.per_alpha,
-		"per_beta_annealing_schedule": beta_annealing_schedule,
 		"lr": args.lr,
+		"use_lr_scheduler": args.use_lr_scheduler,
 		"gamma": args.gamma,
-		"epsilon_decay_schedule": straight_decay_schedule,
-		"synchronize_steps": args.synchronize_steps,
-		"soft_update_alpha": args.soft_update_alpha,
-		"update_frequency": args.update_frequency,
-		"add_experience_frequency": args.add_experience_frequency,
-		"test_frequency": args.test_frequency,
-		"restrict_action": args.restrict_action,
+		"use_gae": args.use_gae,
+		"gae_tau": args.gae_tau,
+		"target_kl": args.target_kl,
+		"clip_eps": args.clip_eps,
+		"entropy_weight_schedule": entropy_weight_schedule,
+		"actor_loss_coef": args.actor_loss_coef,
+		"critic_loss_coef": args.critic_loss_coef,
+		"max_grad_norm": args.max_grad_norm,
+		"optimization_epoch": args.optimization_epoch,
 		"seed": args.random_seed,
 		"logger": logger,
-		"pretrained_ckpt_dir": args.pretrained_ckpt_dir,
-		"device": device,
+		"pretrained_model_path": None,
+		"device": device
 	}
-	agent_model = agent_DQN.DeepQAgent(**_agent_kwargs)
+	agent_model = agent_PPO.PPOAgent(**_agent_kwargs)
 
 	# Environment
 	_env_kwargs = {
@@ -207,7 +188,7 @@ def main(args):
 		"add_structure_geometry": args.add_geometry_feature,
 		"add_response_features": args.add_response_feature,
 		"reward_type": args.reward_type,
-		"scwb_driven_design": args.scwb_driven_design,
+		"scwb_driven_design": False,
 		"do_nonlinear_dynamic_analysis": args.do_nda,
 		"check_acceleration": args.check_acc,
 		"check_displacement": args.check_disp,
@@ -223,29 +204,48 @@ def main(args):
 
 	# Record
 	rec = record.Record(additional_info={
-		"learn_losses": [[]],
-		"Q_values": [[], []],  # Q_values[0] for training, Q_values[1] for testing
+		"returns": {"train": [], "test": []},  # shape: (episode_num, optimization_epoch, timestep_num)
+		"advantages": {"train": [], "test": []},  # shape: (episode_num, optimization_epoch, timestep_num)
+		"entropies": {"train": [], "test": []},  # shape: (episode_num, timestep_num)
+		"pred_values": [],  # shape: (episode_num, optimization_epoch, timestep_num)
+		"kl_divergences": [],  # shape: (episode_num, optimization_epoch)
+		"ratios": [],  # shape: (episode_num, optimization_epoch, timestep_num)
+		"losses": {"actor": [], "entropy": [], "critic": []},  # shape: (episode_num, optimization_epoch)
+		"grad_norms": {"gnn": [], "actor": [], "critic": []},  # shape: (episode_num, optimization_epoch)
+		"param_changes": {"gnn": [], "actor": [], "critic": []},  # shape: (episode_num)
 	})
 	
-	# Training the DeepQAgent using Double DQN
+	# Training
 	_train_kwargs = {
 		"agent": agent_model,
 		"env": env,
 		"rec": rec,
-		"number_episodes": args.num_episode,
+		"train_episode_num": args.train_episode_num,
+		"test_frequency": args.test_frequency,
+		"test_episode_num": args.test_episode_num,
 		"logger": logger,
 	}
-	agent_DQN.train(**_train_kwargs)
+	agent_PPO.train(**_train_kwargs)
 
 	logger.critical(f"Minimum Material Usage: {np.min(rec.testing_record['final_volume']):.3f} m3, Story Level Sections: {rec.testing_record['final_design'][np.argmin(rec.testing_record['final_volume'])]}")
 	logger.critical(f"Highest Score: {np.max(rec.testing_record['score']):.3f}, Story Level Sections: {rec.testing_record['final_design'][np.argmax(rec.testing_record['score'])]}")
 
+	# Visualization
 	plot.plot_reward(rec.training_record["score"], rec.testing_record["score"], args.ckpt_dir)
-	plot.plot_loss(rec.learn_losses, args.ckpt_dir)
-	plot.plot_Qvalues(rec.Q_values, args.ckpt_dir)
 	plot.plot_fail_names(rec.training_record["fail_name"], rec.testing_record["fail_name"], args.ckpt_dir)
 	plot.plot_fail_reasons(rec.training_record["fail_reason"], rec.testing_record["fail_reason"], args.ckpt_dir)	
 	plot.plot_test_behaviors(rec, env, args.ckpt_dir)
+
+	plot_PPO.plot_advantage(rec.advantages, args.ckpt_dir)
+	plot_PPO.plot_entropy(rec.entropies, args.ckpt_dir)
+	plot_PPO.plot_explained_variance(rec.returns["train"], rec.pred_values, args.ckpt_dir)
+	plot_PPO.plot_kl_divergence(rec.kl_divergences, args.target_kl, args.ckpt_dir)
+	plot_PPO.plot_clip_fraction(rec.ratios, args.clip_eps, args.ckpt_dir)
+	plot_PPO.plot_loss(rec.losses["actor"], "actor", args.ckpt_dir)
+	plot_PPO.plot_loss(rec.losses["entropy"], "entropy", args.ckpt_dir)
+	plot_PPO.plot_loss(rec.losses["critic"], "critic", args.ckpt_dir)
+	plot_PPO.plot_grad_norm(rec.grad_norms, args.ckpt_dir)
+	plot_PPO.plot_param_change(rec.param_changes, args.ckpt_dir)
 
 
 
@@ -253,4 +253,3 @@ def main(args):
 if __name__ == "__main__":
 	args = parse_args()
 	main(args)
-

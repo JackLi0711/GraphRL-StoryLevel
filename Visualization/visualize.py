@@ -15,7 +15,7 @@ from copy import deepcopy
 from sklearn.manifold import TSNE
 from torch_geometric.loader import DataLoader
 
-from RL import agent, environment
+from RL import agent_DQN, environment
 from Structure import structure, pisa
 from Structure.sections import beam_sections, column_sections
 
@@ -287,7 +287,7 @@ def _frames_to_video(ckpt_dir: Path,
     frame_one.save(ckpt_dir / animation_name, format="GIF", append_images=frames, save_all=True, duration=frame_duration_ms, loop=0)
 
 
-def visualize_design_process(agent: agent.DeepQAgent, 
+def visualize_design_process(agent: agent_DQN.DeepQAgent, 
                              env: environment.Environment, 
                              logger: Logger, 
                              save_model_path: Path, 

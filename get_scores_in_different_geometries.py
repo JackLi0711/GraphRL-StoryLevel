@@ -14,7 +14,7 @@ sys.path.append("RL/")
 sys.path.append("Structure/")
 sys.path.append("NonlinearDynamicAnalysisSimulator/")
 
-from RL import agent, environment, new_strategy, record
+from RL import agent_DQN, environment, new_strategy, record
 from Structure.sections import beam_sections, column_sections
 from Structure.structure import Structure
 from Structure import pisa, check
@@ -25,42 +25,48 @@ def parse_args() -> Namespace:
 	parser = ArgumentParser()
  
 	# trained model path
-	# without doNDA: "./Results/AdjustedSections/2023_05_06__21_36_03__3d_storyLevel_random_shape_addYfeature_epoch_1000_buffer_10000_batch_size_256_gamma_099/model.pt"
-	# with doNDA: "./Results/AdjustedSections/2023_05_07__11_39_51__3d_storyLevel_random_shape_doNDA_addYfeature_epoch_1000_buffer_10000_batch_size_256_gamma_099/model.pt"
-	parser.add_argument("--trained_model_path", type=Path, default="./Results/AdjustedMoreSections/RandomShape/OpenSees_RSA/2025_06_05__21_45_28__TaiModifiedModel_MatReward_StaResFeatures_SoftUpdate_LinearDecay010_Buffer10000_Batch256_Epoch1000/models/model_HighestScore.pt")
+	parser.add_argument("--trained_model_path", type=Path, 
+		default="./Results/AdjustedMoreSections/RandomShape/OpenSees_RSA/2025_06_05__21_45_28__TaiModifiedModel_MatReward_StaResFeatures_SoftUpdate_LinearDecay010_Buffer10000_Batch256_Epoch1000/models/model_HighestScore.pt"
+	)
 	# checkpoint directory
-	parser.add_argument("--ckpt_dir", type=Path, default="./Results/AdjustedMoreSections/RandomShape/OpenSees_RSA/2025_06_05__21_45_28__TaiModifiedModel_MatReward_StaResFeatures_SoftUpdate_LinearDecay010_Buffer10000_Batch256_Epoch1000")
+	parser.add_argument("--ckpt_dir", type=Path, 
+		default="./Results/AdjustedMoreSections/RandomShape/OpenSees_RSA/2025_06_05__21_45_28__TaiModifiedModel_MatReward_StaResFeatures_SoftUpdate_LinearDecay010_Buffer10000_Batch256_Epoch1000"
+	)
 
 	# chances
 	parser.add_argument("--chances", type=int, default=0)
 
 	# nonlinear dynamic analysis simulator
-	parser.add_argument("--do_nonlinear_dynamic_analysis", action="store_true", default=False)
-	parser.add_argument("--check_acceleration", action="store_true", default=False)
-	parser.add_argument("--check_displacement", action="store_true", default=True)
-	# RelAcc: "./NonlinearDynamicAnalysisSimulator/trained_GraphLSTM/2023_07_20__15_43_32/"
-	# AbsAcc: "./NonlinearDynamicAnalysisSimulator/trained_GraphLSTM/2023_07_20__22_46_09/"
-	parser.add_argument("--graph_lstm_dir", type=Path, default=None)  # "./NonlinearDynamicAnalysisSimulator/trained_GraphLSTM/2025_05_19__22_59_28/"
-	parser.add_argument("--ground_motion_dir", type=Path, default=None)  # "./NonlinearDynamicAnalysisSimulator/ground_motions/selected_ground_motions_World_processed_one_scaling_MCE/"
-	parser.add_argument("--ground_motion_number", type=int, default=11, help="ASCE says 11 is better")
+	parser.add_argument("--do_nda", action="store_true", default=False)
+	parser.add_argument("--check_acc", action="store_true", default=False)
+	parser.add_argument("--check_disp", action="store_true", default=True)
+	parser.add_argument("--graph_lstm_dir", type=Path, 
+		default=None  # "./NonlinearDynamicAnalysisSimulator/trained_GraphLSTM/2025_05_19__22_59_28/"
+	)
+	parser.add_argument("--gm_dir", type=Path, 
+		default=None  # "./NonlinearDynamicAnalysisSimulator/ground_motions/selected_ground_motions_World_processed_one_scaling_MCE/"
+	)
+	parser.add_argument("--gm_num", type=int, default=11, help="ASCE says 11 is better")
 
 	# structure
-	parser.add_argument("--structure_shape", type=str, default="random", help="fixed, small_random, random")
-	parser.add_argument("--add_structure_geometry", action="store_true", default=True)
-	parser.add_argument("--add_response_features", action="store_true", default=True)
-	parser.add_argument("--reward_type", type=str, default="material", help="material, acceleration, displacement, normalized, total, combined")
+	parser.add_argument("--structure_shape", type=str, default="random", choices=["fixed", "small_random", "random"])
+	parser.add_argument("--add_geometry_feature", action="store_true", default=True)
+	parser.add_argument("--add_response_feature", action="store_true", default=True)
+	parser.add_argument("--reward_type", type=str, default="material", choices=["material", "acceleration", "displacement", "normalized", "total", "combined"])
 	parser.add_argument("--restrict_action", action="store_true", default=False)
 	parser.add_argument("--scwb_driven_design", action="store_true", default=False)
 
 	# model
-	parser.add_argument("--model_type", type=str, default="Taiwan", help="Taiwan, Japan")
+	parser.add_argument("--model_type", type=str, default="Dueling", choices=["Vanilla", "Dueling"])
 	parser.add_argument("--hidden_dim", type=int, default=100)
-	parser.add_argument("--num_layers", type=int, default=3)
+	parser.add_argument("--layer_num", type=int, default=3)
 
 	# buffer
 	parser.add_argument("--buffer_size", type=int, default=10000)
 	parser.add_argument("--update_frequency", type=int, default=1)
 	parser.add_argument("--add_experience_frequency", type=int, default=1)
+	parser.add_argument("--per_alpha", type=float, default=1.0, help="0.0: uniform sampling / 1.0: full prioritized sampling")
+	parser.add_argument("--per_beta_rate", type=float, default=0.005)
 
 	# training
 	parser.add_argument("--gamma", type=float, default=0.99, help="discount factor, 1.0, 0.99, 0.9")
@@ -70,8 +76,8 @@ def parse_args() -> Namespace:
 	parser.add_argument("--test_frequency", type=int, default=5)
 	parser.add_argument("--batch_size", type=int, default=256)
 	parser.add_argument("--lr", type=float, default=1e-5)
-	parser.add_argument("--num_epoch", type=int, default=1000, help="epoch == episode")
-	parser.add_argument("--random_seed", type=int, default=731, help="fixed random seed")
+	parser.add_argument("--num_episode", type=int, default=1000)
+	parser.add_argument("--random_seed", type=int, default=731)
 
 	args = parser.parse_args()
 	return args
@@ -125,55 +131,57 @@ def main(args):
 	nda_norm_dict = None
 	DBE_ground_motion_set = None
 	MCE_ground_motion_set = None
-	if args.do_nonlinear_dynamic_analysis:
+	if args.do_nda:
 		nda_simulator, nda_norm_dict = load_simulator.load_nonlinear_dynamic_analysis_simulator(args.graph_lstm_dir, device)
-		DBE_ground_motion_set, MCE_ground_motion_set = load_simulator.load_ground_motions(args.ground_motion_dir, args.ground_motion_number, nda_norm_dict)
+		DBE_ground_motion_set, MCE_ground_motion_set = load_simulator.load_ground_motions(args.gm_dir, args.gm_num, nda_norm_dict)
 
 
 	# Beta-annealing schedule
-	def exponential_annealing_schedule(n, rate=0.02):
-		return 1 - np.exp(-rate * n)
-	beta_annealing_schedule = lambda n: exponential_annealing_schedule(n, 0.02)
+	def exponential_annealing_schedule(num_episode, rate=0.02):
+		return 1 - np.exp(-rate * num_episode)  # 0.0: no correction in the beginning / 1.0: full correction in the end
+	beta_annealing_schedule = lambda n: exponential_annealing_schedule(n, args.per_beta_rate)
 
-	# Power-decay schedule
-	def power_decay_schedule(episode_number: int, decay_factor: float, minimum_epsilon: float=1e-2) -> float:
-		"""Power decay schedule found in other practical applications."""
-		return max(decay_factor ** episode_number, minimum_epsilon)
+	# Power decay schedule
+	def power_decay_schedule(num_episode: int, decay_factor: float, minimum_epsilon: float=1e-2) -> float:
+		return max(decay_factor ** num_episode, minimum_epsilon)
 	epsilon_decay_schedule = lambda n: power_decay_schedule(n, args.epsilon, 1e-2)
 
-	# Linear-decay schedule
-	def linear_decay_schedule(episode_number: int, total_episode: int, minimum_epsilon: float=1e-1) -> float:
-		return max(1.0 - episode_number/total_episode, minimum_epsilon)
-	straight_decay_schedule = lambda n: linear_decay_schedule(n, args.num_epoch, 1e-1)
+	# Linear decay schedule
+	def linear_decay_schedule(num_episode: int, total_episode: int, minimum_epsilon: float=1e-1) -> float:
+		return max(1.0 - num_episode/total_episode, minimum_epsilon)
+	straight_decay_schedule = lambda n: linear_decay_schedule(n, args.num_episode, 1e-1)
 
-	# Cosine-decay schedule
-	def cosine_decay_schedule(episode_number: int, total_episode: int, minimum_epsilon: float=1e-1) -> float:
-		linear_decay = 1.0 - episode_number / total_episode
-		cosine_decay =  0.75 * linear_decay + 0.25 * linear_decay * np.cos(np.pi / 100 * episode_number)
+	# Cosine decay schedule
+	def cosine_decay_schedule(num_episode: int, total_episode: int, minimum_epsilon: float=1e-1) -> float:
+		linear_decay = 1.0 - num_episode / total_episode
+		cosine_decay = 0.75 * linear_decay + 0.25 * linear_decay * np.cos(np.pi / 100 * num_episode)
 		return max(cosine_decay, minimum_epsilon)
-	periodic_decay_schedule = lambda n: cosine_decay_schedule(n, args.num_epoch, 1e-1)
+	periodic_decay_schedule = lambda n: cosine_decay_schedule(n, args.num_episode, 1e-1)
 
-	# Constant-epsilon schedule (Japan: RL for 2D frame)
-	def constant_epsilon_schedule(episode_number: int, constant_epsilon: float=1e-1) -> float:
+	# Constant epsilon schedule (Japan: RL for 2D frame)
+	def constant_epsilon_schedule(num_episode: int, constant_epsilon: float=1e-1) -> float:
 		return constant_epsilon
 	fixed_epsilon_schedule = lambda n: constant_epsilon_schedule(n, 1e-1)
 
 
 	# Agent
-	node_feature_dim = 8 if args.add_structure_geometry else 5
-	edge_feature_dim = 13 if args.add_response_features else 11
+	node_feature_dim = 8 if args.add_geometry_feature else 5
+	edge_feature_dim = 13 if args.add_response_feature else 11
 	_agent_kwargs = {
 		"node_feature_dim": node_feature_dim,
 		"edge_feature_dim": edge_feature_dim,
 		"hidden_dim": args.hidden_dim,
-		"num_layers": args.num_layers,
+		"num_layers": args.layer_num,
+		"model_type": args.model_type,
 		"batch_size": args.batch_size,
-		"lr": args.lr,
 		"buffer_size": args.buffer_size,
+		"per_alpha": args.per_alpha,
+		"per_beta_annealing_schedule": beta_annealing_schedule,
+		"lr": args.lr,
+		"gamma": args.gamma,
 		"epsilon_decay_schedule": straight_decay_schedule,
 		"synchronize_steps": args.synchronize_steps,
 		"soft_update_alpha": args.soft_update_alpha,
-		"gamma": args.gamma,
 		"update_frequency": args.update_frequency,
 		"add_experience_frequency": args.add_experience_frequency,
 		"test_frequency": args.test_frequency,
@@ -183,21 +191,18 @@ def main(args):
 		"pretrained_ckpt_dir": args.trained_model_path,
 		"device":device,
 	}
-	if args.model_type == "Taiwan":
-		double_dqn_agent = agent.DeepQAgent(**_agent_kwargs)
-	elif args.model_type == "Japan":
-		double_dqn_agent = agent.JapanDeepQAgent(**_agent_kwargs)
+	agent_model = agent_DQN.DeepQAgent(**_agent_kwargs)
 
 	# Environment
 	_env_kwargs = {
 		"structure_shape": args.structure_shape,
-		"add_structure_geometry": args.add_structure_geometry,
-		"add_response_features": args.add_response_features,
+		"add_structure_geometry": args.add_geometry_feature,
+		"add_response_features": args.add_response_feature,
 		"reward_type": args.reward_type,
 		"scwb_driven_design": args.scwb_driven_design,
-		"do_nonlinear_dynamic_analysis": args.do_nonlinear_dynamic_analysis,
-		"check_acceleration": args.check_acceleration,
-		"check_displacement": args.check_displacement,
+		"do_nonlinear_dynamic_analysis": args.do_nda,
+		"check_acceleration": args.check_acc,
+		"check_displacement": args.check_disp,
 		"nda_simulator": nda_simulator,
 		"nda_norm_dict": nda_norm_dict,
 		"DBE_ground_motion_set": DBE_ground_motion_set,
@@ -246,7 +251,7 @@ def main(args):
 					# go through gnn and get embedding before q-network
 					with torch.no_grad():
 						graph = graph.to(device)
-						state = double_dqn_agent.gnn(graph.x, graph.edge_index, graph.edge_attr, None, structure.aux["story_batch"].to(device), None)
+						state = agent_model.gnn(graph.x, graph.edge_index, graph.edge_attr, None, structure.aux["story_batch"].to(device), None)
 
 					# select action and update structure
 					# print(f"original minimum: {structure.already_minimum_section_story_indexes}")
@@ -256,8 +261,8 @@ def main(args):
 					# print(f"out col: {structure.story_outer_column_section}")
 					# print(f"in col: {structure.story_inner_column_section}")
 
-					dont_select_story_member_indexes = structure.restrict_action_space() if double_dqn_agent.restrict_action else []
-					action, _ = double_dqn_agent.choose_action(state, 
+					dont_select_story_member_indexes = structure.restrict_action_space() if agent_model.restrict_action else []
+					action, _ = agent_model.choose_action(state, 
 															   structure.already_minimum_section_story_indexes, 
 															   dont_select_story_member_indexes,
 															   greedy=True)
@@ -291,7 +296,7 @@ def main(args):
 						print(f"out col: {structure.story_outer_column_section}")
 						print(f"in col: {structure.story_inner_column_section}")
 
-						if double_dqn_agent.restrict_action:
+						if agent_model.restrict_action:
 							dont_select = list(set(dont_select_during_cahnce_loop + structure.already_minimum_section_story_indexes + structure.restrict_action_space()))
 						else: 
 							dont_select = list(set(dont_select_during_cahnce_loop + structure.already_minimum_section_story_indexes))
@@ -300,11 +305,11 @@ def main(args):
 							done = True
 							break
 							
-						dont_select_story_member_indexes = structure.restrict_action_space() if double_dqn_agent.restrict_action else []
-						action, _ = double_dqn_agent.choose_action(state, 
-												 				   dont_select, 
-																   dont_select_story_member_indexes,
-																   greedy=True)
+						dont_select_story_member_indexes = structure.restrict_action_space() if agent_model.restrict_action else []
+						action, _ = agent_model.choose_action(state, 
+												 			  dont_select, 
+														      dont_select_story_member_indexes,
+													   	      greedy=True)
 						structure, reward, done, fail_name, fail_reason = env.step(structure, action)
 						chances -= 1
 						
@@ -315,7 +320,7 @@ def main(args):
 					logger.info(f"timestep: {timestep}, accumulated_reward: {accumulated_reward}\n")
 
 					# if can't select anymore, then stop
-					if double_dqn_agent.restrict_action:
+					if agent_model.restrict_action:
 						dont_select = list(set(structure.already_minimum_section_story_indexes + structure.restrict_action_space()))
 					else: 
 						dont_select = list(set(structure.already_minimum_section_story_indexes))

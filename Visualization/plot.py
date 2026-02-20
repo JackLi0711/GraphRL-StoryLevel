@@ -21,6 +21,7 @@ def plot_reward(train_scores: List[float], test_scores: List[float], checkpoint_
     plt.ylabel("cumulative reward", fontsize=16)
     plt.xticks(fontsize=14)
     plt.yticks(fontsize=14)
+    plt.tight_layout()
     plt.savefig(checkpoint_dir / "reward.png")
     plt.close()
 
@@ -33,6 +34,7 @@ def plot_loss(learn_losses: List[List[float]], checkpoint_dir: Path) -> None:
     plt.yscale("log")
     plt.xlabel("trained episodes")
     plt.ylabel("average batch loss")
+    plt.tight_layout()
     plt.savefig(checkpoint_dir / "loss.png")
     plt.close()
 
@@ -50,6 +52,7 @@ def plot_Qvalues(Q_values: List[List[float]], checkpoint_dir: Path) -> None:
     plt.xlabel("trained episodes")
     plt.ylabel("Q value")
     plt.legend(loc="best")
+    plt.tight_layout()
     plt.savefig(checkpoint_dir / "q_vals.png")
     plt.close()
 
@@ -63,7 +66,6 @@ def plot_fail_names(train_fail_names: List[str], test_fail_names: List[str], che
             train_names[name] += 1
         else:
             train_names[name] = 1
-    
     for name in test_fail_names:
         if name == None: name = "none"
         if name in test_names:
@@ -72,13 +74,11 @@ def plot_fail_names(train_fail_names: List[str], test_fail_names: List[str], che
             test_names[name] = 1
     
     fig, axs = plt.subplots(1, 2, figsize=(15, 5))
-
     axs[0].bar(train_names.keys(), train_names.values())
     axs[0].set_title("training fail names")
-
     axs[1].bar(test_names.keys(), test_names.values())
     axs[1].set_title("testing fail names")
-
+    plt.tight_layout()
     plt.savefig(checkpoint_dir / "fail_names.png")
     plt.close()
 
@@ -95,7 +95,6 @@ def plot_fail_reasons(train_fail_reasons: List[str], test_fail_reasons: List[str
             train_reasons[reason] += 1
         else:
             train_reasons[reason] = 1
-    
     for reason in test_fail_reasons:
         if reason in test_reasons:
             test_reasons[reason] += 1
@@ -103,13 +102,11 @@ def plot_fail_reasons(train_fail_reasons: List[str], test_fail_reasons: List[str
             test_reasons[reason] = 1
     
     fig, axs = plt.subplots(1, 2, figsize=(15, 5))
-
     axs[0].bar(train_reasons.keys(), train_reasons.values())
     axs[0].set_title("training fail reasons")
-
     axs[1].bar(test_reasons.keys(), test_reasons.values())
     axs[1].set_title("testing fail reasons")
-
+    plt.tight_layout()
     plt.savefig(checkpoint_dir / "fail_reasons.png")
     plt.close()
 

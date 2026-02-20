@@ -51,13 +51,16 @@ class DeepQAgent(Agent):
                  edge_feature_dim: int,
                  hidden_dim: int,
                  num_layers: int,
+                 model_type: str,
                  batch_size: int,
-                 lr: float,
                  buffer_size: int,
+                 per_alpha: float,
+                 per_beta_annealing_schedule: Callable[[int], float],
+                 lr: float,
+                 gamma: float,
                  epsilon_decay_schedule: Callable[[int], float],
                  synchronize_steps: float,
                  soft_update_alpha: float,
-                 gamma: float,
                  update_frequency: int,
                  add_experience_frequency: int,
                  test_frequency: int = 5,
@@ -103,11 +106,12 @@ class DeepQAgent(Agent):
         _replay_buffer_kwargs = {
             "batch_size": batch_size,
             "buffer_size": buffer_size,
-            "prioritized_alpha": 1.0,  # 0.0: uniform sampling, 1.0: fully prioritized
+            "prioritized_alpha": per_alpha,  # 0.0: uniform sampling, 1.0: fully prioritized
             "random_state": self._random_state,
             "logger": self.logger
         }
         self._buffer = buffer.PrioritizedExperienceReplayBuffer(**_replay_buffer_kwargs)
+        self._per_beta_annealing_schedule = per_beta_annealing_schedule
         
         # initialize GNN
         model_kwargs = {"node_feature_dim": node_feature_dim, "edge_feature_dim": edge_feature_dim, "hidden_dim": hidden_dim, "member_state_dim": hidden_dim, "num_layers": num_layers}
@@ -116,8 +120,14 @@ class DeepQAgent(Agent):
 
         # initialize Q-Networks
         q_net_kwargs = {"member_state_dim": hidden_dim * 2, "hidden_dim": hidden_dim, "q_value_dim": 1}
-        self.online_q_network = model.Q_Network(**q_net_kwargs).to(self.device)
-        self.target_q_network = model.Q_Network(**q_net_kwargs).to(self.device)
+        if model_type == "Vanilla":
+            self.online_q_network = model.Q_Network(**q_net_kwargs).to(self.device)
+            self.target_q_network = model.Q_Network(**q_net_kwargs).to(self.device)
+        elif model_type == "Dueling":
+            self.online_q_network = model.Dueling_Q_Network(**q_net_kwargs).to(self.device)
+            self.target_q_network = model.Dueling_Q_Network(**q_net_kwargs).to(self.device)
+        else: 
+            raise ValueError(f"Unsupported model_type: {model_type}")
         synchronize_q_networks(self.target_q_network, self.online_q_network)
         self.logger.critical(f"online_q_network: \n{self.online_q_network}")
 
@@ -351,7 +361,7 @@ class DeepQAgent(Agent):
             # update frequently so that the agent can learn from experiences
             if self._number_timesteps % self._update_frequency == 0 and self._has_sufficient_experience():
                 # sample a batch of experiences and perform loss backpropagation
-                beta = 1 - np.exp(-0.005 * self._number_episodes)  # 0.0: no correction in the beginning, 1.0: full correction in the end
+                beta = self._per_beta_annealing_schedule(self._number_episodes)  # 0.0: no correction in the beginning / 1.0: full correction in the end
                 sampled_idxs, experiences, normalized_weights = self._buffer.sample(bias_correcting_beta=beta)
                 print(f"normalized_weights min: {np.min(normalized_weights)}, mean: {np.mean(normalized_weights)}, std: {np.std(normalized_weights)}, max: {np.max(normalized_weights)}")
                 

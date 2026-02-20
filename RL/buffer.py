@@ -72,8 +72,6 @@ class ExperienceReplayBuffer:
         return experiences
 
 
-
-
 class PrioritizedExperienceReplayBuffer:
     """Fixed-size buffer to store priority, Experience tuples."""
     def __init__(self,
@@ -172,3 +170,33 @@ class PrioritizedExperienceReplayBuffer:
         """Update the priorities associated with particular experiences."""
         self._buffer["priority"][idxs] = priorities
         print(f"mean priority: {np.mean(self._buffer['priority'])}")
+
+
+
+
+class RolloutBuffer:
+    """Fixed-size buffer to store experience collected during a single episode/rollout."""
+    def __init__(self, buffer_size: int = None) -> None:
+        self._buffer_size = buffer_size
+        self.keys = [
+            "graph", 
+            "logits", "value", "entropy", "action", "log_prob",  
+            "next_graph", "reward", "done", 
+            "infeasible_actions", "aux"
+        ]
+        self.reset()
+
+
+    def __len__(self) -> int:
+        return len(self.graph)
+    
+
+    def store(self, transition: dict) -> None:
+        for k, v in transition.items():
+            if k not in self.keys:
+                raise KeyError(f"Key {k} not recognized in RolloutBuffer.")
+            getattr(self, k).append(v)     
+
+    def reset(self) -> None:
+        for key in self.keys:
+            setattr(self, key, [])
