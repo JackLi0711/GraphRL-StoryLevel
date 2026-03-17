@@ -26,7 +26,6 @@ def parse_args() -> Namespace:
 	# comment
 	parser.add_argument("--comment", type=list[str], default=[
 		"reward 0 for the fail action",
-		"entropy weight linear decay (1e-2 to 1e-3)",
 		"testing with argmax",
 		"mask logits first before softmax",
 		"no consider target KL for early stopping", 
@@ -40,18 +39,20 @@ def parse_args() -> Namespace:
 		default="./Results/AdjustedMoreSections/RandomShape/OpenSees_RSA"
 	)
 	parser.add_argument("--suffix", type=str, 
-		default="PPO_MatReward_UseGAE095_LR5e-4_ActLossCoef10_CriLossCoef001_EntroWeiLinDecay_OptimEpoch5_Episode2000"
+		default="PPO_MatReward_doNDA_UseGAE095_LR5e-4_ActLossCoef10_CriLossCoef001_EntroWei01to001_OptimEpoch5_Episode1000"
 	)
 	
     # nonlinear dynamic analysis simulator
-	parser.add_argument("--do_nda", action="store_true", default=False)
+	parser.add_argument("--do_nda", action="store_true", default=True)
 	parser.add_argument("--check_acc", action="store_true", default=False)
 	parser.add_argument("--check_disp", action="store_true", default=True)
 	parser.add_argument("--graph_lstm_dir", type=Path, 
-		default=None  # "./NonlinearDynamicAnalysisSimulator/trained_GraphLSTM/2025_05_19__22_59_28/"
+		# "./NonlinearDynamicAnalysisSimulator/trained_GraphLSTM/2025_05_19__22_59_28/"
+		default="./NonlinearDynamicAnalysisSimulator/trained_GraphLSTM/2025_05_19__22_59_28/"
 	)  
 	parser.add_argument("--gm_dir", type=Path, 
-		default=None  # "./NonlinearDynamicAnalysisSimulator/ground_motions/selected_ground_motions_World_processed_one_scaling_MCE/"
+		# "./NonlinearDynamicAnalysisSimulator/ground_motions/selected_ground_motions_World_processed_one_scaling_MCE/"
+		default="./NonlinearDynamicAnalysisSimulator/ground_motions/selected_ground_motions_World_processed_one_scaling_MCE/"  
 	)
 	parser.add_argument("--gm_num", type=int, default=11, help="ASCE says 11 is better")
 	
@@ -73,13 +74,14 @@ def parse_args() -> Namespace:
 	parser.add_argument("--gae_tau", type=float, default=0.95, help="0.9 ~ 0.97 is recommended")
 	parser.add_argument("--target_kl", type=float, default=0.02)
 	parser.add_argument("--clip_eps", type=float, default=0.2)
-	parser.add_argument("--entropy_weight", type=float, default=0.01)
+	parser.add_argument("--entropy_weight_interval", type=list[float], default=[1e-1, 1e-2], help="[start, end]")
+	parser.add_argument("--entropy_weight_schedule", type=str, default="linear", choices=["linear", "constant"])
 	parser.add_argument("--actor_loss_coef", type=float, default=10.0)
 	parser.add_argument("--critic_loss_coef", type=float, default=0.01)
 	parser.add_argument("--max_grad_norm", type=float, default=None)
 	parser.add_argument("--optimization_epoch", type=int, default=5)
-	parser.add_argument("--test_frequency", type=int, default=10)
-	parser.add_argument("--train_episode_num", type=int, default=2000)
+	parser.add_argument("--test_frequency", type=int, default=5)
+	parser.add_argument("--train_episode_num", type=int, default=1000)
 	parser.add_argument("--test_episode_num", type=int, default=1)
 	parser.add_argument("--random_seed", type=int, default=731)
 	
@@ -99,7 +101,7 @@ def set_random_seed(SEED: int):
 
 
 def get_loggings(ckpt_dir):
-	logger = logging.getLogger(name='Graph-RL')
+	logger = logging.getLogger(name='GraphRL')
 	logger.setLevel(level=logging.INFO)
 	# set formatter
 	formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -151,9 +153,13 @@ def main(args):
 		DBE_ground_motion_set, MCE_ground_motion_set = load_simulator.load_ground_motions(args.gm_dir, args.gm_num, nda_norm_dict)
 
 	# Entropy weight decay
-	linear_decay_schedule = list(np.linspace(args.entropy_weight, 1e-3, args.train_episode_num))
-	constant_schedule = list(np.ones(args.train_episode_num) * args.entropy_weight)
-	entropy_weight_schedule = lambda episode: linear_decay_schedule[episode]
+	if args.entropy_weight_schedule == "linear":
+		schedule = list(np.linspace(args.entropy_weight_interval[0], args.entropy_weight_interval[1], args.train_episode_num))
+	elif args.entropy_weight_schedule == "constant":
+		schedule = list(np.ones(args.train_episode_num) * args.entropy_weight_interval[0])
+	else: 
+		raise ValueError(f"Invalid entropy weight schedule: {args.entropy_weight_schedule}")
+	entropy_weight_schedule = lambda episode: schedule[episode]
 
 	# Agent
 	node_feature_dim = 8 if args.add_geometry_feature else 5

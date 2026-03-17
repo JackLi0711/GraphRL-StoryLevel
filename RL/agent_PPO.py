@@ -63,6 +63,7 @@ class PPOAgent(Agent):
                  pretrained_model_path: str = None,
                  device = "cpu", 
         ):
+        self.restrict_action = False
         self.logger = logger
         self.device = device
         
@@ -86,8 +87,8 @@ class PPOAgent(Agent):
         params_actor = list(self.actor_critic_network.actor.parameters())
         params_critic = list(self.actor_critic_network.critic.parameters())
         self.optimizer = optim.Adam(params_gnn+params_actor+params_critic, lr=lr)
-        if use_lr_scheduler:
-            self.use_lr_scheduler = True
+        self.use_lr_scheduler = use_lr_scheduler
+        if self.use_lr_scheduler:
             # self.lr_scheduler = optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, mode='min', factor=0.5, patience=10, verbose=True)
             self.lr_scheduler = optim.lr_scheduler.LambdaLR(self.optimizer, lambda current_episode: 1 - current_episode / 2000, verbose=True)
 
@@ -296,10 +297,11 @@ class PPOAgent(Agent):
 
 
     def load_model(self, model_path: str) -> None:
+        # theta_1, theta_2, theta_3, actor_critic_network
         checkpoint = torch.load(model_path, map_location=torch.device(self.device))
         self.gnn.load_state_dict(checkpoint['gnn'])
         self.actor_critic_network.load_state_dict(checkpoint['actor_critic'])
-        self.logger.critical(f"Loaded model from {model_path}")
+        self.logger.critical(f"model are loaded from {model_path}")
 
 
 
