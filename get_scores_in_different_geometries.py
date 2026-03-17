@@ -7,17 +7,9 @@ from pathlib import Path
 from copy import deepcopy
 from argparse import ArgumentParser, Namespace
 
-import os
-os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
-import sys
-sys.path.append("RL/")
-sys.path.append("Structure/")
-sys.path.append("NonlinearDynamicAnalysisSimulator/")
-
-from RL import agent_DQN, environment, new_strategy, record
-from Structure.sections import beam_sections, column_sections
 from Structure.structure import Structure
-from Structure import pisa, check
+from Structure.sections import beam_sections, column_sections
+from RL import agent_DQN, environment, record
 from NonlinearDynamicAnalysisSimulator import load_simulator
 
 
@@ -26,38 +18,40 @@ def parse_args() -> Namespace:
  
 	# trained model path
 	parser.add_argument("--trained_model_path", type=Path, 
-		default="./Results/AdjustedMoreSections/RandomShape/OpenSees_RSA/2025_06_05__21_45_28__TaiModifiedModel_MatReward_StaResFeatures_SoftUpdate_LinearDecay010_Buffer10000_Batch256_Epoch1000/models/model_HighestScore.pt"
+		default="./Results/AdjustedMoreSections/RandomShape/OpenSees_RSA/DQN_Experiment_Jack/2026_02_01__23_28_10__DouDQN_MatReward_SoftUpdate_DoNDA_LinearDecay010_Buffer10000_Batch256_Epoch1000/models/model_HighestScore.pt"
 	)
 	# checkpoint directory
 	parser.add_argument("--ckpt_dir", type=Path, 
-		default="./Results/AdjustedMoreSections/RandomShape/OpenSees_RSA/2025_06_05__21_45_28__TaiModifiedModel_MatReward_StaResFeatures_SoftUpdate_LinearDecay010_Buffer10000_Batch256_Epoch1000"
+		default="./Results/AdjustedMoreSections/RandomShape/OpenSees_RSA/DQN_Experiment_Jack/2026_02_01__23_28_10__DouDQN_MatReward_SoftUpdate_DoNDA_LinearDecay010_Buffer10000_Batch256_Epoch1000"
 	)
 
 	# chances
 	parser.add_argument("--chances", type=int, default=0)
 
 	# nonlinear dynamic analysis simulator
-	parser.add_argument("--do_nda", action="store_true", default=False)
+	parser.add_argument("--do_nda", action="store_true", default=True)
 	parser.add_argument("--check_acc", action="store_true", default=False)
 	parser.add_argument("--check_disp", action="store_true", default=True)
 	parser.add_argument("--graph_lstm_dir", type=Path, 
-		default=None  # "./NonlinearDynamicAnalysisSimulator/trained_GraphLSTM/2025_05_19__22_59_28/"
+		# "./NonlinearDynamicAnalysisSimulator/trained_GraphLSTM/2025_05_19__22_59_28/"
+		default="./NonlinearDynamicAnalysisSimulator/trained_GraphLSTM/2025_05_19__22_59_28/"
 	)
 	parser.add_argument("--gm_dir", type=Path, 
-		default=None  # "./NonlinearDynamicAnalysisSimulator/ground_motions/selected_ground_motions_World_processed_one_scaling_MCE/"
+		# "./NonlinearDynamicAnalysisSimulator/ground_motions/selected_ground_motions_World_processed_one_scaling_MCE/"
+		default="./NonlinearDynamicAnalysisSimulator/ground_motions/selected_ground_motions_World_processed_one_scaling_MCE/"
 	)
 	parser.add_argument("--gm_num", type=int, default=11, help="ASCE says 11 is better")
 
 	# structure
 	parser.add_argument("--structure_shape", type=str, default="random", choices=["fixed", "small_random", "random"])
 	parser.add_argument("--add_geometry_feature", action="store_true", default=True)
-	parser.add_argument("--add_response_feature", action="store_true", default=True)
+	parser.add_argument("--add_response_feature", action="store_true", default=False)
 	parser.add_argument("--reward_type", type=str, default="material", choices=["material", "acceleration", "displacement", "normalized", "total", "combined"])
 	parser.add_argument("--restrict_action", action="store_true", default=False)
 	parser.add_argument("--scwb_driven_design", action="store_true", default=False)
 
 	# model
-	parser.add_argument("--model_type", type=str, default="Dueling", choices=["Vanilla", "Dueling"])
+	parser.add_argument("--model_type", type=str, default="Vanilla", choices=["Vanilla", "Dueling"])
 	parser.add_argument("--hidden_dim", type=int, default=100)
 	parser.add_argument("--layer_num", type=int, default=3)
 
@@ -95,7 +89,7 @@ def set_random_seed(SEED: int):
 
 
 def get_loggings(ckpt_dir, chances):
-	logger = logging.getLogger(name='Graph-RL')
+	logger = logging.getLogger(name='GraphRL')
 	logger.setLevel(level=logging.INFO)
 	# set formatter
 	formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -113,20 +107,19 @@ def get_loggings(ckpt_dir, chances):
 
 
 def main(args):
-	# set random seed
+	# Set random seed
 	set_random_seed(args.random_seed)
 
-	# set logger
+	# Set logger
 	logger = get_loggings(args.ckpt_dir, args.chances)
 	logger.critical(args.ckpt_dir)
-	logger.critical(args)
 
-	# set device
+	# Set device
 	device = "cuda" if torch.cuda.is_available() else "cpu"
 	device_name = torch.cuda.get_device_name(device) if device == "cuda" else "CPU"
 	logger.critical(f"Device: {device_name}")
 
-	# setup nonliear dynamic analysis simulator
+	# Setup nonliear dynamic analysis simulator
 	nda_simulator = None
 	nda_norm_dict = None
 	DBE_ground_motion_set = None
@@ -217,7 +210,7 @@ def main(args):
 	rec = record.Record()
 
 
-	# start inferencing on different geometries
+	# Start inferencing on different geometries
 	for x_span_num in range(2, 7):
 		for z_span_num in range(2, 7):
 			for story_num in range(4, 8):
@@ -231,9 +224,9 @@ def main(args):
 									"z_span_num": z_span_num, "z_span_lens": z_span_lens, 
 									"story_num": story_num, "story_height": story_height,
 									"story_level_sections": story_level_sections, 
-									"add_structure_geometry": args.add_structure_geometry,
-									"add_response_features": args.add_response_features,
-									"do_nonlinear_dynamic_analysis": args.do_nonlinear_dynamic_analysis, 
+									"add_structure_geometry": args.add_geometry_feature,
+									"add_response_features": args.add_response_feature,
+									"do_nonlinear_dynamic_analysis": args.do_nda, 
 									"nda_norm_dict": nda_norm_dict,
 									"analysis_dir": args.ckpt_dir / "Modal_Analysis"}
 				structure = Structure(**structure_kwargs)
@@ -262,10 +255,8 @@ def main(args):
 					# print(f"in col: {structure.story_inner_column_section}")
 
 					dont_select_story_member_indexes = structure.restrict_action_space() if agent_model.restrict_action else []
-					action, _ = agent_model.choose_action(state, 
-															   structure.already_minimum_section_story_indexes, 
-															   dont_select_story_member_indexes,
-															   greedy=True)
+					infeasible_actions = list(set(structure.already_minimum_section_story_indexes + dont_select_story_member_indexes))
+					action, _ = agent_model.choose_action(state, infeasible_actions, greedy=True)
 					member_category = structure.story_level_categories[action]
 					update_story = (action % structure.story_num) + 1
 					print(f"story_level_sections: {structure.story_level_sections}, action: {action:3d} [{update_story}F {member_category}]")
@@ -285,7 +276,6 @@ def main(args):
 						# if greedy will fail, choose the subgreedy
 						structure = deepcopy(original_structure)
 
-						#structure.already_minimum_section_story_indexes.append(action)
 						dont_select_during_cahnce_loop.append(action)
 						print(f"dont select during chance loop: {dont_select_during_cahnce_loop}")
 						print(f"original minimum: {structure.already_minimum_section_story_indexes}")
@@ -300,16 +290,11 @@ def main(args):
 							dont_select = list(set(dont_select_during_cahnce_loop + structure.already_minimum_section_story_indexes + structure.restrict_action_space()))
 						else: 
 							dont_select = list(set(dont_select_during_cahnce_loop + structure.already_minimum_section_story_indexes))
-
 						if len(dont_select) >= len(structure.story_level_actions):
 							done = True
 							break
 							
-						dont_select_story_member_indexes = structure.restrict_action_space() if agent_model.restrict_action else []
-						action, _ = agent_model.choose_action(state, 
-												 			  dont_select, 
-														      dont_select_story_member_indexes,
-													   	      greedy=True)
+						action, _ = agent_model.choose_action(state, dont_select, greedy=True)
 						structure, reward, done, fail_name, fail_reason = env.step(structure, action)
 						chances -= 1
 						
@@ -317,14 +302,13 @@ def main(args):
 					graph = structure.graph.clone()
 					timestep += 1
 					accumulated_reward += reward
-					logger.info(f"timestep: {timestep}, accumulated_reward: {accumulated_reward}\n")
+					logger.info(f"timestep: {timestep:3d}, action: {action:3d}, reward: {reward:6.3f}, accumulated_reward: {accumulated_reward:6.3f}")
 
 					# if can't select anymore, then stop
 					if agent_model.restrict_action:
 						dont_select = list(set(structure.already_minimum_section_story_indexes + structure.restrict_action_space()))
 					else: 
 						dont_select = list(set(structure.already_minimum_section_story_indexes))
-
 					if len(dont_select) >= len(structure.story_level_actions):
 						done = True
 				
@@ -348,61 +332,8 @@ def main(args):
 					json.dump(rec.training_record, f)
 
 
-def inference_record_to_pisa_ipt(args):
-	ckpt_dir = Path("./Results/AdjustedMoreSections/RandomShape/OpenSees_RSA/2025_06_05__21_45_28__TaiModifiedModel_MatReward_StaResFeatures_SoftUpdate_LinearDecay010_Buffer10000_Batch256_Epoch1000")
-	chances = 0
-	inference_record_path = ckpt_dir / f"inferencing_record_{chances}chance.txt"
-	with open(inference_record_path, 'r') as f:
-		inference_record = json.load(f)
-
-	x_span_num = 6  # 2 - 6
-	z_span_num = 6  # 2 - 6
-	story_num = 7   # 4 - 7
-	for index, geo_info in enumerate(inference_record["geometry"]):
-		if geo_info[:3] == [x_span_num, z_span_num, story_num]:
-			x_span_lens = geo_info[3]
-			z_span_lens = geo_info[4]
-			story_height = geo_info[5]
-			break
-
-	geo_name = f"x{x_span_num}z{z_span_num}y{story_num}"
-	final_design = inference_record["final_design"][index]
-	structure_kwargs = {"x_span_num": x_span_num, "x_span_lens": x_span_lens, 
-						"z_span_num": z_span_num, "z_span_lens": z_span_lens, 
-						"story_num": story_num, "story_height": story_height,
-						"story_level_sections": None, 
-						"add_structure_geometry": False,
-						"add_response_features": False,
-						"do_nonlinear_dynamic_analysis": False, 
-						"nda_norm_dict": None,
-						"analysis_dir": ckpt_dir/"Modal_Analysis"}
-	structure = Structure(**structure_kwargs)
-	print(structure)
-	print(structure.calculate_material_usage(), inference_record["initial_volume"][index])
-	print(structure.story_level_sections, inference_record["initial_design"][index])
-
-	reward = 0
-	for action in inference_record["action"][index]:
-		material_saved = structure.update_action(action)
-		reward += material_saved
-	print(reward, inference_record["saved_material"][index])
-	print(structure.calculate_material_usage(), inference_record["final_volume"][index])
-	print(structure.story_level_sections, final_design)
-	assert structure.story_level_sections == final_design, "The final design does not match the inference record."
-
-	load_cases, static_responses = check.get_response(structure, ckpt_dir/"Code_Analysis")    
-	static_constraint_condition, static_response_features, static_response_rewards = check.process_response(structure, load_cases, static_responses)
-	whether_pass, fail_name, fail_reason = check.check_pass(load_cases, static_constraint_condition, check_displacement=True)
-
-	save_ipt_path = ckpt_dir / f"final_design_{geo_name}_{chances}chance.ipt"
-	pisa._generate_analysis_ipt(structure, save_ipt_path, analysis="modal")
-
-
 
 
 if __name__ == "__main__":
-	args = parse_args()
-	
+	args = parse_args()	
 	main(args)
-
-	# inference_record_to_pisa_ipt(args)

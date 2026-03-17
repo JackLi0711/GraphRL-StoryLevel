@@ -151,7 +151,7 @@ class DeepQAgent(Agent):
 
         # initialize pretrained model
         if pretrained_ckpt_dir:
-            self._load_model(pretrained_ckpt_dir)
+            self.load_model(pretrained_ckpt_dir)
 
         
     # policies
@@ -212,29 +212,23 @@ class DeepQAgent(Agent):
         return len(self._buffer) >= self._buffer._batch_size
     
     
-    def choose_action(self, 
-                      state: torch.Tensor, 
-                      already_minimum_section_story_indexes: List[int],
-                      dont_select_story_member_indexes: List[int]=[], 
-                      greedy: bool=False) -> Tuple[int, float]:
+    def choose_action(self, state: torch.Tensor, infeasible_actions: List[int], greedy: bool=False) -> Tuple[int, float]:
         """
         Return the action for given state as per current policy.
         action: update_story_index
         """
-        q_val = 0
-        dont_select_story_indexes = list(set(already_minimum_section_story_indexes + dont_select_story_member_indexes))
-        
+        q_val = 0        
         # if testing time, always select the greedy action
         if greedy:
             epsilon = 0
-            action, q_val = self._epsilon_greedy_policy(state, epsilon, dont_select_story_indexes)
+            action, q_val = self._epsilon_greedy_policy(state, epsilon, infeasible_actions)
         # choose uniform at random if agent has insufficient experience
         elif not self._has_sufficient_experience():
-            action = self._uniform_random_policy(state, dont_select_story_indexes)
+            action = self._uniform_random_policy(state, infeasible_actions)
         else:
             epsilon = self._epsilon_decay_schedule(self._number_episodes)
             print(f"{epsilon = }")
-            action, q_val = self._epsilon_greedy_policy(state, epsilon, dont_select_story_indexes)
+            action, q_val = self._epsilon_greedy_policy(state, epsilon, infeasible_actions)
             
         return action, q_val
     
@@ -396,14 +390,13 @@ class DeepQAgent(Agent):
         self.logger.info(f" ---> model saved to {save_model_path}\n\n\n")
 
 
-    def _load_model(self, load_ckpt_dir) -> None:
+    def load_model(self, model_path) -> None:
         # theta_1, theta_2, theta_3, online_q_network, target_q_network
-        save_model_path = load_ckpt_dir #/ "model.pt"
-        checkpoint = torch.load(save_model_path, map_location=torch.device(self.device))
+        checkpoint = torch.load(model_path, map_location=torch.device(self.device))
         self.gnn.load_state_dict(checkpoint['gnn'])    
         self.online_q_network.load_state_dict(checkpoint['online_q_network'])    
         self.target_q_network.load_state_dict(checkpoint['target_q_network'])    
-        self.logger.info(f"model are loaded from {save_model_path}")
+        self.logger.info(f"model are loaded from {model_path}")
 
 
 
@@ -658,16 +651,15 @@ def _train_an_episode(agent: DeepQAgent,
         with torch.no_grad():
             graph = graph.to(agent.device)
             state = agent.gnn.forward(graph.x, graph.edge_index, graph.edge_attr, None, structure.aux["story_batch"].to(agent.device), None)
+        
         dont_select_story_member_indexes = structure.restrict_action_space() if agent.restrict_action else []
-        action, q_val = agent.choose_action(state, 
-                                            structure.already_minimum_section_story_indexes,
-                                            dont_select_story_member_indexes)
+        infeasible_actions = list(set(structure.already_minimum_section_story_indexes + dont_select_story_member_indexes))
+        action, q_val = agent.choose_action(state, infeasible_actions)
         member_category = structure.story_level_categories[action]
         update_story = (action % structure.story_num) + 1
         print(f"\n-----episode: {agent._number_episodes+1:4d}, timestep: {agent._number_timesteps+1:3d}, story_level_sections: {structure.story_level_sections}, action: {action:3d} [{update_story}F {member_category}]")
+        
         structure, reward, done, fail_name, fail_reason = env.step(structure, action)
-
-        # record
         score += reward
         logger.info(f"episode: {agent._number_episodes+1:4d}, timestep: {agent._number_timesteps+1:3d}, action: {action:3d}, reward: {reward:4f},  acculmulate_score: {score:.4f} [ORIGINAL]")
         
@@ -724,31 +716,26 @@ def _testing(agent: DeepQAgent,
             state = agent.gnn.forward(graph.x, graph.edge_index, graph.edge_attr, None, structure.aux["story_batch"].to(agent.device), None)
 
         dont_select_story_member_indexes = structure.restrict_action_space() if agent.restrict_action else []
-        action, q_val = agent.choose_action(state, 
-                                            structure.already_minimum_section_story_indexes,
-                                            dont_select_story_member_indexes, 
-                                            greedy=True)
+        infeasible_actions = list(set(structure.already_minimum_section_story_indexes + dont_select_story_member_indexes))
+        action, q_val = agent.choose_action(state, infeasible_actions, greedy=True)
         member_category = structure.story_level_categories[action]
         update_story = (action % structure.story_num) + 1
         print(f"\n*****Testing Episode, story_level_sections: {structure.story_level_sections}, action: {action:3d} [{update_story}F {member_category}]")
+        
         structure, reward, done, fail_name, fail_reason = env.step(structure, action)
-
-        # get next state
-        graph = structure.graph.clone()
-
-        # record
         score += reward
         timestep += 1
         logger.info(f"*****Testing Episode, timestep: {timestep:3d}, action: {action:3d}, reward: {reward:4f},  acculmulate_score: {score:.4f} [ORIGINAL]")
 
         if q == 0 and q_val > 0: q = q_val  # Q-value of the first timestep
-
         if env.saved_material_record_SCWB[-1] != 0:
             actions_SCWB = '_'.join([str(a) for a in env.update_actions_record_SCWB[-1]])
             saved_material_SCWB = env.saved_material_record_SCWB[-1]
             cumulative_saved_material_SCWB = sum(env.saved_material_record_SCWB)
             logger.info(f"*****Testing Episode, timestep: {timestep:3d}, action: {actions_SCWB}, reward_volume: {saved_material_SCWB:4f},  acculmulate_score_volume: {cumulative_saved_material_SCWB:.4f} [SCWB]")
     
+        graph = structure.graph.clone()  # get next state
+
     rec.Q_values[1].append(q)
 
     final_structure = structure if fail_reason == "minimum_section" else original_structure
@@ -784,10 +771,8 @@ def _inference(agent: DeepQAgent,
             state = agent.gnn(graph.x, graph.edge_index, graph.edge_attr, None, structure.aux["story_batch"].to(agent.device), None)
         
         dont_select_story_member_indexes = structure.restrict_action_space() if agent.restrict_action else []
-        action, _ = agent.choose_action(state, 
-                                        structure.already_minimum_section_story_indexes,
-                                        dont_select_story_member_indexes, 
-                                        greedy=True)
+        infeasible_actions = list(set(structure.already_minimum_section_story_indexes + dont_select_story_member_indexes))
+        action, _ = agent.choose_action(state, infeasible_actions, greedy=True)
         structure, reward, done, fail_name, fail_reason = env.step(structure, action)
 
         while done and chances > 0:
@@ -796,27 +781,23 @@ def _inference(agent: DeepQAgent,
             structure = deepcopy(original_structure)
             structure.already_minimum_section_story_indexes.append(action)
             dont_select = list(set(structure.already_minimum_section_story_indexes))
-
             if len(dont_select) >= len(structure.story_level_actions):
                 done = True
                 break
                 
             dont_select_story_member_indexes = structure.restrict_action_space() if agent.restrict_action else None
-            action, _ = agent.choose_action(state, 
-                                            dont_select, 
-                                            dont_select_story_member_indexes, 
-                                            greedy=True)
+            infeasible_actions = list(set(structure.already_minimum_section_story_indexes + dont_select_story_member_indexes))
+            action, _ = agent.choose_action(state, infeasible_actions, greedy=True)
             structure, reward, done, fail_name, fail_reason = env.step(structure, action)
             chances -= 1
-
-        # get next state
-        graph = structure.graph.clone()
 
         # record
         score += reward
         timestep += 1
         logger.info(f"*****Testing Episode, timestep: {timestep:3d}, action: {action:3d}, reward: {reward:4f},  acculmulate_score: {score:.4f}")
     
+        graph = structure.graph.clone()  # get next state
+
         # if can't select anymore, then stop
         if len(set(structure.already_minimum_section_story_indexes)) >= len(structure.story_level_actions):
             done = True

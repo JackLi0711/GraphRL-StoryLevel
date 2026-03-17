@@ -1,21 +1,17 @@
-import os
+import json
 import torch
 import random
 import numpy as np
 from pathlib import Path
 from argparse import ArgumentParser, Namespace
 
-from Validation import design_space, check_design, analyze
+from Validation import design_space, analyze
 from NonlinearDynamicAnalysisSimulator import load_simulator
 
 
 def parse_args() -> Namespace:
 	parser = ArgumentParser()
 
-	# trained model path
-	parser.add_argument("--trained_model_path", type=Path, 
-		default="./Results/AdjustedMoreSections/RandomShape/OpenSees_RSA/2025_06_05__21_45_28__TaiModifiedModel_MatReward_StaResFeatures_SoftUpdate_LinearDecay010_Buffer10000_Batch256_Epoch1000/models/model_HighestScore.pt"
-	)
 	# checkpoint directory
 	parser.add_argument("--ckpt_dir", type=Path, 
 		default="./Results/AdjustedMoreSections/RandomShape/OpenSees_RSA/"
@@ -29,22 +25,16 @@ def parse_args() -> Namespace:
 	parser.add_argument("--check_acc", action="store_true", default=False)
 	parser.add_argument("--check_disp", action="store_true", default=True)
 	parser.add_argument("--graph_lstm_dir", type=Path, 
-		default=None  # "./NonlinearDynamicAnalysisSimulator/trained_GraphLSTM/2025_04_23__13_18_19/"
+		# "./NonlinearDynamicAnalysisSimulator/trained_GraphLSTM/2025_04_23__13_18_19/"
+		default=None
 	)
 	parser.add_argument("--gm_dir", type=Path, 
-		default=None  # "./NonlinearDynamicAnalysisSimulator/ground_motions/selected_ground_motions_World_processed_one_scaling_MCE/"
+		# "./NonlinearDynamicAnalysisSimulator/ground_motions/selected_ground_motions_World_processed_one_scaling_MCE/"
+		default=None
 	)
 	parser.add_argument("--gm_num", type=int, default=11, help="ASCE says 11 is better")
 
-	# structure
-	parser.add_argument("--structure_shape", type=str, default="random", choices=["fixed", "small_random", "random"])
-	parser.add_argument("--add_geometry_feature", action="store_true", default=True)
-	parser.add_argument("--add_response_feature", action="store_true", default=True)
-	parser.add_argument("--reward_type", type=str, default="material", choices=["material", "acceleration", "displacement", "normalized", "total", "combined"])
-	parser.add_argument("--restrict_action", action="store_true", default=False)
-	parser.add_argument("--scwb_driven_design", action="store_true", default=False)
-	
-	# sample number
+	# sampling
 	parser.add_argument("--random_seed", type=int, default=731)
 	parser.add_argument("--sample_num", type=int, default=100)  # paper: 1000
 
@@ -63,8 +53,6 @@ def set_random_seed(SEED: int):
 	torch.autograd.set_detect_anomaly(True)
 
 
-
-
 def main(args):
 	# set random seed
 	set_random_seed(args.random_seed)
@@ -81,29 +69,20 @@ def main(args):
 		nda_simulator, nda_norm_dict = load_simulator.load_nonlinear_dynamic_analysis_simulator(args.graph_lstm_dir, device)
 		DBE_ground_motion_set, MCE_ground_motion_set = load_simulator.load_ground_motions(args.gm_dir, args.gm_num, nda_norm_dict)
 
-
 	# read the AI scores from file
-	ai_record_path = args.ckpt_dir / f"inferencing_record_{args.chances}chance.log"
+	inference_record_path = args.ckpt_dir / f"inferencing_record_{args.chances}chance.txt"
+	with open(inference_record_path, 'r') as f:
+		inference_record = json.load(f)
 	ai_scores = {}
-	for line in open(ai_record_path, 'r').readlines():
-		if "-----" in line:
-			content = line.split()
-			x_span_num = int(content[8].replace(",", ""))
-			z_span_num = int(content[10].replace(",", ""))
-			story_num = int(content[12].replace(",", ""))
-
-			reduced_material = float(content[-5])
-			reduced_acceleration = float(content[-2])
-			if "material" in args.reward_type: score = reduced_material
-			elif "acceleration" in args.reward_type: score = reduced_acceleration
-			
-			geo_name = f"x{x_span_num}_z{z_span_num}_y{story_num}"
-			ai_scores[geo_name] = score
+	for geometry, saved_material in zip(inference_record["geometry"], inference_record["saved_material"]):
+		x_span_num, z_span_num, story_num = geometry[0:3]
+		geo_name = f"x{x_span_num}_z{z_span_num}_y{story_num}"
+		ai_scores[geo_name] = saved_material
 	print("AI scores:", ai_scores)
 
 	# sampling and testing in the training space
-	ranks_with_fail_case = {}	# key: geo_name, value: rank percentage
-	ranks_without_fail_case = {}	# key: geo_name, value: rank percentage
+	ranks_with_fail_case = {}  # key: geo_name, value: rank percentage
+	ranks_without_fail_case = {}  # key: geo_name, value: rank percentage
 	for x_span_num in range(2, 7):
 		for z_span_num in range(2, 7):
 			for story_num in range(4, 8):
@@ -124,13 +103,7 @@ def main(args):
 								 "do_nonlinear_dynamic_analysis": args.do_nda,
 								 "nda_norm_dict": nda_norm_dict, 
 								 "analysis_dir": args.ckpt_dir / "Modal_Analysis"}
-				# print(f"---Generating {args.sample_num} sampled structures")
-				# lightest_structure, heaviest_structure, structures, rewards = design_space.sample_structures_from_design_space(**sample_kwargs)
-				# design_space.check_sample_diversity(lightest_structure, heaviest_structure, structures, rewards, save_result_root)
-
-				# # check each sampled structure				
-				check_kwargs = {#"structures": structures, "rewards": rewards, 
-		    					"code_analysis_dir": args.ckpt_dir / "Code_Analysis",
+				check_kwargs = {"code_analysis_dir": args.ckpt_dir / "Code_Analysis",
 								"do_nonlinear_dynamic_analysis": args.do_nda, 
 								"nda_simulator": nda_simulator, 
 								"DBE_ground_motion_set": DBE_ground_motion_set, 
@@ -139,19 +112,15 @@ def main(args):
 								"check_displacement": args.check_disp,
 								"nda_norm_dict": nda_norm_dict, "device": device, 
 								"save_root": save_result_root}
-				# print(f"---Checking {args.sample_num} sampled structures")
-				# check_design.check_designs_from_design_space(**check_kwargs)
-
-				all_kwargs = {**sample_kwargs, "check_kwargs": check_kwargs}
-				lightest_structure, heaviest_structure, structures, rewards = design_space.sample_pass_structures_from_design_space(**all_kwargs)
-				design_space.check_sample_diversity(lightest_structure, heaviest_structure, structures, rewards, save_result_root)
+				# all_kwargs = {**sample_kwargs, "check_kwargs": check_kwargs}
+				# lightest_structure, heaviest_structure, structures, rewards = design_space.sample_pass_structures_from_design_space(**all_kwargs)
+				# design_space.check_sample_diversity(lightest_structure, heaviest_structure, structures, rewards, save_result_root)
 
 				# analyze the PR of the AI score 
 				ai_pr_with_fail_case, ai_pr_without_fail_case = analyze.analyze_score_rank(ai_scores[geo_name], save_result_root)
 				print(f"---GeoName: {geo_name}, PR (with fail case): {ai_pr_with_fail_case}, PR (without fail case): {ai_pr_without_fail_case}")
 				ranks_with_fail_case[geo_name] = ai_pr_with_fail_case
 				ranks_without_fail_case[geo_name] = ai_pr_without_fail_case
-
 	
 	print(f"\nfinal ranks (with fail case): \n{ranks_with_fail_case}")
 	print(f"\nfinal ranks (without fail case): \n{ranks_without_fail_case}")

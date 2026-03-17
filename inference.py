@@ -22,38 +22,40 @@ def parse_args() -> Namespace:
  
 	# trained model path
 	parser.add_argument("--trained_model_path", type=Path, 
-		default="./Results/AdjustedMoreSections/RandomShape/OpenSees_RSA/2025_06_05__21_45_28__TaiModifiedModel_MatReward_StaResFeatures_SoftUpdate_LinearDecay010_Buffer10000_Batch256_Epoch1000/models/model_HighestScore.pt"
+		default="./Results/AdjustedMoreSections/RandomShape/OpenSees_RSA/DQN_Experiment_Jack/2026_02_01__23_28_10__DouDQN_MatReward_SoftUpdate_DoNDA_LinearDecay010_Buffer10000_Batch256_Epoch1000/models/model_HighestScore.pt"
 	)
 	# checkpoint directory
 	parser.add_argument("--ckpt_dir", type=Path, 
-		default="./Results/AdjustedMoreSections/RandomShape/OpenSees_RSA/2025_06_05__21_45_28__TaiModifiedModel_MatReward_StaResFeatures_SoftUpdate_LinearDecay010_Buffer10000_Batch256_Epoch1000"
+		default="./Results/AdjustedMoreSections/RandomShape/OpenSees_RSA/DQN_Experiment_Jack/2026_02_01__23_28_10__DouDQN_MatReward_SoftUpdate_DoNDA_LinearDecay010_Buffer10000_Batch256_Epoch1000"
 	)
 
 	# chances
 	parser.add_argument("--chances", type=int, default=0)
 
 	# nonlinear dynamic analysis simulator
-	parser.add_argument("--do_nda", action="store_true", default=False)
+	parser.add_argument("--do_nda", action="store_true", default=True)
 	parser.add_argument("--check_acc", action="store_true", default=False)
 	parser.add_argument("--check_disp", action="store_true", default=True)
 	parser.add_argument("--graph_lstm_dir", type=Path, 
-		default=None  # "./NonlinearDynamicAnalysisSimulator/trained_GraphLSTM/2025_05_19__22_59_28"
+		# "./NonlinearDynamicAnalysisSimulator/trained_GraphLSTM/2025_05_19__22_59_28"
+		default="./NonlinearDynamicAnalysisSimulator/trained_GraphLSTM/2025_05_19__22_59_28"
 	)
 	parser.add_argument("--gm_dir", type=Path, 
-		default=None  # "./NonlinearDynamicAnalysisSimulator/ground_motions/selected_ground_motions_World_processed_one_scaling_MCE/"
+		# "./NonlinearDynamicAnalysisSimulator/ground_motions/selected_ground_motions_World_processed_one_scaling_MCE/"
+		default="./NonlinearDynamicAnalysisSimulator/ground_motions/selected_ground_motions_World_processed_one_scaling_MCE/"
 	)
 	parser.add_argument("--gm_num", type=int, default=11, help="ASCE says 11 is better")
 
 	# structure
 	parser.add_argument("--structure_shape", type=str, default="random", choices=["fixed", "small_random", "random"])
 	parser.add_argument("--add_geometry_feature", action="store_true", default=True)
-	parser.add_argument("--add_response_feature", action="store_true", default=True)
+	parser.add_argument("--add_response_feature", action="store_true", default=False)
 	parser.add_argument("--reward_type", type=str, default="material", choices=["material", "acceleration", "displacement", "normalized", "total", "combined"])
 	parser.add_argument("--restrict_action", action="store_true", default=False)
 	parser.add_argument("--scwb_driven_design", action="store_true", default=False)
 
 	# model
-	parser.add_argument("--model_type", type=str, default="Dueling", choices=["Vanilla", "Dueling"])
+	parser.add_argument("--model_type", type=str, default="Vanilla", choices=["Vanilla", "Dueling"])
 	parser.add_argument("--hidden_dim", type=int, default=100)
 	parser.add_argument("--layer_num", type=int, default=3)
 
@@ -91,7 +93,7 @@ def set_random_seed(SEED: int):
 
 
 def get_loggings(ckpt_dir):
-	logger = logging.getLogger(name='Graph-RL')
+	logger = logging.getLogger(name='GraphRL')
 	logger.setLevel(level=logging.INFO)
 	# set formatter
 	formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -109,16 +111,16 @@ def get_loggings(ckpt_dir):
 
 
 def main(args):
-	# set random seed
+	# Set random seed
 	set_random_seed(args.random_seed)
 
-	# set logger
+	# Set logger
 	logger = get_loggings(args.ckpt_dir)
 
-	# set device
+	# Set device
 	device = "cuda" if torch.cuda.is_available() else "cpu"
 
-	# setup nonliear dynamic analysis simulator
+	# Setup nonliear dynamic analysis simulator
 	nda_simulator = None
 	nda_norm_dict = None
 	DBE_ground_motion_set = None
@@ -181,8 +183,8 @@ def main(args):
 		"restrict_action": args.restrict_action,
 		"seed": args.random_seed,
 		"logger": logger,
-		"pretrained_ckpt_dir": args.trained_model_path,
-		"device":device,
+		"pretrained_ckpt_dir": None,
+		"device": device,
 	}
 	agent_model = agent_DQN.DeepQAgent(**_agent_kwargs)
 
@@ -206,11 +208,16 @@ def main(args):
 	}
 	env = environment.Environment(**_env_kwargs)
 
-	initial_design = [14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 13, 9, 5, 4, 4, 1, 13, 12, 10, 9, 8, 4]
+	# load best-validation model
+	checkpoint = torch.load(args.trained_model_path, map_location=torch.device(agent_model.device))
+	checkpoint['online_q_network'] = {k.replace('l2_1', 'q_stream'): v for k, v in checkpoint['online_q_network'].items()}
+	checkpoint['target_q_network'] = {k.replace('l2_1', 'q_stream'): v for k, v in checkpoint['target_q_network'].items()}
+	agent_model.gnn.load_state_dict(checkpoint["gnn"])    
+	agent_model.online_q_network.load_state_dict(checkpoint["online_q_network"])    
+	agent_model.target_q_network.load_state_dict(checkpoint["target_q_network"])
 
-	visualize.visualize_design_process(agent_model, env, logger, args.trained_model_path, testing_structure=True, initial_design=None, chances=args.chances)
-	# visualize.visualize_edge_embedding(agent_model, env, logger, args.trained_model_path)
-	# visualize.visualize_design_process(agent_model, env, logger, args.trained_model_path, taller_structure=True)
+	initial_design = [14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 13, 9, 5, 4, 4, 1, 13, 12, 10, 9, 8, 4]
+	visualize.visualize_design_process(agent_model, env, logger, testing_structure=True, initial_design=None, chances=args.chances)
 
 
 

@@ -9,13 +9,14 @@ import matplotlib.patheffects as pe
 import matplotlib.patches as mpatches
 
 from PIL import Image
+from typing import Union
 from pathlib import Path
-from logging import Logger
 from copy import deepcopy
+from logging import Logger
 from sklearn.manifold import TSNE
 from torch_geometric.loader import DataLoader
 
-from RL import agent_DQN, environment
+from RL import environment, agent_DQN, agent_PPO
 from Structure import structure, pisa
 from Structure.sections import beam_sections, column_sections
 
@@ -125,7 +126,7 @@ def _visualize_one_iteration(structure: structure.Structure,
                              iteration: int, 
                              env: environment.Environment, 
                              accumulated_reward: float, 
-                             q_values: torch.Tensor, 
+                             vis_values: torch.Tensor, 
                              save_fig_path: Path):
     # plot 3d
     fig = plt.figure(figsize=(20, 15), facecolor="w")
@@ -134,14 +135,10 @@ def _visualize_one_iteration(structure: structure.Structure,
     ax = fig.add_subplot(1, 2, 1, projection="3d", facecolor="w")
     ax.set_axis_off()
 
-    # noamalize q_values
-    q_values = q_values.detach().cpu().numpy()
-    q_values = (q_values - np.min(q_values)) / (np.max(q_values) - np.min(q_values))
-
-    q_values_member = [0 for _ in range(structure.member_number)]
-    for i in range(q_values.shape[0]):
+    vis_values_member = [0 for _ in range(structure.member_number)]
+    for i in range(len(vis_values)):
         for member_index in structure.story_level_actions[i]:
-            q_values_member[member_index] = q_values[i]
+            vis_values_member[member_index] = vis_values[i]
 
     # colormap
     cmap = matplotlib.cm.get_cmap("Greys")
@@ -168,13 +165,10 @@ def _visualize_one_iteration(structure: structure.Structure,
         x1, y1, z1 = structure.node_coord_dict[node1_name]
         x2, y2, z2 = structure.node_coord_dict[node2_name]
         edges_coord.append([x1, y1, z1, x2, y2, z2])
-        # member q value
+        # member visualization value
         member_index = int(member_name[1:]) - 1
-        if member_index in structure.already_minimum_section_story_indexes:
-            q_val = 0
-        else:
-            q_val = q_values_member[member_index]
-        color = cmap(q_val)[:3]
+        value = 0 if member_index in structure.already_minimum_section_story_indexes else vis_values_member[member_index]
+        color = cmap(value)[:3]
         edges_color.append(color)
 
     for edge_i in range(len(edges_coord)):
@@ -186,7 +180,14 @@ def _visualize_one_iteration(structure: structure.Structure,
         # plot a border on a line: https://stackoverflow.com/questions/12729529/can-i-give-a-border-outline-to-a-line-in-matplotlib-plot-function
         ax.plot(xx, zz, yy, c=(color), linewidth=5, path_effects=[pe.Stroke(linewidth=9, foreground='black'), pe.Normal()])
 
-    ax.set_title(f"Q values", fontsize=30)
+    ax.set_xlabel('X')
+    ax.set_ylabel('Z')
+    ax.set_zlabel('Y')
+    sm = matplotlib.cm.ScalarMappable(cmap='Greys', norm=matplotlib.colors.Normalize(vmin=0, vmax=1))
+    sm.set_array([])
+    cbar = fig.colorbar(sm, ax=ax, shrink=0.5, aspect=5)
+    cbar.set_label('Value', fontsize=24)
+    ax.set_title(f"Visualization of member values", fontsize=30)
 
 
     # Then plot beam-column sections
@@ -244,9 +245,9 @@ def _visualize_one_iteration(structure: structure.Structure,
     else: 
         total_acc_decrement = 0
 
-    infos = f"material usage: {env.material_usage_record[-1]:5.2f} m3\n" + f"reduced material: {saved_material:5.2f} m3\n"
+    infos = f"Material usage: {env.material_usage_record[-1]:5.2f} m3\n" + f"Reduced material: {saved_material:5.2f} m3\n"
     if env.scwb_driven_design:
-        infos += f"reduced material(SCWB): {saved_material_SCWB:5.2f} m3"
+        infos += f"Reduced material(SCWB): {saved_material_SCWB:5.2f} m3"
     title = f"Reward: {env.reward_type}\n" + f"Iteration: {iteration:4d}\n" + infos
 
     ax.set_title(title, fontsize=30)
@@ -287,10 +288,9 @@ def _frames_to_video(ckpt_dir: Path,
     frame_one.save(ckpt_dir / animation_name, format="GIF", append_images=frames, save_all=True, duration=frame_duration_ms, loop=0)
 
 
-def visualize_design_process(agent: agent_DQN.DeepQAgent, 
+def visualize_design_process(agent: Union[agent_DQN.DeepQAgent, agent_PPO.PPOAgent], 
                              env: environment.Environment, 
                              logger: Logger, 
-                             save_model_path: Path, 
                              testing_structure: bool=False, 
                              taller_structure: bool=False, 
                              initial_design: list[int]=None,
@@ -304,14 +304,8 @@ def visualize_design_process(agent: agent_DQN.DeepQAgent,
     elif taller_structure:
         save_dir = env.checkpoint_dir / f"design_process_taller_{original_chances}chance"
     else:
-        save_dir = env.checkpoint_dir / f"design_peocess_random_{original_chances}chance"
+        save_dir = env.checkpoint_dir / f"design_process_random_{original_chances}chance"
     save_dir.mkdir(parents=True, exist_ok=True)
-    
-    # load best-validation model
-    checkpoint = torch.load(save_model_path, map_location=torch.device(agent.device))
-    agent.gnn.load_state_dict(checkpoint["gnn"])    
-    agent.online_q_network.load_state_dict(checkpoint["online_q_network"])    
-    agent.target_q_network.load_state_dict(checkpoint["target_q_network"]) 
     
     # get testing structure & graph
     device = agent.device
@@ -340,15 +334,20 @@ def visualize_design_process(agent: agent_DQN.DeepQAgent,
         print(f"restrict actions: {structure.restrict_action_space()}")
         
         dont_select_story_member_indexes = structure.restrict_action_space() if agent.restrict_action else []
-        action, _ = agent.choose_action(state, 
-                                        structure.already_minimum_section_story_indexes,
-                                        dont_select_story_member_indexes, 
-                                        greedy=True)
+        infeasible_actions = list(set(structure.already_minimum_section_story_indexes + dont_select_story_member_indexes))
+        if isinstance(agent, agent_DQN.DeepQAgent):
+            action, q_val = agent.choose_action(state, infeasible_actions, greedy=True)
+            q_values = agent.online_q_network(state).squeeze().detach().cpu().numpy()
+            vis_values = (q_values - np.min(q_values)) / (np.max(q_values) - np.min(q_values))  # noamalize q_values to [0, 1]
+        elif isinstance(agent, agent_PPO.PPOAgent):
+            logits, value, entropy, action, log_prob = agent.choose_action(state, infeasible_actions, greedy=True)
+            vis_values = torch.softmax(logits, dim=-1).squeeze().detach().cpu().numpy()  # use action probabilities as vis values
+        else:
+            raise ValueError("agent type not supported in visualization.")
 
         # visualize
         vis_path = save_dir / f"{timestep}.png"
-        q_values = agent.online_q_network(state)
-        _visualize_one_iteration(structure, timestep, env, accumulated_reward, q_values, vis_path)
+        _visualize_one_iteration(structure, timestep, env, accumulated_reward, vis_values, vis_path)
 
         # update action
         structure, reward, done, fail_name, fail_reason = env.step(structure, action)
@@ -376,16 +375,16 @@ def visualize_design_process(agent: agent_DQN.DeepQAgent,
                 dont_select = list(set(dont_select_during_cahnce_loop + structure.already_minimum_section_story_indexes + structure.restrict_action_space()))
             else: 
                 dont_select = list(set(dont_select_during_cahnce_loop + structure.already_minimum_section_story_indexes))
-
             if len(dont_select) >= len(structure.story_level_actions):
                 done = True
                 break
             
-            dont_select_story_member_indexes = structure.restrict_action_space() if agent.restrict_action else None
-            action, _ = agent.choose_action(state, 
-                                            dont_select, 
-                                            dont_select_story_member_indexes,
-                                            greedy=True)
+            if isinstance(agent, agent_DQN.DeepQAgent):
+                action, q_val = agent.choose_action(state, dont_select, greedy=True)
+            elif isinstance(agent, agent_PPO.PPOAgent):
+                logits, value, entropy, action, log_prob = agent.choose_action(state, dont_select, greedy=True)
+            else:
+                raise ValueError("agent type not supported in visualization.")
             structure, reward, done, fail_name, fail_reason = env.step(structure, action)
             chances -= 1
 
@@ -393,7 +392,7 @@ def visualize_design_process(agent: agent_DQN.DeepQAgent,
         graph = structure.graph.clone()
         timestep += 1
         accumulated_reward += reward
-        logger.info(f"timestep: {timestep}, accumulated_reward: {accumulated_reward}\n")
+        logger.info(f"timestep: {timestep}, action: {action}, reward: {reward}, accumulated_reward: {accumulated_reward}\n")
         action_list.append(action)
     
         # if can't select anymore, then stop
@@ -401,7 +400,6 @@ def visualize_design_process(agent: agent_DQN.DeepQAgent,
             dont_select = list(set(structure.already_minimum_section_story_indexes + structure.restrict_action_space()))
         else: 
             dont_select = structure.already_minimum_section_story_indexes
-
         if len(dont_select) >= len(structure.story_level_actions):
             done = True
 

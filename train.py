@@ -96,7 +96,7 @@ def set_random_seed(SEED: int):
 
 
 def get_loggings(ckpt_dir):
-	logger = logging.getLogger(name='Graph-RL')
+	logger = logging.getLogger(name='GraphRL')
 	logger.setLevel(level=logging.INFO)
 	# set formatter
 	formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')

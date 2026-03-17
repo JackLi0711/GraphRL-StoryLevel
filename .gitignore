@@ -2,7 +2,6 @@ Check/
 Results/
 NewStrategy/
 參考資料/
-暫時用不到的程式碼/
 
 NonlinearDynamicAnalysisSimulator/trained_GraphLSTM/
 NonlinearDynamicAnalysisSimulator/ground_motions/
@@ -19,6 +18,7 @@ VIPER/results
 
 .DS_Store
 .DS_Store?
+.vscode
 
 # debug
 debug/analysis/
