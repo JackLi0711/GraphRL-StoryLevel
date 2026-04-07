@@ -41,29 +41,24 @@ class ExperienceReplayBuffer:
         self._random_state = np.random.RandomState() if random_state is None else random_state
         self._logger = logger
 
-
     def __len__(self) -> int:
         return len(self._buffer)
-    
 
     @property
     def batch_size(self) -> int:
         """Number of experience samples per training batch."""
         return self._batch_size
-    
 
     @property
     def buffer_size(self) -> int:
         """Total number of experience samples stored in memory."""
         return self._buffer_size
-    
 
     def append(self, experience: Experience) -> None:
         """Add a new experience to memory."""
         self._buffer.append(experience)
         self._logger.info(f"buffer len: {self.__len__()}")
         # print(f"buffer len: {self.__len__()}, memory allocated: {torch.cuda.memory_allocated()/1e+06:.2f} MB")
-        
 
     def sample(self) -> typing.List[Experience]:
         """Randomly sample a batch of experiences from memory."""
@@ -99,29 +94,24 @@ class PrioritizedExperienceReplayBuffer:
         self._random_state = np.random.RandomState() if random_state is None else random_state
         self._logger = logger
 
-
     def __len__(self) -> int:
         """Current number of prioritized experience tuple stored in buffer."""
         return self._buffer_length
 
-    
     @property
     def prioritized_alpha(self) -> float:
         """Strength of prioritized sampling."""
         return self._prioritized_alpha
-
 
     @property
     def batch_size(self) -> int:
         """Number of experience samples per training batch."""
         return self._batch_size
 
-    
     @property
     def buffer_size(self) -> int:
         """Maximum number of prioritized experience tuples stored in buffer."""
         return self._buffer_size
-
 
     def append(self, experience: Experience) -> None:
         """Add a new experience to memory."""
@@ -137,16 +127,13 @@ class PrioritizedExperienceReplayBuffer:
             self._buffer_length += 1
         self._logger.info(f"buffer len: {self.__len__()}")
 
-
     def is_empty(self) -> bool:
         """True if the buffer is empty; False otherwise."""
         return self._buffer_length == 0
 
-
     def is_full(self) -> bool:
         """True if the buffer is full; False otherwise."""
         return self._buffer_length == self._buffer_size
-
 
     def sample(self, bias_correcting_beta: float) -> typing.Tuple[np.array, np.array, np.array]:
         """Sample a batch of experience from memory."""
@@ -165,7 +152,6 @@ class PrioritizedExperienceReplayBuffer:
 
         return sampled_idxs, experiences, normalized_weights
 
-
     def update_priorities(self, idxs: np.array, priorities: np.array) -> None:
         """Update the priorities associated with particular experiences."""
         self._buffer["priority"][idxs] = priorities
@@ -179,17 +165,18 @@ class RolloutBuffer:
     def __init__(self, buffer_size: int = None) -> None:
         self._buffer_size = buffer_size
         self.keys = [
+            # Actor-Critic
             "graph", 
             "logits", "value", "entropy", "action", "log_prob",  
             "next_graph", "reward", "done", 
-            "infeasible_actions", "aux"
+            "infeasible_actions", "aux", 
+            # Option-Critic
+            "option_idx", "gen_js_divergence"
         ]
         self.reset()
 
-
     def __len__(self) -> int:
         return len(self.graph)
-    
 
     def store(self, transition: dict) -> None:
         for k, v in transition.items():

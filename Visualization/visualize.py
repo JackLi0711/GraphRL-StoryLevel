@@ -16,7 +16,7 @@ from logging import Logger
 from sklearn.manifold import TSNE
 from torch_geometric.loader import DataLoader
 
-from RL import environment, agent_DQN, agent_PPO
+from RL import environment, agent_DQN, agent_PPO, agent_OC
 from Structure import structure, pisa
 from Structure.sections import beam_sections, column_sections
 
@@ -120,12 +120,122 @@ def visualize_edge_embedding(agent, env, logger, ckpt_dir):
         plot_TSNE(tsne, features[key], color=key, name=key)
 
 
+@torch.no_grad()
+def visualize_option_policy(agent: agent_OC.OptionCriticAgent, 
+                          env: environment.Environment, 
+                          logger: Logger, 
+                          testing_structure: bool=False,
+                          taller_structure: bool=False,
+                          initial_design: list[int]=None, 
+                          option_idx: int=0):
+    logger.info(f"Visualizing option embedding (TSNE)......")
+    
+    # get testing structure & graph
+    device = agent.device
+    if testing_structure:
+        structure = env.reset(testing=True, initial_design=initial_design)
+        save_name = f"testing_option{option_idx}"
+    elif taller_structure:
+        structure = env.reset(taller=True, initial_design=initial_design)
+        save_name = f"taller_option{option_idx}"
+    else:
+        structure = env.reset(initial_design=initial_design)
+        save_name = f"x{structure.x_span_num}z{structure.z_span_num}y{structure.story_num}_option{option_idx}"
+    graph = structure.graph.clone()
+
+    done = None
+    accumulated_reward = 0
+    timestep = 0
+    action_list = []
+    option_embedding_list = []
+    while not done:
+        original_structure = deepcopy(structure)
+        graph = graph.to(device)
+        state = agent.gnn(graph.x, graph.edge_index, graph.edge_attr, None, structure.aux["story_batch"].to(device), None)
+
+        # select action and update structure
+        print(f"story level sections: {structure.story_level_sections}")
+        print(f"original minimum: {structure.already_minimum_section_story_indexes}")
+        print(f"restrict actions: {structure.restrict_action_space()}")
+        
+        dont_select_story_member_indexes = structure.restrict_action_space() if agent.restrict_action else []
+        infeasible_actions = list(set(structure.already_minimum_section_story_indexes + dont_select_story_member_indexes))
+        infeasible_mask = torch.tensor([True if i in infeasible_actions else False for i in range(state.shape[0])], dtype=torch.bool, device=device)
+        masks = infeasible_mask.unsqueeze(0).repeat(agent.num_options, 1)  # (num_actions) --> (num_options, num_actions)
+        
+        logits, value = agent.option_critic_network.forward(state)  # (num_options, num_actions), (1,)
+        masked_logits = logits.masked_fill(masks, float('-inf'))  # set infeasible actions' logits to -inf
+        probs = torch.nn.functional.softmax(masked_logits, dim=-1)  # (num_options, num_actions)
+        log_probs = torch.nn.functional.log_softmax(logits, dim=-1)  # (num_options, num_actions), use original logits to avoid -inf values, which will cause issue in t-SNE calculation
+        option_embedding_list.append(log_probs.detach().cpu())
+
+        # update action
+        action = probs[option_idx].argmax().item()
+        structure, reward, done, fail_name, fail_reason = env.step(structure, action)
+
+        # get next state
+        graph = structure.graph.clone()
+        timestep += 1
+        accumulated_reward += reward
+        logger.info(f"timestep: {timestep}, action: {action}, reward: {reward}, accumulated_reward: {accumulated_reward}\n")
+        action_list.append(action)
+    
+        # if can't select anymore, then stop
+        if agent.restrict_action:
+            dont_select = list(set(structure.already_minimum_section_story_indexes + structure.restrict_action_space()))
+        else: 
+            dont_select = structure.already_minimum_section_story_indexes
+        if len(dont_select) >= len(structure.story_level_actions):
+            done = True
+
+    option_embeddings = torch.stack(option_embedding_list, dim=0)  # (num_timesteps, num_options, num_actions)
+    T, K, A = option_embeddings.shape
+    all_embeddings = option_embeddings.reshape(T*K, A).numpy()
+
+    tsne = TSNE(n_components=2, init='random', perplexity=10, n_iter=1000)
+    embed_2d = tsne.fit_transform(all_embeddings)  # (T*K, 2)
+    embed_2d = embed_2d.reshape(T, K, 2)
+
+    # Plot t-SNE scatter plot between options
+    plt.figure(figsize=(8, 6), facecolor="w")
+    colors = ['red', 'orange', 'yellow', 'green', 'blue', 'indigo', 'purple', 'brown', 'pink', 'gray'][:K]
+    for k in range(K):
+        for t in range(T):
+            alpha = 0.3 + 0.7 * (t / T)
+            plt.scatter(embed_2d[t, k, 0], embed_2d[t, k, 1], c=colors[k], s=50, alpha=alpha, label=f'Option {k}' if t == T-1 else "")
+    plt.xlabel('TSNE 1', fontsize=14)
+    plt.ylabel('TSNE 2', fontsize=14)
+    plt.legend(loc='best', fontsize=14)
+    plt.title('t-SNE of Option Policies (Log Probability)', fontsize=16)
+    plt.grid()
+    plt.tight_layout()
+    plt.savefig(env.checkpoint_dir/f"option_policy_tsne_{save_name}.png", dpi=100, bbox_inches='tight')
+    plt.close()
+
+    # Plot cosine similarity heatmap between options
+    cos_sim_array = np.zeros((K, K))
+    for i in range(K): 
+        for j in range(K): 
+            cos_sim_array[i, j] = torch.nn.functional.cosine_similarity(option_embeddings[:, i, :], option_embeddings[:, j, :], dim=-1).mean().item()
+    plt.figure(figsize=(8, 6), facecolor="w")
+    plt.imshow(cos_sim_array, cmap='viridis', vmin=0, vmax=1)
+    for i in range(K):
+        for j in range(K):
+            plt.text(j, i, f"{cos_sim_array[i, j]:.3f}", ha='center', va='center', color='white' if cos_sim_array[i, j] < 0.5 else 'black')
+    plt.colorbar(label='Cosine Similarity')
+    plt.xticks(range(K), [f'Option {k}' for k in range(K)], rotation=45)
+    plt.yticks(range(K), [f'Option {k}' for k in range(K)])
+    plt.title('Cosine Similarity Between Option Policies (Log Probability)', fontsize=16)
+    plt.tight_layout()
+    plt.savefig(env.checkpoint_dir/f"option_policy_cossim_{save_name}.png", dpi=100, bbox_inches='tight')
+    plt.close()
+
+
 
 
 def _visualize_one_iteration(structure: structure.Structure, 
                              iteration: int, 
                              env: environment.Environment, 
-                             accumulated_reward: float, 
                              vis_values: torch.Tensor, 
                              save_fig_path: Path):
     # plot 3d
@@ -288,7 +398,7 @@ def _frames_to_video(ckpt_dir: Path,
     frame_one.save(ckpt_dir / animation_name, format="GIF", append_images=frames, save_all=True, duration=frame_duration_ms, loop=0)
 
 
-def visualize_design_process(agent: Union[agent_DQN.DeepQAgent, agent_PPO.PPOAgent], 
+def visualize_design_process(agent: Union[agent_DQN.DeepQAgent, agent_PPO.PPOAgent, agent_OC.OptionCriticAgent], 
                              env: environment.Environment, 
                              logger: Logger, 
                              testing_structure: bool=False, 
@@ -342,12 +452,16 @@ def visualize_design_process(agent: Union[agent_DQN.DeepQAgent, agent_PPO.PPOAge
         elif isinstance(agent, agent_PPO.PPOAgent):
             logits, value, entropy, action, log_prob = agent.choose_action(state, infeasible_actions, greedy=True)
             vis_values = torch.softmax(logits, dim=-1).squeeze().detach().cpu().numpy()  # use action probabilities as vis values
+        elif isinstance(agent, agent_OC.OptionCriticAgent):
+            option_idx = 0
+            gjsd, logits, value, entropy, action, log_prob = agent.choose_action(state, infeasible_actions, option_idx, greedy=True)
+            vis_values = torch.softmax(logits, dim=-1).squeeze().detach().cpu().numpy()  # use action probabilities as vis values
         else:
             raise ValueError("agent type not supported in visualization.")
 
         # visualize
         vis_path = save_dir / f"{timestep}.png"
-        _visualize_one_iteration(structure, timestep, env, accumulated_reward, vis_values, vis_path)
+        _visualize_one_iteration(structure, timestep, env, vis_values, vis_path)
 
         # update action
         structure, reward, done, fail_name, fail_reason = env.step(structure, action)
@@ -383,6 +497,9 @@ def visualize_design_process(agent: Union[agent_DQN.DeepQAgent, agent_PPO.PPOAge
                 action, q_val = agent.choose_action(state, dont_select, greedy=True)
             elif isinstance(agent, agent_PPO.PPOAgent):
                 logits, value, entropy, action, log_prob = agent.choose_action(state, dont_select, greedy=True)
+            elif isinstance(agent, agent_OC.OptionCriticAgent):
+                option_idx = 4
+                gjsd, logits, value, entropy, action, log_prob = agent.choose_action(state, dont_select, option_idx, greedy=True)
             else:
                 raise ValueError("agent type not supported in visualization.")
             structure, reward, done, fail_name, fail_reason = env.step(structure, action)

@@ -13,7 +13,7 @@ sys.path.append("RL/")
 sys.path.append("Visualization/")
 sys.path.append("NonlinearDynamicAnalysisSimulator/")
 
-from RL import agent_DQN, agent_PPO, environment
+from RL import agent_PPO, environment
 from Visualization import plot, visualize
 from NonlinearDynamicAnalysisSimulator import load_simulator
 
@@ -83,7 +83,7 @@ def main(args):
 	# Set device
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-	# setup nonliear dynamic analysis simulator
+	# Setup nonliear dynamic analysis simulator
     nda_simulator = None
     nda_norm_dict = None
     DBE_ground_motion_set = None
@@ -139,7 +139,7 @@ def main(args):
 	}
     env = environment.Environment(**_env_kwargs)
 
-    # load best-validation model
+    # Load best-validation model
     checkpoint = torch.load(args.trained_model_path, map_location=torch.device(agent_model.device))
     agent_model.gnn.load_state_dict(checkpoint['gnn'])
     agent_model.actor_critic_network.load_state_dict(checkpoint['actor_critic'])

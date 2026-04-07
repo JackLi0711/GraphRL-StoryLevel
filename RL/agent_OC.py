@@ -38,9 +38,9 @@ class Agent:
              done: bool) -> None:
         """Update agent's state after observing the effect of its action on the environment."""
         raise NotImplementedError
-    
 
-class PPOAgent(Agent):
+
+class OptionCriticAgent(Agent):
     def __init__(self, 
                  node_feature_dim: int,
                  edge_feature_dim: int,
@@ -57,11 +57,13 @@ class PPOAgent(Agent):
                  actor_loss_coef: float,
                  critic_loss_coef: float,
                  max_grad_norm: float,
-                 optimization_epoch: int,
+                 optimization_epoch: int, 
+                 num_options: int,
+                 gjsd_loss_coef: float,
                  seed: int = None,
                  logger: logging.Logger = None,
                  pretrained_model_path: str = None,
-                 device = "cpu", 
+                 device = "cpu"
         ):
         self.restrict_action = False
         self.logger = logger
@@ -77,15 +79,15 @@ class PPOAgent(Agent):
         self.gnn = model.StateGNN(**model_kwargs).to(self.device)
         self.logger.critical(f"gnn: \n{self.gnn}")
 
-        # Initialize Actor-Critic network
-        actor_critic_kwargs = {"member_state_dim": hidden_dim*2, "hidden_dim": hidden_dim, "action_dim": 1}
-        self.actor_critic_network = model.CategoricalActorCritic(**actor_critic_kwargs).to(self.device)
-        self.logger.critical(f"actor_critic_network: \n{self.actor_critic_network}")
+        # Initialize Option-Critic network
+        actor_critic_kwargs = {"member_state_dim": hidden_dim*2, "hidden_dim": hidden_dim, "action_dim": 1, "num_options": num_options}
+        self.option_critic_network = model.MultiOptionActorCritic(**actor_critic_kwargs).to(self.device)
+        self.logger.critical(f"Option-Critic Network: \n{self.option_critic_network}")
 
         # Initialize optimizer
         params_gnn = list(self.gnn.parameters())
-        params_actor = list(self.actor_critic_network.actor.parameters())
-        params_critic = list(self.actor_critic_network.critic.parameters())
+        params_actor = list(self.option_critic_network.intra_option_actors.parameters())
+        params_critic = list(self.option_critic_network.critic.parameters())
         self.optimizer = optim.Adam(params_gnn+params_actor+params_critic, lr=lr)
         self.use_lr_scheduler = use_lr_scheduler
         if self.use_lr_scheduler:
@@ -103,6 +105,8 @@ class PPOAgent(Agent):
         self.critic_loss_coef = critic_loss_coef
         self.max_grad_norm = max_grad_norm
         self.optimization_epoch = optimization_epoch
+        self.num_options = num_options
+        self.gjsd_loss_coef = gjsd_loss_coef
 
         # Initialize some counters
         self._number_episodes = 0
@@ -115,26 +119,49 @@ class PPOAgent(Agent):
 
         self.storage = buffer.RolloutBuffer()
 
-    def choose_action(self, state: torch.Tensor, infeasible_actions: List[int], greedy=False):
-        infeasible_mask = torch.tensor([True if i in infeasible_actions else False for i in range(state.shape[0])], dtype=torch.bool, device=self.device)
+    def sample_option(self) -> int:
+        option_idx = torch.randint(0, self.num_options, (1,)).item()
+        # option_idx = self._number_episodes % self.num_options
+        return option_idx    
 
+    def compute_gjsd(self, batched_probs: torch.Tensor) -> torch.Tensor:
+        """Compute the Generalized Jensen-Shannon Divergence (GJSD) among intra-option policies."""
+        # batched_probs: (num_options, num_actions)
+
+        def entropy(probs: torch.Tensor) -> torch.Tensor:
+            return -torch.sum(probs * torch.log(probs + 1e-8), dim=-1)
+
+        group_mean_entropy = entropy(batched_probs.mean(dim=0))  # scalar
+        mean_individual_entropy = entropy(batched_probs).mean()  # scalar
+        gjsd = group_mean_entropy - mean_individual_entropy
+            
+        return gjsd
+
+    def choose_action(self, state: torch.Tensor, infeasible_actions: List[int], option_idx: int, greedy=False):
+        infeasible_mask = torch.tensor([True if i in infeasible_actions else False for i in range(state.shape[0])], dtype=torch.bool, device=self.device)
+        masks = infeasible_mask.unsqueeze(0).repeat(self.num_options, 1)  # (num_actions) --> (num_options, num_actions)
+        # batched_states = state.unsqueeze(0).repeat(self.num_options, 1, 1)   # (num_actions, member_state_dim) --> (num_options, num_actions, member_state_dim)
+        # batched_options = torch.tensor(range(self.num_options), device=self.device)  # (num_options)
         with torch.no_grad():
-            logits, value = self.actor_critic_network.forward(state)
-            masked_logits = logits.masked_fill(infeasible_mask, float('-inf'))  # set infeasible actions' logits to -inf
-            probs = nn.functional.softmax(masked_logits, dim=-1)  # shape: (num_actions,)
-            dist = torch.distributions.Categorical(probs=probs)
-            dist_probs = dist.probs.clone().reshape((4, -1)).cpu().numpy()  # shape: (4, story_num)
+            logits, value = self.option_critic_network.forward(state)  # (num_options, num_actions), (1,)
+            masked_logits = logits.masked_fill(masks, float('-inf'))  # set infeasible actions' logits to -inf
+            probs = nn.functional.softmax(masked_logits, dim=-1)  # (num_options, num_actions)
+            gjsd = self.compute_gjsd(probs)
+            dist = torch.distributions.Categorical(probs=probs[option_idx])
+
+            selected_logits = logits[option_idx]
+            dist_probs = dist.probs.clone().reshape((4, -1)).cpu().numpy()  # (4, story_num)
             for category, prob in zip(["xdir_beam", "zdir_beam", "outer_col", "inner_col"], dist_probs):
                 print(f"{category}: {prob}")
             print(f"{value = }")
             entropy = dist.entropy()
             print(f"{entropy = }")
-            action = dist.sample() if not greedy else probs.argmax()
+            action = dist.sample() if not greedy else dist.probs.argmax()
             print(f"{action = }")        
             log_prob = dist.log_prob(action)
             print(f"{log_prob = }")
 
-        return logits, value.item(), entropy.item(), action.item(), log_prob.item()
+        return gjsd.item(), selected_logits, value.item(), entropy.item(), action.item(), log_prob.item()
 
     def step(self):
         # compute returns and advantages
@@ -199,36 +226,58 @@ class PPOAgent(Agent):
         print(f"\t{states.shape = }")
 
         batched_states = states.split((structure_story_ptr[1:] - structure_story_ptr[:-1]).tolist())  # list of tensors, each tensor with shape: (num_actions, member_state_dim)        
+        batched_options = torch.tensor(self.storage.option_idx).to(self.device)  # (batch_size)
         if all(batch.shape == batched_states[0].shape for batch in batched_states):
             batched_states = torch.stack(batched_states)  # (batch_size, num_actions, member_state_dim)
             print(f"\t\t{batched_states.shape = }")
-            batched_logits, batched_values = self.actor_critic_network.forward(batched_states)  # (batch_size, num_actions), (batch_size, 1)
-            masked_batched_logits = batched_logits.masked_fill(infeasible_masks, float('-inf'))  # (batch_size, num_actions)
-            probs = nn.functional.softmax(masked_batched_logits, dim=-1)  # (batch_size, num_actions)
-            dists = torch.distributions.Categorical(probs=probs)
-            print(f"\t\t{dists.probs.shape = }, {batched_values.shape = }")
-            # print(f"\t{dists.probs.sum(dim=1) = }")  # all of them is 1.0
-            log_probs = dists.log_prob(actions)  # (batch_size)
+            batched_logits, batched_values = self.option_critic_network.forward(batched_states)  # (batch_size, num_options, num_actions), (batch_size, 1)
+            print(f"\t\t{batched_logits.shape = }, {batched_values.shape = }")
+            batched_masks = infeasible_masks.unsqueeze(1).repeat(1, self.num_options, 1)  # (batch_size, num_options, num_actions)
+            masked_batched_logits = batched_logits.masked_fill(batched_masks, float('-inf'))  # (batch_size, num_options, num_actions)
+            batched_probs = nn.functional.softmax(masked_batched_logits, dim=-1)  # (batch_size, num_options, num_actions)
+            
+            all_gjsds = []
+            all_probs = []
+            for probs, option_idx in zip(batched_probs, batched_options):
+                gjsd = self.compute_gjsd(probs)
+                all_gjsds.append(gjsd)
+                all_probs.append(probs[option_idx])  # (num_actions,)
+            mean_gjsd = torch.stack(all_gjsds).to(self.device).mean()
+            print(f"\t\t{mean_gjsd = }")
+            batched_probs = torch.stack(all_probs)  # (batch_size, num_actions)
+            print(f"\t\t{batched_probs.shape = }")
+            
+            batched_dists = torch.distributions.Categorical(probs=batched_probs)
+            print(f"\t\t{batched_dists.probs.shape = }")
+            # print(f"\t{batched_dists.probs.sum(dim=1) = }")  # all of them is 1.0
+            log_probs = batched_dists.log_prob(actions)  # (batch_size)
             print(f"\t\t{log_probs.shape = }")
-            mean_entropy = dists.entropy().mean()  # (batch_size)
-            print(f"\t\t{dists.entropy().shape = }, {mean_entropy = }")
+            mean_entropy = batched_dists.entropy().mean()  # (batch_size)
+            print(f"\t\t{batched_dists.entropy().shape = }, {mean_entropy = }")
         else:
             all_values = []
+            all_gjsds = []
             all_log_probs = []
-            all_entropies = [] 
-            for state, mask, action in zip(batched_states, infeasible_masks, actions):
-                logits, value = self.actor_critic_network.forward(state.to(self.device))  # (num_actions,), (1,)
+            all_entropies = []
+            for state, mask, option_idx, action in zip(batched_states, infeasible_masks, batched_options, actions):
+                logits, value = self.option_critic_network.forward(state.to(self.device))  # (num_options, num_actions), (1,)
                 all_values.append(value)
-                masked_logits = logits.masked_fill(mask, float('-inf'))  # (num_actions,)
-                probs = nn.functional.softmax(masked_logits, dim=-1)  # (num_actions,)
-                dist = torch.distributions.Categorical(probs=probs)
+                masks = mask.unsqueeze(0).repeat(self.num_options, 1)  # (num_options, num_actions)
+                masked_logits = logits.masked_fill(masks, float("-inf"))
+                probs = nn.functional.softmax(masked_logits, dim=-1)  # (num_options, num_actions)
+                all_gjsds.append(self.compute_gjsd(probs))
+
+                dist = torch.distributions.Categorical(probs=probs[option_idx])
                 all_log_probs.append(dist.log_prob(action))
                 all_entropies.append(dist.entropy())
-            batched_values = torch.stack(all_values)  # (batch_size)
+
+            batched_values = torch.stack(all_values).to(self.device)  # (batch_size,)
             print(f"\t\t{batched_values.shape = }")
-            log_probs = torch.stack(all_log_probs)
-            print(f"\t\t{log_probs.shape = }")  # (batch_size)
-            mean_entropy = torch.mean(all_entropies)
+            mean_gjsd = torch.stack(all_gjsds).to(self.device).mean()  # scalar
+            print(f"\t\t{mean_gjsd = }")
+            log_probs = torch.stack(all_log_probs).to(self.device)  # (batch_size,)
+            print(f"\t\t{log_probs.shape = }")
+            mean_entropy = torch.stack(all_entropies).to(self.device).mean()
             print(f"\t\t{mean_entropy = }")
 
         # compute losses and update networks
@@ -243,26 +292,32 @@ class PPOAgent(Agent):
         entropy_weight = self.entropy_weight_schedule(self._number_episodes)
         entropy_loss = entropy_weight * mean_entropy
         critic_loss = (returns - batched_values.squeeze()).pow(2).mean()
-        print(f"\t[Actor coef]: {self.actor_loss_coef:.6f} [Entropy coef]: {entropy_weight:.6f} [Critic coef]: {self.critic_loss_coef:.6f}")
-        print(f"\t[Actor loss]: {actor_loss:.6f} [Mean entropy]: {mean_entropy:.6f} [Critic loss]: {critic_loss:.6f}")
-        assert actor_loss.requires_grad and entropy_loss.requires_grad and critic_loss.requires_grad
+        gjsd_loss = self.gjsd_loss_coef * mean_gjsd
+        print(f"\t[Actor coef]: {self.actor_loss_coef:.6f} [Entropy coef]: {entropy_weight:.6f} [Critic coef]: {self.critic_loss_coef:.6f} [GJSD coef]: {self.gjsd_loss_coef:.6f}")
+        print(f"\t[Actor loss]: {actor_loss:.6f} [Mean entropy]: {mean_entropy:.6f} [Critic loss]: {critic_loss:.6f} [Mean GJSD]: {mean_gjsd:.6f}")
+        assert actor_loss.requires_grad and entropy_loss.requires_grad and critic_loss.requires_grad and gjsd_loss.requires_grad
 
         # if approx_kl > 1.5*self.target_kl:
         #     actor_loss = torch.zeros_like(actor_loss).to(self.device)
         #     print(f"\t\tEarly stopping for updating actor network")
-        total_loss = self.critic_loss_coef*critic_loss - self.actor_loss_coef*actor_loss - entropy_loss
+        total_loss = (
+            self.critic_loss_coef*critic_loss
+             - self.actor_loss_coef*actor_loss
+             - entropy_loss
+             - gjsd_loss
+        )
         self.optimizer.zero_grad()
         total_loss.backward()
 
         # compute gradient norm for monitoring
         gnn_grad_norm = torch.tensor([p.grad.norm().item() ** 2 for p in self.gnn.parameters() if p.grad is not None]).mean().sqrt()
-        actor_grad_norm = torch.tensor([p.grad.norm().item() ** 2 for p in self.actor_critic_network.actor.parameters() if p.grad is not None]).mean().sqrt()
-        critic_grad_norm = torch.tensor([p.grad.norm().item() ** 2 for p in self.actor_critic_network.critic.parameters() if p.grad is not None]).mean().sqrt()
+        actor_grad_norm = torch.tensor([p.grad.norm().item() ** 2 for p in self.option_critic_network.intra_option_actors.parameters() if p.grad is not None]).mean().sqrt()
+        critic_grad_norm = torch.tensor([p.grad.norm().item() ** 2 for p in self.option_critic_network.critic.parameters() if p.grad is not None]).mean().sqrt()
         # clip gradients separately to avoid cross-network interference
         if self.max_grad_norm is not None:
             nn.utils.clip_grad_norm_(self.gnn.parameters(), self.max_grad_norm)
-            nn.utils.clip_grad_norm_(self.actor_critic_network.actor.parameters(), self.max_grad_norm)
-            nn.utils.clip_grad_norm_(self.actor_critic_network.critic.parameters(), self.max_grad_norm)
+            nn.utils.clip_grad_norm_(self.option_critic_network.intra_option_actors.parameters(), self.max_grad_norm)
+            nn.utils.clip_grad_norm_(self.option_critic_network.critic.parameters(), self.max_grad_norm)
 
         self.optimizer.step()
 
@@ -275,6 +330,7 @@ class PPOAgent(Agent):
             "actor_loss": actor_loss.detach().cpu().numpy().item(),
             "entropy_loss": entropy_loss.detach().cpu().numpy().item(),
             "critic_loss": critic_loss.detach().cpu().numpy().item(),
+            "gjsd_loss": gjsd_loss.detach().cpu().numpy().item(),
             "gnn_grad_norm": gnn_grad_norm.detach().cpu().numpy().item(),
             "actor_grad_norm": actor_grad_norm.detach().cpu().numpy().item(),
             "critic_grad_norm": critic_grad_norm.detach().cpu().numpy().item(),
@@ -285,21 +341,21 @@ class PPOAgent(Agent):
     def save_model(self, ckpt_dir: Path, name: str) -> None:
         checkpoint = {
             'gnn': self.gnn.state_dict(),
-            'actor_critic': self.actor_critic_network.state_dict(),
+            'option_critic': self.option_critic_network.state_dict(),
         }
         model_path = ckpt_dir / f"model_{name}.pt"
         torch.save(checkpoint, model_path)
         self.logger.critical(f"Saved model to {model_path}\n\n\n")
 
     def load_model(self, model_path: str) -> None:
-        # theta_1, theta_2, theta_3, actor_critic_network
+        # theta_1, theta_2, theta_3, option_critic_network
         checkpoint = torch.load(model_path, map_location=torch.device(self.device))
         self.gnn.load_state_dict(checkpoint['gnn'])
-        self.actor_critic_network.load_state_dict(checkpoint['actor_critic'])
+        self.option_critic_network.load_state_dict(checkpoint['option_critic'])
         self.logger.critical(f"model are loaded from {model_path}")
 
 
-def _train_an_episode(agent: PPOAgent, 
+def _train_an_episode(agent: OptionCriticAgent, 
                       env: Environment, 
                       rec: Record,
                       logger: logging.Logger) -> float:
@@ -307,6 +363,8 @@ def _train_an_episode(agent: PPOAgent,
     structure = env.reset()  # generate a new random graph
     rec.record_in_beginning(structure, testing=False)
     graph = structure.graph.clone()
+    # randomly sample an option for this episode (reduce variance)
+    option_idx = agent.sample_option()
     score = 0
     done = False
     while not done:
@@ -315,16 +373,17 @@ def _train_an_episode(agent: PPOAgent,
         with torch.no_grad():
             graph = graph.to(agent.device)
             state = agent.gnn.forward(graph.x, graph.edge_index, graph.edge_attr, None, structure.aux["story_batch"].to(agent.device), None)
-        logits, value, entropy, action, log_prob = agent.choose_action(state, structure.already_minimum_section_story_indexes)
+        gjsd, logits, value, entropy, action, log_prob = agent.choose_action(state, structure.already_minimum_section_story_indexes, option_idx)
         member_category = structure.story_level_categories[action]
         update_story = (action % structure.story_num) + 1
-        print(f"-----episode: {agent._number_episodes+1:4d}, timestep: {agent._number_timesteps+1:3d}, story_level_sections: {structure.story_level_sections}, action: {action:3d} [{update_story}F {member_category}]")
+        print(f"-----episode: {agent._number_episodes+1:4d}, timestep: {agent._number_timesteps+1:3d}, story_level_sections: {structure.story_level_sections}, option: {option_idx:2d}, action: {action:3d} [{update_story}F {member_category}]")
         structure, reward, done, fail_name, fail_reason = env.step(structure, action)
         score += reward
-        logger.info(f"episode: {agent._number_episodes+1:4d}, timestep: {agent._number_timesteps+1:3d}, action: {action:3d}, reward: {reward:4f},  acculmulate_score: {score:.4f}")
+        logger.info(f"episode: {agent._number_episodes+1:4d}, timestep: {agent._number_timesteps+1:3d}, option: {option_idx:2d}, action: {action:3d}, reward: {reward:4f},  acculmulate_score: {score:.4f}")
         
         # store the transition in memory
         transition = {
+            # Actor-Critic
             "graph": original_structure.graph.clone(),
             "logits": logits,
             "value": value,
@@ -335,7 +394,10 @@ def _train_an_episode(agent: PPOAgent,
             "reward": reward,
             "done": done,
             "infeasible_actions": torch.tensor([True if i in original_structure.already_minimum_section_story_indexes else False for i in range(state.shape[0])], dtype=torch.bool),
-            "aux": structure.aux
+            "aux": structure.aux, 
+            # Option-Critic
+            "option_idx": option_idx,
+            "gen_js_divergence": gjsd
         }
         agent.storage.store(transition)
         graph = structure.graph.clone()
@@ -347,12 +409,12 @@ def _train_an_episode(agent: PPOAgent,
     pred_values = []
     mean_kl_divergences = []
     ratios = []
-    actor_losses, entropy_losses, critic_losses = [], [], []
+    actor_losses, entropy_losses, critic_losses, gjsd_losses = [], [], [], []
     gnn_grad_norms, actor_grad_norms, critic_grad_norms = [], [], []
 
     params_gnn_before = [p.clone().detach() for p in agent.gnn.parameters()]
-    params_actor_before = [p.clone().detach() for p in agent.actor_critic_network.actor.parameters()]
-    params_critic_before = [p.clone().detach() for p in agent.actor_critic_network.critic.parameters()]
+    params_actor_before = [p.clone().detach() for p in agent.option_critic_network.intra_option_actors.parameters()]
+    params_critic_before = [p.clone().detach() for p in agent.option_critic_network.critic.parameters()]
 
     t_start = time.time()
     if agent.use_lr_scheduler:
@@ -367,6 +429,7 @@ def _train_an_episode(agent: PPOAgent,
         actor_losses.append(info["actor_loss"])
         entropy_losses.append(info["entropy_loss"])
         critic_losses.append(info["critic_loss"])
+        gjsd_losses.append(info["gjsd_loss"])
         gnn_grad_norms.append(info["gnn_grad_norm"])
         actor_grad_norms.append(info["actor_grad_norm"])
         critic_grad_norms.append(info["critic_grad_norm"])
@@ -376,14 +439,15 @@ def _train_an_episode(agent: PPOAgent,
     print(f"Total optimization time: {t_end - t_start:.3f} seconds")
 
     params_gnn_after = [p.clone().detach() for p in agent.gnn.parameters()]
-    params_actor_after = [p.clone().detach() for p in agent.actor_critic_network.actor.parameters()]
-    params_critic_after = [p.clone().detach() for p in agent.actor_critic_network.critic.parameters()]
+    params_actor_after = [p.clone().detach() for p in agent.option_critic_network.intra_option_actors.parameters()]
+    params_critic_after = [p.clone().detach() for p in agent.option_critic_network.critic.parameters()]
     param_change = lambda before, after: torch.tensor([(a - b).pow(2).sum() for b, a in zip(before, after)]).mean().sqrt().item()
     gnn_change = param_change(params_gnn_before, params_gnn_after)
     actor_change = param_change(params_actor_before, params_actor_after)
     critic_change = param_change(params_critic_before, params_critic_after)
     agent.logger.info(f"Parameter changes - GNN: {gnn_change:.6f}, Actor: {actor_change:.6f}, Critic: {critic_change:.6f}")
 
+    # Actor-Critic
     rec.returns["train"].append(returns)
     rec.advantages["train"].append(advantages)
     rec.entropies["train"].append(agent.storage.entropy)
@@ -393,12 +457,16 @@ def _train_an_episode(agent: PPOAgent,
     rec.losses["actor"].append(actor_losses)
     rec.losses["entropy"].append(entropy_losses)
     rec.losses["critic"].append(critic_losses)
+    rec.losses["gjsd"].append(gjsd_losses)
     rec.grad_norms["gnn"].append(gnn_grad_norms)
     rec.grad_norms["actor"].append(actor_grad_norms)
     rec.grad_norms["critic"].append(critic_grad_norms)
     rec.param_changes["gnn"].append(gnn_change)
     rec.param_changes["actor"].append(actor_change)
     rec.param_changes["critic"].append(critic_change)
+    # Option-Critic
+    rec.option_indices["train"].append(agent.storage.option_idx)
+    rec.gen_js_divergences["train"].append(agent.storage.gen_js_divergence)
 
     agent.storage.reset()
     agent._number_episodes += 1
@@ -416,10 +484,11 @@ def _train_an_episode(agent: PPOAgent,
     score = sum(env.reward_record)
     return score
 
-def _testing(agent: PPOAgent, 
+def _testing(agent: OptionCriticAgent, 
              env: Environment, 
              rec: Record,
-             logger: logging.Logger) -> float:
+             logger: logging.Logger,
+             option_idx: int) -> float:
     """Test agent's performance with prescribed condition and greedy policy."""
     structure = env.reset(testing=True)  # generate a fix-shaped structure
     rec.record_in_beginning(structure, testing=True)
@@ -434,14 +503,15 @@ def _testing(agent: PPOAgent,
             graph = graph.to(agent.device)
             state = agent.gnn.forward(graph.x, graph.edge_index, graph.edge_attr, None, structure.aux["story_batch"].to(agent.device), None)
         
-        logits, value, entropy, action, log_prob = agent.choose_action(state, structure.already_minimum_section_story_indexes, greedy=True)
+        gjsd, logits, value, entropy, action, log_prob = agent.choose_action(state, structure.already_minimum_section_story_indexes, option_idx, greedy=True)
         member_category = structure.story_level_categories[action]
         update_story = (action % structure.story_num) + 1
-        print(f"*****Testing Episode, story_level_sections: {structure.story_level_sections}, action: {action:3d} [{update_story}F {member_category}]")
+        print(f"*****Testing Episode, story_level_sections: {structure.story_level_sections}, option: {option_idx:2d}, action: {action:3d} [{update_story}F {member_category}]")
         structure, reward, done, fail_name, fail_reason = env.step(structure, action)
 
         # store the transition in memory
         transition = {
+            # Actor-Critic
             "graph": original_structure.graph.clone(),
             "logits": logits,
             "value": value,
@@ -452,7 +522,10 @@ def _testing(agent: PPOAgent,
             "reward": reward,
             "done": done,
             "infeasible_actions": np.array([True if i in structure.already_minimum_section_story_indexes else False for i in range(state.shape[0])], dtype=bool),
-            "aux": structure.aux
+            "aux": structure.aux, 
+            # Option-Critic
+            "option_idx": option_idx,
+            "gen_js_divergence": gjsd
         }
         agent.storage.store(transition)
         graph = structure.graph.clone()
@@ -460,7 +533,7 @@ def _testing(agent: PPOAgent,
         # record
         score += reward
         timestep += 1
-        logger.info(f"*****Testing Episode, timestep: {timestep:3d}, action: {action:3d}, reward: {reward:4f},  acculmulate_score: {score:.4f}")
+        logger.info(f"*****Testing Episode, timestep: {timestep:3d}, option: {option_idx:2d}, action: {action:3d}, reward: {reward:4f},  acculmulate_score: {score:.4f}")
         print()
 
     if not agent.use_gae:
@@ -482,9 +555,13 @@ def _testing(agent: PPOAgent,
             advantages.insert(0, gae)
             returns.insert(0, gae+values[i])
     
+    # Actor-Critic
     rec.returns["test"].append(returns)
     rec.advantages["test"].append(advantages)
     rec.entropies["test"].append(agent.storage.entropy)
+    # Option-Critic
+    rec.option_indices["test"].append(agent.storage.option_idx)
+    rec.gen_js_divergences["test"].append(agent.storage.gen_js_divergence)
     agent.storage.reset()
 
     final_structure = structure if fail_reason == "minimum_section" else original_structure
@@ -499,7 +576,7 @@ def _testing(agent: PPOAgent,
     return score
 
 
-def train(agent: PPOAgent,
+def train(agent: OptionCriticAgent,
           env: Environment,
           rec: Record,
           train_episode_num: int,
@@ -516,19 +593,24 @@ def train(agent: PPOAgent,
 
         if (i+1) % test_frequency == 0:
             for j in range(test_episode_num):
-                test_score = _testing(agent, env, rec, logger)
-                logger.critical(f"Testing Episode: {j+1}, score: {test_score:.3f}")
-                logger.critical(f"Testing Episode: {j+1}, saved_material: {sum(env.saved_material_record):.3f}, saved_material_SCWB: {sum(env.saved_material_record_SCWB):.3f}")
-                logger.critical(f"Testing Episode: {j+1}, total_reduction_amount: {env.material_usage_record[0] - env.material_usage_record[-1]:.3f}\n\n\n")
-            
+                for option_idx in range(agent.num_options):
+                    agent.logger.critical(f"Testing with Option {option_idx}...")
+                    test_score = _testing(agent, env, rec, logger, option_idx)
+                    logger.critical(f"Testing Episode: {j+1}, Option: {option_idx}")
+                    logger.critical(f"score: {test_score:.3f}")
+                    logger.critical(f"saved_material: {sum(env.saved_material_record):.3f}, saved_material_SCWB: {sum(env.saved_material_record_SCWB):.3f}")
+                    logger.critical(f"total_reduction_amount: {env.material_usage_record[0] - env.material_usage_record[-1]:.3f}\n\n\n")
+                
             rec.output(env.checkpoint_dir)
-            final_volumes = np.array(rec.testing_record["final_volume"]).reshape((-1, test_episode_num))  # (train_episode_num/test_frequency, test_episode_num)
-            scores = np.array(rec.testing_record["score"]).reshape((-1, test_episode_num))  # (train_episode_num/test_frequency, test_episode_num)
+            final_volumes = np.array(rec.testing_record["final_volume"]).reshape((-1, test_episode_num, agent.num_options))  # (train_episode_num/test_frequency, test_episode_num, num_options)
+            scores = np.array(rec.testing_record["score"]).reshape((-1, test_episode_num, agent.num_options))  # (train_episode_num/test_frequency, test_episode_num, num_options)
 
-            if np.argmin(final_volumes.mean(axis=-1)) == len(final_volumes)-1: 
+            if np.argmin(final_volumes.mean(axis=-1).mean(axis=-1)) == len(final_volumes)-1: 
                 agent.save_model(env.checkpoint_dir/"models", name="MinimumUsage")
-            if np.argmax(scores.mean(axis=-1)) == len(final_volumes)-1: 
+            if np.argmax(scores.mean(axis=-1).mean(axis=-1)) == len(scores)-1: 
                 agent.save_model(env.checkpoint_dir/"models", name="HighestScore")
+            if scores.max(axis=-1).max(axis=-1).argmax() == len(scores)-1: 
+                agent.save_model(env.checkpoint_dir/"models", name="HighestSingleScore")
+            
             if (i+1) % 50 == 0: 
                 agent.save_model(env.checkpoint_dir/"models", name=f"Episode{str(i+1)}")
-

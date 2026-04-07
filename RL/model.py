@@ -129,11 +129,9 @@ class Dueling_Q_Network(nn.Module):
         
         return q_value
 
-
 def synchronize_q_networks(target_q_network: nn.Module, online_q_network: nn.Module):
     """In place, synchronization of target_q_network and online_q_network."""
     _ = target_q_network.load_state_dict(online_q_network.state_dict())
-
 
 def soft_update_q_network_parameters(target_q_network: nn.Module, online_q_network: nn.Module, soft_update_alpha: float):
     """In-place, soft-update of target_q_network parameters with parameters from online_q_network."""
@@ -141,7 +139,7 @@ def soft_update_q_network_parameters(target_q_network: nn.Module, online_q_netwo
         p1.data.copy_(soft_update_alpha * p2.data + (1 - soft_update_alpha) * p1.data)
 
 
-class Categorical_ActorCritic_Network(nn.Module):
+class CategoricalActorCritic(nn.Module):
     def __init__(self, member_state_dim, hidden_dim, action_dim):
         super().__init__()
         # self.state_aggregation = nn.Sequential(
@@ -163,17 +161,70 @@ class Categorical_ActorCritic_Network(nn.Module):
             # batched: (batch_size, num_actions, member_state_dim) = (batch_size, 4*num_stories, 200)
 
         # Actor: per-action logits
-        logits = self.actor(edge_state)  # shape: (num_actions, action_dim=1) or (batch_size, num_actions, action_dim=1)
-        # dist = Categorical(logits=logits.squeeze(-1))  # shape: (num_actions,) or (batch_size, num_actions)
+        logits = self.actor(edge_state).squeeze(-1)  # (num_actions,) or (batch_size, num_actions)
 
         # Critic: single state value
-        aggregated_state = torch.mean(edge_state, dim=-2)  # shape: (member_state_dim,) or (batch_size, member_state_dim)
-        # hidden = self.state_aggregation(aggregated_state)  # shape: (hidden_dim,)        
-        value = self.critic(aggregated_state)   # shape: (1,) or (batch_size, 1)
+        aggregated_state = torch.mean(edge_state, dim=-2)  # (member_state_dim,) or (batch_size, member_state_dim)
+        # hidden = self.state_aggregation(aggregated_state)  # (hidden_dim,)        
+        value = self.critic(aggregated_state)   # (1,) or (batch_size, 1)
         
-        return logits.squeeze(-1), value
+        return logits, value
 
+class MultiOptionActorCritic(nn.Module):
+    def __init__(self, member_state_dim, hidden_dim, action_dim, num_options):
+        super().__init__()
 
+        self.num_options = num_options
+
+        # shared encoder（可簡單先 identity）
+        # self.encoder = nn.Sequential(
+        #     nn.Linear(member_state_dim, hidden_dim),
+        #     nn.ReLU(),
+        # )
+
+        # K 個 intra-option policies
+        self.intra_option_actors = nn.ModuleList([
+            nn.Linear(member_state_dim, action_dim, bias=False)
+            for _ in range(num_options)
+        ])
+
+        # critic（state-level）
+        self.critic = nn.Linear(member_state_dim, 1, bias=False)
+
+    def forward(self, edge_state: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """
+        edge_state:
+            (num_actions, member_state_dim)
+            or (batch_size, num_actions, member_state_dim)
+
+        option_idx:
+            int or (batch_size,)
+        """
+
+        # encode each edge
+        # feat = self.encoder(edge_state)
+
+        # Actor: per-action logits
+        # logits for each option
+        logits_all = []
+        for actor in self.intra_option_actors:
+            logits_all.append(actor(edge_state).squeeze(-1))  # (num_actions,) or (batch_size, num_actions)
+
+        # stack logits for all options
+        logits_all = torch.stack(logits_all, dim=-2)  # (num_options, num_actions) or (batch_size, num_options, num_actions)
+
+        # select chosen option
+        # if edge_state.dim() == 2:
+        #     logits = logits_all[option_idx]  # (num_actions,)
+        # else:
+        #     logits = logits_all[torch.arange(edge_state.size(0)), option_idx]  # (batch_size, num_actions)
+        # print(f"{logits.shape = }")
+
+        # Critic: single state value
+        aggregated_state = torch.mean(edge_state, dim=-2)  # (member_state_dim,) or (batch_size, member_state_dim)
+        value = self.critic(aggregated_state)  # (1,) or (batch_size, 1)
+
+        return logits_all, value
 
 
 ### Japan's model ###
