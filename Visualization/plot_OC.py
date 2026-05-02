@@ -29,7 +29,6 @@ def plot_return(train_scores: list[float], test_scores: list[float], num_options
     if save:
         plt.savefig(save_dir/"return.png", bbox_inches='tight')
 
-
 def plot_fail_name(train_fail_names: list[str], test_fail_names: list[str], train_option_indices: list[list[int]], test_option_indices: list[list[int]], num_options: int, save_dir: Path, save=True) -> None:
     train_names = {}
     test_names = {}
@@ -87,7 +86,6 @@ def plot_fail_name(train_fail_names: list[str], test_fail_names: list[str], trai
     if save:
         plt.savefig(save_dir/"fail_names.png", bbox_inches='tight')
     plt.close()
-
 
 def plot_fail_reason(train_fail_reasons: list[str], test_fail_reasons: list[str], train_option_indices: list[list[int]], test_option_indices: list[list[int]], num_options: int, save_dir: Path, save=True) -> None:
     # full string is too long, only keep first half
@@ -148,7 +146,6 @@ def plot_fail_reason(train_fail_reasons: list[str], test_fail_reasons: list[str]
     if save:
         plt.savefig(save_dir/"fail_reasons.png", bbox_inches='tight')
     plt.close()
-
 
 def plot_testing_behavior(rec: Record, env: Environment, num_options: int, save_dir: Path, save=True) -> None:
     train_scores = rec.training_record["score"]
@@ -211,8 +208,6 @@ def plot_testing_behavior(rec: Record, env: Environment, num_options: int, save_
     plt.close()
 
 
-
-
 def plot_advantage(advantage_record: dict, num_options: int, save_dir: Path, save=True) -> None:
     # train_record: (episode_num, optimization_epoch, timestep_num)
     train_record = advantage_record["train"]
@@ -255,7 +250,6 @@ def plot_advantage(advantage_record: dict, num_options: int, save_dir: Path, sav
     plt.tight_layout()
     if save:
         plt.savefig(save_dir/"advantages.png", bbox_inches='tight')
-
 
 def plot_entropy(entropy_record: dict, num_options: int, save_dir=None, save=True):
     # train_record: (episode_num, timestep_num)
@@ -300,8 +294,6 @@ def plot_entropy(entropy_record: dict, num_options: int, save_dir=None, save=Tru
         plt.savefig(save_dir/"entropy.png", bbox_inches='tight')
 
 
-
-
 def plot_gjsd(gjsd_record: dict, num_options: int, save_dir: Path, save=True): 
     """Plot the Generalized Jensen-Shannon Divergence (GJSD) recorded during training and testing."""
     # train_record: (episode_num, timestep_num)
@@ -342,7 +334,6 @@ def plot_gjsd(gjsd_record: dict, num_options: int, save_dir: Path, save=True):
     plt.tight_layout()
     if save:
         plt.savefig(save_dir/"gjsd.png", bbox_inches='tight')
-
 
 # for testing, plot GJSD (max, mean ± std over options) and return (max, mean ± std over options) curves together
 def plot_gjsd_return(test_gjsds: list[list[float]], test_scores: list[float], num_options: int, test_frequency: int, save_dir: Path, save=True):
@@ -391,4 +382,3 @@ def plot_gjsd_return(test_gjsds: list[list[float]], test_scores: list[float], nu
     plt.tight_layout()
     if save:
         plt.savefig(save_dir/"testing_gjsd_return.png", bbox_inches='tight')
-    

@@ -18,12 +18,12 @@ from Validation import accuracy, normalization, opensees
 
 
 result_dir = Path("./Results/AdjustedMoreSections/RandomShape/OpenSees_RSA")
-static_model_folder  = "2025_06_05__21_45_28__TaiModifiedModel_MatReward_StaResFeatures_SoftUpdate_LinearDecay010_Buffer10000_Batch256_Epoch1000"
-dynamic_model_folder = ""
-model_date           = [static_model_folder.split("__")[0], static_model_folder.split("__")[1]]
+static_model_folder  = "2026_03_10__13_19_18__PPO_MatReward_UseGAE095_LR5e-4_ActLossCoef10_CriLossCoef001_EntroWei01to001_OptimEpoch5_Episode1000"
+dynamic_model_folder = "2026_03_17__17_12_00__PPO_MatReward_doNDA_UseGAE095_LR5e-4_ActLossCoef10_CriLossCoef001_EntroWei01to001_OptimEpoch5_Episode1000"
+model_date           = [static_model_folder.split("__")[0], static_model_folder.split("__")[1], dynamic_model_folder.split("__")[0], dynamic_model_folder.split("__")[1]]
 model_setting        = "__".join(model_date)
 
-strucutre_type       = "x6z6y7"  # testing, taller, random, x2z2y4, x6z6y7
+strucutre_type       = "testing"  # testing, taller, random, x2z2y4, x6z6y7
 gm_level             = "World_processed_one_scaling_MCE"  # DBE, MCE, MCEx2, World_processed_one_scaling_MCE, TAP3_two_scaling_MCE
 chance               = 0  # 0, 1, 2
 
@@ -233,14 +233,14 @@ def compare_drift_ratio():
     gm_mean_story_peak_drift_ratio_static = story_peak_drift_ratio_static.mean(axis=0)  # shape: (story_num, 2)
     gm_peak_story_peak_drift_ratio_static = story_peak_drift_ratio_static.max(axis=0)  # shape: (story_num, 2)
 
-    # story_mean_drift_ratio_dynamic, story_peak_drift_ratio_dynamic = get_story_level_drift_ratio(structure, scenario="dynamic")  # shape: (gm_num, story_num, 2)
+    story_mean_drift_ratio_dynamic, story_peak_drift_ratio_dynamic = get_story_level_drift_ratio(structure, scenario="dynamic")  # shape: (gm_num, story_num, 2)
     # # gm_mean_story_mean_drift_ratio_dynamic = story_mean_drift_ratio_dynamic.mean(axis=0)  # shape: (story_num, 2)
     # # gm_peak_story_mean_drift_ratio_dynamic = story_mean_drift_ratio_dynamic.max(axis=0)  # shape: (story_num, 2)
-    # gm_mean_story_peak_drift_ratio_dynamic = story_peak_drift_ratio_dynamic.mean(axis=0)  # shape: (story_num, 2)
-    # gm_peak_story_peak_drift_ratio_dynamic = story_peak_drift_ratio_dynamic.max(axis=0)  # shape: (story_num, 2)
+    gm_mean_story_peak_drift_ratio_dynamic = story_peak_drift_ratio_dynamic.mean(axis=0)  # shape: (story_num, 2)
+    gm_peak_story_peak_drift_ratio_dynamic = story_peak_drift_ratio_dynamic.max(axis=0)  # shape: (story_num, 2)
 
-    plot_story_level_drift_ratio(gm_mean_story_peak_drift_ratio_static, type="mean")
-    plot_story_level_drift_ratio(gm_peak_story_peak_drift_ratio_static, type="peak")
+    plot_story_level_drift_ratio(gm_mean_story_peak_drift_ratio_static, gm_mean_story_peak_drift_ratio_dynamic, type="mean")
+    plot_story_level_drift_ratio(gm_peak_story_peak_drift_ratio_static, gm_peak_story_peak_drift_ratio_dynamic, type="peak")
 
 
 def evaluate_design_response(model_path, nda_simulator, nda_norm_dict, MCE_ground_motion_set):

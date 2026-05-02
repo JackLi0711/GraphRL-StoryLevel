@@ -40,7 +40,7 @@ def parse_args() -> Namespace:
 		default="./Results/AdjustedMoreSections/RandomShape/OpenSees_RSA"
 	)
 	parser.add_argument("--suffix", type=str, 
-		default="OC_MatReward_LR5e-4_OptimEpoch5_OptNum4_GJSDLossCoef05_Episode1000"
+		default="OC_MatReward_LR5eN4_ActLossCoef10_CriLossCoef2eN3_OptimEpoch5_OptNum4_GJSDLossCoef02_OptHor5_Episode2000"
 	)
 	
     # Nonlinear dynamic analysis simulator
@@ -78,17 +78,19 @@ def parse_args() -> Namespace:
 	parser.add_argument("--entropy_weight_interval", type=list[float], default=[1e-1, 1e-2], help="[start, end]")
 	parser.add_argument("--entropy_weight_schedule", type=str, default="linear", choices=["linear", "constant"])
 	parser.add_argument("--actor_loss_coef", type=float, default=10.0)
-	parser.add_argument("--critic_loss_coef", type=float, default=0.01)
+	parser.add_argument("--critic_loss_coef", type=float, default=2e-3)
 	parser.add_argument("--max_grad_norm", type=float, default=None)
 	parser.add_argument("--optimization_epoch", type=int, default=5)
 	
     # Option-Critic
 	parser.add_argument("--option_num", type=int, default=4)
-	parser.add_argument("--gjsd_loss_coef", type=float, default=0.5, help="coefficient for GJSD in loss calculation to encourage diverse options")
-	
+	parser.add_argument("--gjsd_loss_coef", type=float, default=0.2, help="coefficient for GJSD in loss calculation to encourage diverse options")
+	parser.add_argument("--if_hierarchical", action="store_true", default=True, help="whether to use hierarchical option-critic or flat style")
+	parser.add_argument("--option_horizon", type=int, default=5, help="number of steps to execute the same option before performing structure analysis")
+
     # Training
-	parser.add_argument("--train_episode_num", type=int, default=1000)
-	parser.add_argument("--test_frequency", type=int, default=5)
+	parser.add_argument("--train_episode_num", type=int, default=2000)
+	parser.add_argument("--test_frequency", type=int, default=10)
 	parser.add_argument("--test_episode_num", type=int, default=1)
 	parser.add_argument("--random_seed", type=int, default=731)
 	
@@ -188,6 +190,8 @@ def main(args):
 		"optimization_epoch": args.optimization_epoch,
 		"num_options": args.option_num,
 		"gjsd_loss_coef": args.gjsd_loss_coef,
+		"if_hierarchical": args.if_hierarchical,
+		"option_horizon": args.option_horizon,
 		"seed": args.random_seed,
 		"logger": logger,
 		"pretrained_model_path": None,
@@ -257,12 +261,10 @@ def main(args):
 	plot_OC.plot_gjsd(rec.gen_js_divergences, args.option_num, args.ckpt_dir)
 	plot_OC.plot_gjsd_return(rec.gen_js_divergences["test"], rec.testing_record["score"], args.option_num, args.test_frequency, args.ckpt_dir)
 	plot_PPO.plot_explained_variance(rec.returns["train"], rec.pred_values, args.ckpt_dir)
-	plot_PPO.plot_kl_divergence(rec.kl_divergences, args.target_kl, args.ckpt_dir)
-	plot_PPO.plot_clip_fraction(rec.ratios, args.clip_eps, args.ckpt_dir)
-	plot_PPO.plot_loss(rec.losses["actor"], "actor", args.ckpt_dir)
-	plot_PPO.plot_loss(rec.losses["entropy"], "entropy", args.ckpt_dir)
-	plot_PPO.plot_loss(rec.losses["critic"], "critic", args.ckpt_dir)
-	plot_PPO.plot_loss(rec.losses["gjsd"], "GJSD", args.ckpt_dir)
+	plot_PPO.plot_kl_divergence(rec.kl_divergences, args.target_kl, "kl_divergence", args.ckpt_dir)
+	plot_PPO.plot_clip_fraction(rec.ratios, args.clip_eps, "clip_fraction", args.ckpt_dir)
+	for loss_type, loss_record in rec.losses.items():
+		plot_PPO.plot_loss(loss_record, loss_type, args.ckpt_dir)
 	plot_PPO.plot_grad_norm(rec.grad_norms, args.ckpt_dir)
 	plot_PPO.plot_param_change(rec.param_changes, args.ckpt_dir)
 

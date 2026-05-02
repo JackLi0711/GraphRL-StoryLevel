@@ -22,7 +22,7 @@ def plot_reward(train_scores: List[float], test_scores: List[float], checkpoint_
     plt.xticks(fontsize=14)
     plt.yticks(fontsize=14)
     plt.tight_layout()
-    plt.savefig(checkpoint_dir / "reward.png")
+    plt.savefig(checkpoint_dir/"reward.png", bbox_inches='tight')
     plt.close()
 
 
@@ -35,7 +35,7 @@ def plot_loss(learn_losses: List[List[float]], checkpoint_dir: Path) -> None:
     plt.xlabel("trained episodes")
     plt.ylabel("average batch loss")
     plt.tight_layout()
-    plt.savefig(checkpoint_dir / "loss.png")
+    plt.savefig(checkpoint_dir/"loss.png", bbox_inches='tight')
     plt.close()
 
 
@@ -53,7 +53,7 @@ def plot_Qvalues(Q_values: List[List[float]], checkpoint_dir: Path) -> None:
     plt.ylabel("Q value")
     plt.legend(loc="best")
     plt.tight_layout()
-    plt.savefig(checkpoint_dir / "q_vals.png")
+    plt.savefig(checkpoint_dir/"q_vals.png", bbox_inches='tight')
     plt.close()
 
 
@@ -75,11 +75,11 @@ def plot_fail_names(train_fail_names: List[str], test_fail_names: List[str], che
     
     fig, axs = plt.subplots(1, 2, figsize=(15, 5))
     axs[0].bar(train_names.keys(), train_names.values())
-    axs[0].set_title("training fail names")
+    axs[0].set_title("training fail names", fontsize=16)
     axs[1].bar(test_names.keys(), test_names.values())
-    axs[1].set_title("testing fail names")
+    axs[1].set_title("testing fail names", fontsize=16)
     plt.tight_layout()
-    plt.savefig(checkpoint_dir / "fail_names.png")
+    plt.savefig(checkpoint_dir/"fail_names.png", bbox_inches='tight')
     plt.close()
 
 
@@ -103,11 +103,11 @@ def plot_fail_reasons(train_fail_reasons: List[str], test_fail_reasons: List[str
     
     fig, axs = plt.subplots(1, 2, figsize=(15, 5))
     axs[0].bar(train_reasons.keys(), train_reasons.values())
-    axs[0].set_title("training fail reasons")
+    axs[0].set_title("training fail reasons", fontsize=16)
     axs[1].bar(test_reasons.keys(), test_reasons.values())
-    axs[1].set_title("testing fail reasons")
+    axs[1].set_title("testing fail reasons", fontsize=16)
     plt.tight_layout()
-    plt.savefig(checkpoint_dir / "fail_reasons.png")
+    plt.savefig(checkpoint_dir/"fail_reasons.png", bbox_inches='tight')
     plt.close()
 
 
@@ -156,7 +156,7 @@ def plot_test_behaviors(rec: Record, env: Environment, checkpoint_dir: Path) -> 
     ax2.legend(loc='upper right', fontsize=14)
 
     plt.tight_layout()
-    plt.savefig(checkpoint_dir / "testing_behaviors.png", dpi=1000)
+    plt.savefig(checkpoint_dir/"testing_behaviors.png", dpi=1000, bbox_inches='tight')
     plt.close()
 
 

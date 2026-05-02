@@ -245,11 +245,10 @@ def main(args):
 	plot_PPO.plot_advantage(rec.advantages, args.ckpt_dir)
 	plot_PPO.plot_entropy(rec.entropies, args.ckpt_dir)
 	plot_PPO.plot_explained_variance(rec.returns["train"], rec.pred_values, args.ckpt_dir)
-	plot_PPO.plot_kl_divergence(rec.kl_divergences, args.target_kl, args.ckpt_dir)
-	plot_PPO.plot_clip_fraction(rec.ratios, args.clip_eps, args.ckpt_dir)
-	plot_PPO.plot_loss(rec.losses["actor"], "actor", args.ckpt_dir)
-	plot_PPO.plot_loss(rec.losses["entropy"], "entropy", args.ckpt_dir)
-	plot_PPO.plot_loss(rec.losses["critic"], "critic", args.ckpt_dir)
+	plot_PPO.plot_kl_divergence(rec.kl_divergences, args.target_kl, "kl_divergence", args.ckpt_dir)
+	plot_PPO.plot_clip_fraction(rec.ratios, args.clip_eps, "clip_fraction", args.ckpt_dir)
+	for loss_type, loss_record in rec.losses.items():
+		plot_PPO.plot_loss(loss_record, loss_type, args.ckpt_dir)
 	plot_PPO.plot_grad_norm(rec.grad_norms, args.ckpt_dir)
 	plot_PPO.plot_param_change(rec.param_changes, args.ckpt_dir)
 

@@ -30,6 +30,7 @@ def plot_advantage(advantage_record: dict, save_dir=None, save=True):
     plt.fill_between(train_episodes, train_means-train_stds, train_means+train_stds, color="gray", alpha=0.3, label="training: mean ± std")
     plt.plot(test_episodes, test_means, label="testing: mean", color="red", linestyle='-', linewidth=2)
     plt.fill_between(test_episodes, test_means-test_stds, test_means+test_stds, color="pink", alpha=0.3, label="testing: mean ± std")
+    
     plt.xlabel("trained episodes", fontsize=14)
     plt.ylabel("advantage", fontsize=14)
     plt.title("Advantage over Trained Episodes", fontsize=16)
@@ -37,7 +38,7 @@ def plot_advantage(advantage_record: dict, save_dir=None, save=True):
     plt.grid()
     plt.tight_layout()
     if save:
-        plt.savefig(save_dir / "advantage.png")
+        plt.savefig(save_dir/"advantage.png", bbox_inches='tight')
 
 
 def plot_entropy(entropy_record: dict, save_dir=None, save=True):
@@ -65,6 +66,7 @@ def plot_entropy(entropy_record: dict, save_dir=None, save=True):
     plt.fill_between(train_episodes, train_means-train_stds, train_means+train_stds, color="gray", alpha=0.3, label="training: mean ± std")
     plt.plot(test_episodes, test_means, label="testing: mean", color="red", linestyle='-', linewidth=2)
     plt.fill_between(test_episodes, test_means-test_stds, test_means+test_stds, color="pink", alpha=0.3, label="testing: mean ± std")
+    
     plt.xlabel("trained episodes", fontsize=14)
     plt.ylabel("entropy", fontsize=14)
     plt.title("Entropy over Trained Episodes", fontsize=16)
@@ -72,7 +74,7 @@ def plot_entropy(entropy_record: dict, save_dir=None, save=True):
     plt.grid()
     plt.tight_layout()
     if save:
-        plt.savefig(save_dir / "entropy.png")
+        plt.savefig(save_dir/"entropy.png", bbox_inches='tight')
 
 
 def plot_explained_variance(return_record, value_record, save_dir=None, save=True):
@@ -95,6 +97,7 @@ def plot_explained_variance(return_record, value_record, save_dir=None, save=Tru
     train_episodes = np.arange(1, episode_num+1)
     plt.plot(train_episodes, explained_variance_means, label="mean over optimization epochs", color="black", linestyle='-', linewidth=1)
     plt.fill_between(train_episodes, explained_variance_means-explained_variance_stds, explained_variance_means+explained_variance_stds, color="gray", alpha=0.3, label="mean ± std")
+    
     plt.xlabel("trained episodes", fontsize=14)
     plt.ylabel("explained variance", fontsize=14)
     plt.title("Explained Variance over Trained Episodes", fontsize=16)
@@ -102,10 +105,10 @@ def plot_explained_variance(return_record, value_record, save_dir=None, save=Tru
     plt.grid()
     plt.tight_layout()
     if save:
-        plt.savefig(save_dir / "explained_variance.png")
+        plt.savefig(save_dir/"explained_variance.png", bbox_inches='tight')
 
 
-def plot_kl_divergence(kl_record, target_kl=0.02, save_dir=None, save=True):
+def plot_kl_divergence(kl_record, target_kl=0.02, name="kl_divergence", save_dir=None, save=True):
     # kl_record shape: (episode_num, optimization_epoch)
     kl_array = np.array(kl_record)
     kl_means = kl_array.mean(axis=1)
@@ -120,6 +123,7 @@ def plot_kl_divergence(kl_record, target_kl=0.02, save_dir=None, save=True):
     label = f'update threshold: 1.5 * {target_kl} = {1.5*target_kl}\nexceed ratio: {exceed_ratio:.2%}'
     plt.hlines(y=1.5*target_kl, xmin=0, xmax=len(kl_array), colors='red', linestyles='--', label=label)
     # plt.ylim(kl_means.mean()-3*kl_means.std(), kl_means.mean()+3*kl_means.std())
+    
     plt.xlabel("trained episodes", fontsize=14)
     plt.ylabel("KL divergence", fontsize=14)
     plt.title("KL Divergence over Trained Episodes", fontsize=16)
@@ -127,10 +131,10 @@ def plot_kl_divergence(kl_record, target_kl=0.02, save_dir=None, save=True):
     plt.grid()
     plt.tight_layout()
     if save:
-        plt.savefig(save_dir / "kl_divergence.png")
+        plt.savefig(save_dir/f"{name}.png", bbox_inches='tight')
 
 
-def plot_clip_fraction(ratio_record, clip_eps=0.2, save_dir=None, save=True):
+def plot_clip_fraction(ratio_record, clip_eps=0.2, name="clip_fraction", save_dir=None, save=True):
     # ratio_record shape: (episode_num, optimization_epoch, timestep_num)
     episode_num = len(ratio_record)
     optimization_epoch_num = len(ratio_record[0])
@@ -147,6 +151,7 @@ def plot_clip_fraction(ratio_record, clip_eps=0.2, save_dir=None, save=True):
     exceed_ratio = (clip_fraction_means > clip_eps).sum() / len(clip_fraction_means)
     label = f'clip threshold: {clip_eps}\nexceed ratio: {exceed_ratio:.2%}'
     plt.hlines(y=clip_eps, xmin=0, xmax=episode_num, colors='red', linestyles='--', label=label)
+    
     plt.xlabel("trained episodes", fontsize=14)
     plt.ylabel("clip fraction", fontsize=14)
     plt.title("Clip Fraction over Trained Episodes", fontsize=16)
@@ -154,7 +159,7 @@ def plot_clip_fraction(ratio_record, clip_eps=0.2, save_dir=None, save=True):
     plt.grid()
     plt.tight_layout()
     if save:
-        plt.savefig(save_dir / "clip_fraction.png")
+        plt.savefig(save_dir/f"{name}.png", bbox_inches='tight')
 
 
 def plot_loss(loss_record, loss_type: str, save_dir=None, save=True):
@@ -167,6 +172,7 @@ def plot_loss(loss_record, loss_type: str, save_dir=None, save=True):
     label = f"mean over optimization epochs\nmax: {mean_loss.max():.4f} (at episode {mean_loss.argmax()+1})\nmean: {mean_loss.mean():.4f}\nmin: {mean_loss.min():.4f} (at episode {mean_loss.argmin()+1})"
     plt.plot(train_episodes, mean_loss, label=label, color="black", linestyle='-', linewidth=1)
     # plt.ylim(mean_loss.mean()-3*mean_loss.std(), mean_loss.mean()+3*mean_loss.std())
+    
     plt.xlabel("trained episodes", fontsize=14)
     plt.ylabel("loss", fontsize=14)
     plt.title(f"{loss_type.capitalize()} Losses over Trained Episodes", fontsize=16)
@@ -174,12 +180,12 @@ def plot_loss(loss_record, loss_type: str, save_dir=None, save=True):
     plt.grid()
     plt.tight_layout()
     if save:
-        plt.savefig(save_dir / f"loss_{loss_type}.png")
+        plt.savefig(save_dir/f"loss_{loss_type}.png", bbox_inches='tight')
 
 
 def plot_grad_norm(grad_norm_record: dict, save_dir=None, save=True):
     # grad_norm_record shape: (episode_num, optimization_epoch)
-    
+
     plt.figure(figsize=(12, 6))
     for model_part, norms in grad_norm_record.items():
         norm_array = np.array(norms)
@@ -187,6 +193,7 @@ def plot_grad_norm(grad_norm_record: dict, save_dir=None, save=True):
         mean_norm = norm_array.mean(axis=1)
         label = f"{model_part}\nmax: {mean_norm.max():.3f} (at episode {mean_norm.argmax()+1})\nmean: {mean_norm.mean():.3f}\nmin: {mean_norm.min():.3f} (at episode {mean_norm.argmin()+1})"
         plt.plot(train_episodes, mean_norm, label=label, linestyle='-', linewidth=1)
+    
     plt.xlabel("trained episodes", fontsize=14)
     plt.ylabel("gradient norm (L2 norm)", fontsize=14)
     plt.title(f"Gradient Norms over Trained Episodes", fontsize=16)
@@ -194,7 +201,7 @@ def plot_grad_norm(grad_norm_record: dict, save_dir=None, save=True):
     plt.grid()
     plt.tight_layout()
     if save:
-        plt.savefig(save_dir / f"grad_norm.png")
+        plt.savefig(save_dir/f"grad_norm.png", bbox_inches='tight')
 
 
 def plot_param_change(param_change_record: dict, save_dir=None, save=True):
@@ -206,6 +213,7 @@ def plot_param_change(param_change_record: dict, save_dir=None, save=True):
         train_episodes = np.arange(1, len(change_array)+1)
         label = f"{model_part}\nmax: {change_array.max():.6f} (at episode {change_array.argmax()+1})\nmean: {change_array.mean():.6f}\nmin: {change_array.min():.6f} (at episode {change_array.argmin()+1})"
         plt.plot(train_episodes, change_array, label=label, linestyle='-', linewidth=1)
+    
     plt.xlabel("trained episodes", fontsize=14)
     plt.ylabel("parameter change (L2 norm)", fontsize=14)
     plt.title(f"Parameter Changes over Trained Episodes", fontsize=16)
@@ -213,4 +221,4 @@ def plot_param_change(param_change_record: dict, save_dir=None, save=True):
     plt.grid()
     plt.tight_layout()
     if save:
-        plt.savefig(save_dir / f"param_change.png")
+        plt.savefig(save_dir/f"param_change.png", bbox_inches='tight')

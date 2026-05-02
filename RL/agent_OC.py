@@ -1,17 +1,12 @@
 import time
 import torch
-from torch import nn, optim
-from torch_geometric.data import Data
-from torch_geometric.loader import DataLoader
-
-import os
-import sys
-import time
-import json
 import logging
 import numpy as np
+
 from pathlib import Path
 from copy import deepcopy
+from torch import nn, optim
+from torch_geometric.loader import DataLoader
 from typing import Tuple, List, Dict, Callable
 
 import RL.buffer as buffer
@@ -60,6 +55,8 @@ class OptionCriticAgent(Agent):
                  optimization_epoch: int, 
                  num_options: int,
                  gjsd_loss_coef: float,
+                 if_hierarchical: bool,
+                 option_horizon: int,
                  seed: int = None,
                  logger: logging.Logger = None,
                  pretrained_model_path: str = None,
@@ -107,8 +104,10 @@ class OptionCriticAgent(Agent):
         self.optimization_epoch = optimization_epoch
         self.num_options = num_options
         self.gjsd_loss_coef = gjsd_loss_coef
+        self.if_hierarchical = if_hierarchical
+        self.option_horizon = option_horizon
 
-        # Initialize some counters
+        # Initialize counters
         self._number_episodes = 0
         self._number_timesteps = 0
         self._backprop_count = 0
@@ -119,15 +118,17 @@ class OptionCriticAgent(Agent):
 
         self.storage = buffer.RolloutBuffer()
 
-    def sample_option(self) -> int:
+    def choose_option(self) -> int:
         option_idx = torch.randint(0, self.num_options, (1,)).item()
         # option_idx = self._number_episodes % self.num_options
         return option_idx    
 
     def compute_gjsd(self, batched_probs: torch.Tensor) -> torch.Tensor:
-        """Compute the Generalized Jensen-Shannon Divergence (GJSD) among intra-option policies."""
-        # batched_probs: (num_options, num_actions)
+        """
+        Compute the Generalized Jensen-Shannon Divergence (GJSD) among intra-option policies.
 
+        - batched_probs: Tensor of shape (num_options, action_dim) representing the action probabilities for each option.
+        """
         def entropy(probs: torch.Tensor) -> torch.Tensor:
             return -torch.sum(probs * torch.log(probs + 1e-8), dim=-1)
 
@@ -140,8 +141,6 @@ class OptionCriticAgent(Agent):
     def choose_action(self, state: torch.Tensor, infeasible_actions: List[int], option_idx: int, greedy=False):
         infeasible_mask = torch.tensor([True if i in infeasible_actions else False for i in range(state.shape[0])], dtype=torch.bool, device=self.device)
         masks = infeasible_mask.unsqueeze(0).repeat(self.num_options, 1)  # (num_actions) --> (num_options, num_actions)
-        # batched_states = state.unsqueeze(0).repeat(self.num_options, 1, 1)   # (num_actions, member_state_dim) --> (num_options, num_actions, member_state_dim)
-        # batched_options = torch.tensor(range(self.num_options), device=self.device)  # (num_options)
         with torch.no_grad():
             logits, value = self.option_critic_network.forward(state)  # (num_options, num_actions), (1,)
             masked_logits = logits.masked_fill(masks, float('-inf'))  # set infeasible actions' logits to -inf
@@ -187,8 +186,9 @@ class OptionCriticAgent(Agent):
                 returns.insert(0, gae+values[i])
             returns = torch.tensor(returns).to(self.device)  # can be normalized by initial material usage
             advantages = torch.tensor(advantages).to(self.device)  # can be normalized by initial material usage
-        print(f"\t{advantages.mean() = :.6f}, {advantages.std() = :.6f}")
+        normed_returns = (returns - returns.mean()) / (returns.std() + 1e-8)
         normed_advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+        print(f"\t{advantages.mean() = :.6f}, {advantages.std() = :.6f}")
 
         # prepare batched data from storage
         actions = torch.tensor(self.storage.action).to(self.device)
@@ -205,7 +205,7 @@ class OptionCriticAgent(Agent):
             member_batch += [i] * member_number
         member_batch = torch.tensor(member_batch).to(self.device)  # size: (total edge_num)
 
-        # story level pooling preparation
+        # story-level pooling preparation
         auxs = [aux for aux in self.storage.aux]
         structure_story_ptr = []  # if the first and second graph have 16, 12 story members, it will be [0, 16, 28]
         story_batch = torch.zeros(member_batch.shape[0])
@@ -224,9 +224,9 @@ class OptionCriticAgent(Agent):
         graphs_batch = next(iter(loader)).to(self.device)
         states = self.gnn.forward(graphs_batch.x, graphs_batch.edge_index, graphs_batch.edge_attr, member_batch, story_batch, structure_story_ptr)  # shape: (total story_member_num, member_state_dim)
         print(f"\t{states.shape = }")
-
         batched_states = states.split((structure_story_ptr[1:] - structure_story_ptr[:-1]).tolist())  # list of tensors, each tensor with shape: (num_actions, member_state_dim)        
         batched_options = torch.tensor(self.storage.option_idx).to(self.device)  # (batch_size)
+        
         if all(batch.shape == batched_states[0].shape for batch in batched_states):
             batched_states = torch.stack(batched_states)  # (batch_size, num_actions, member_state_dim)
             print(f"\t\t{batched_states.shape = }")
@@ -249,7 +249,6 @@ class OptionCriticAgent(Agent):
             
             batched_dists = torch.distributions.Categorical(probs=batched_probs)
             print(f"\t\t{batched_dists.probs.shape = }")
-            # print(f"\t{batched_dists.probs.sum(dim=1) = }")  # all of them is 1.0
             log_probs = batched_dists.log_prob(actions)  # (batch_size)
             print(f"\t\t{log_probs.shape = }")
             mean_entropy = batched_dists.entropy().mean()  # (batch_size)
@@ -277,7 +276,7 @@ class OptionCriticAgent(Agent):
             print(f"\t\t{mean_gjsd = }")
             log_probs = torch.stack(all_log_probs).to(self.device)  # (batch_size,)
             print(f"\t\t{log_probs.shape = }")
-            mean_entropy = torch.stack(all_entropies).to(self.device).mean()
+            mean_entropy = torch.stack(all_entropies).to(self.device).mean()  # scalar
             print(f"\t\t{mean_entropy = }")
 
         # compute losses and update networks
@@ -355,16 +354,16 @@ class OptionCriticAgent(Agent):
         self.logger.critical(f"model are loaded from {model_path}")
 
 
-def _train_an_episode(agent: OptionCriticAgent, 
-                      env: Environment, 
-                      rec: Record,
-                      logger: logging.Logger) -> float:
+def _flat_training(agent: OptionCriticAgent, 
+                   env: Environment, 
+                   rec: Record,
+                   logger: logging.Logger) -> float:
     """Train the agent until the agent meets the terminal state."""
     structure = env.reset()  # generate a new random graph
     rec.record_in_beginning(structure, testing=False)
     graph = structure.graph.clone()
     # randomly sample an option for this episode (reduce variance)
-    option_idx = agent.sample_option()
+    option_idx = agent.choose_option()
     score = 0
     done = False
     while not done:
@@ -379,7 +378,7 @@ def _train_an_episode(agent: OptionCriticAgent,
         print(f"-----episode: {agent._number_episodes+1:4d}, timestep: {agent._number_timesteps+1:3d}, story_level_sections: {structure.story_level_sections}, option: {option_idx:2d}, action: {action:3d} [{update_story}F {member_category}]")
         structure, reward, done, fail_name, fail_reason = env.step(structure, action)
         score += reward
-        logger.info(f"episode: {agent._number_episodes+1:4d}, timestep: {agent._number_timesteps+1:3d}, option: {option_idx:2d}, action: {action:3d}, reward: {reward:4f},  acculmulate_score: {score:.4f}")
+        logger.info(f"episode: {agent._number_episodes+1:4d}, timestep: {agent._number_timesteps+1:3d}, option: {option_idx:2d}, action: {action:3d}, reward: {reward:4f},  score: {score:.4f}")
         
         # store the transition in memory
         transition = {
@@ -394,7 +393,7 @@ def _train_an_episode(agent: OptionCriticAgent,
             "reward": reward,
             "done": done,
             "infeasible_actions": torch.tensor([True if i in original_structure.already_minimum_section_story_indexes else False for i in range(state.shape[0])], dtype=torch.bool),
-            "aux": structure.aux, 
+            "aux": original_structure.aux, 
             # Option-Critic
             "option_idx": option_idx,
             "gen_js_divergence": gjsd
@@ -404,6 +403,236 @@ def _train_an_episode(agent: OptionCriticAgent,
         agent._number_timesteps += 1
         print()
 
+    _update_and_record(agent, rec)
+
+    final_structure = structure if fail_reason == "minimum_section" else original_structure
+    final_story_level_sections = final_structure.story_level_sections
+    logger.info("---> Constraint not satisfied, found optimal section at previous timestep")
+    logger.info(f"{final_story_level_sections = }")
+    logger.info(f"Episode: {agent._number_episodes:4d}, fail name: {fail_name}, fail reason: {fail_reason}")
+    
+    rec.record_in_end(final_structure, env, testing=False)
+
+    score = sum(env.reward_record)
+    return score
+
+def _flat_testing(agent: OptionCriticAgent, 
+                 env: Environment, 
+                 rec: Record,
+                 logger: logging.Logger,
+                 option_idx: int) -> float:
+    """Test agent's performance with prescribed condition and greedy policy."""
+    structure = env.reset(testing=True)  # generate a fix-shaped structure
+    rec.record_in_beginning(structure, testing=True)
+    graph = structure.graph.clone()
+    score = 0
+    timestep = 0
+    done = False
+    while not done:
+        original_structure = deepcopy(structure)
+        # select and perform an action
+        with torch.no_grad():
+            graph = graph.to(agent.device)
+            state = agent.gnn.forward(graph.x, graph.edge_index, graph.edge_attr, None, structure.aux["story_batch"].to(agent.device), None)
+        
+        gjsd, logits, value, entropy, action, log_prob = agent.choose_action(state, structure.already_minimum_section_story_indexes, option_idx, greedy=True)
+        member_category = structure.story_level_categories[action]
+        update_story = (action % structure.story_num) + 1
+        print(f"*****Testing Episode, timestep: {timestep+1:3d}, story_level_sections: {structure.story_level_sections}, option: {option_idx:2d}, action: {action:3d} [{update_story}F {member_category}]")
+        
+        structure, reward, done, fail_name, fail_reason = env.step(structure, action)
+        score += reward
+        timestep += 1
+        logger.info(f"*****Testing Episode, timestep: {timestep:3d}, option: {option_idx:2d}, action: {action:3d}, reward: {reward:4f},  score: {score:.4f}")
+
+        # store the transition in memory
+        transition = {
+            # Actor-Critic
+            "graph": original_structure.graph.clone(),
+            "logits": logits,
+            "value": value,
+            "entropy": entropy,
+            "action": action,
+            "log_prob": log_prob,
+            "next_graph": structure.graph.clone(),
+            "reward": reward,
+            "done": done,
+            "infeasible_actions": np.array([True if i in structure.already_minimum_section_story_indexes else False for i in range(state.shape[0])], dtype=bool),
+            "aux": original_structure.aux, 
+            # Option-Critic
+            "option_idx": option_idx,
+            "gen_js_divergence": gjsd
+        }
+        agent.storage.store(transition)
+        graph = structure.graph.clone()
+        print()
+
+    _record_testing_rollout(agent, rec)
+
+    final_structure = structure if fail_reason == "minimum_section" else original_structure
+    logger.info("---> Constraint not satisfied, found optimal section at previous timestep")
+    logger.info(f"{final_structure.story_level_sections = }")
+    logger.info(f"Testing, fail name: {fail_name}, fail reason: {fail_reason}")
+
+    rec.record_in_end(final_structure, env, testing=True)
+    
+    score = sum(env.reward_record)
+    return score
+
+
+def _hierarchical_training(agent: OptionCriticAgent, 
+                           env: Environment, 
+                           rec: Record,
+                           logger: logging.Logger) -> float:
+    """Train the agent until the agent meets the terminal state."""
+    structure = env.reset()
+    rec.record_in_beginning(structure, testing=False)
+    graph = structure.graph.clone()
+    option_idx = agent.sample_option()
+    H = agent.option_horizon
+    score = 0
+    done = False
+    while not done:
+        original_structure = deepcopy(structure)
+
+        # ===== option rollout (no expensive analysis) =====
+        for t in range(H):
+            with torch.no_grad():
+                graph = graph.to(agent.device)
+                state = agent.gnn.forward(graph.x, graph.edge_index, graph.edge_attr, None, structure.aux["story_batch"].to(agent.device), None)
+
+            gjsd, logits, value, entropy, action, log_prob = agent.choose_action(state, structure.already_minimum_section_story_indexes, option_idx)
+            if t == 0:
+                initial_logits, initial_value, initial_action = logits, value, action
+                initial_gjsd, initial_entropy, initial_log_prob = gjsd, entropy, log_prob
+            member_category = structure.story_level_categories[action]
+            update_story = (action % structure.story_num) + 1
+            print(f"-----episode: {agent._number_episodes+1:4d}, timestep: {agent._number_timesteps+1:3d}, story_level_sections: {structure.story_level_sections}, option: {option_idx:2d}, action: {action:3d} [{update_story}F {member_category}]")
+
+            # cheap update（no analysis）
+            structure, _ = env.cheap_step(structure, action)
+            if np.all(np.array(structure.story_level_sections) == 0):
+                print("All sections have been reduced to minimum. Ending option rollout early.")
+                break
+            graph = structure.graph.clone()
+            agent._number_timesteps += 1
+        
+        # ===== expensive step（only once）=====
+        structure, reward, done, fail_name, fail_reason = env.expensive_step(structure)
+        score += reward
+        logger.info(f"episode: {agent._number_episodes+1:4d}, timestep: {agent._number_timesteps:3d}, option: {option_idx:2d}, reward: {reward:4f}, score: {score:.4f}")
+
+        # ===== store ONE transition =====
+        transition = {
+            # Actor-Critic
+            "graph": original_structure.graph.clone(),
+            "logits": initial_logits,
+            "value": initial_value,
+            "entropy": initial_entropy,
+            "action": initial_action,
+            "log_prob": initial_log_prob,
+            "next_graph": structure.graph.clone(),
+            "reward": reward,
+            "done": done,
+            "infeasible_actions": torch.tensor([True if i in original_structure.already_minimum_section_story_indexes else False for i in range(state.shape[0])], dtype=torch.bool),
+            "aux": original_structure.aux,
+            # Option-Critic
+            "option_idx": option_idx,
+            "gen_js_divergence": initial_gjsd
+        }
+        agent.storage.store(transition)
+        graph = structure.graph.clone()
+
+    _update_and_record(agent, rec)
+
+    final_structure = structure if fail_reason == "minimum_section" else original_structure
+    logger.info("---> Constraint not satisfied, found optimal section at previous timestep")
+    logger.info(f"{final_structure.story_level_sections = }")
+    logger.info(f"Episode: {agent._number_episodes:4d}, fail name: {fail_name}, fail reason: {fail_reason}")
+
+    rec.record_in_end(final_structure, env, testing=False)
+
+    score = sum(env.reward_record)
+    return score
+
+def _hierarchical_testing(agent: OptionCriticAgent, 
+                          env: Environment, 
+                          rec: Record,
+                          logger: logging.Logger,
+                          option_idx: int) -> float:
+    """Test agent's performance with prescribed condition and greedy policy."""
+    structure = env.reset(testing=True)
+    rec.record_in_beginning(structure, testing=True)
+    graph = structure.graph.clone()
+    H = agent.option_horizon
+    score = 0
+    timestep = 0
+    done = False
+    while not done:
+        original_structure = deepcopy(structure)
+        
+        # ===== option rollout（no expensive analysis）=====
+        for t in range(H):
+            with torch.no_grad():
+                graph = graph.to(agent.device)
+                state = agent.gnn.forward(graph.x, graph.edge_index, graph.edge_attr, None, structure.aux["story_batch"].to(agent.device), None)
+
+            gjsd, logits, value, entropy, action, log_prob = agent.choose_action(state, structure.already_minimum_section_story_indexes, option_idx, greedy=True)
+            if t == 0:
+                initial_logits, initial_value, initial_action = logits, value, action
+                initial_gjsd, initial_entropy, initial_log_prob = gjsd, entropy, log_prob
+            member_category = structure.story_level_categories[action]
+            update_story = (action % structure.story_num) + 1
+            print(f"*****Testing Episode, timestep: {timestep+1:3d}, story_level_sections: {structure.story_level_sections}, option: {option_idx:2d}, action: {action:3d} [{update_story}F {member_category}]")
+
+            # cheap update（no analysis）
+            structure, _ = env.cheap_step(structure, action)
+            if np.all(np.array(structure.story_level_sections) == 0):
+                print("All sections have been reduced to minimum. Ending option rollout early.")
+                break
+            graph = structure.graph.clone()
+            timestep += 1
+
+        # ===== expensive step（only once）=====
+        structure, reward, done, fail_name, fail_reason = env.expensive_step(structure)
+        score += reward
+        logger.info(f"*****Testing, timestep: {timestep:3d}, option: {option_idx:2d}, reward: {reward:4f}, score: {score:.4f}")
+
+        # ===== store ONE transition =====
+        transition = {
+            # Actor-Critic
+            "graph": original_structure.graph.clone(),
+            "logits": initial_logits,
+            "value": initial_value,
+            "entropy": initial_entropy,
+            "action": initial_action,
+            "log_prob": initial_log_prob,
+            "next_graph": structure.graph.clone(),
+            "reward": reward,
+            "done": done,
+            "infeasible_actions": np.array([True if i in original_structure.already_minimum_section_story_indexes else False for i in range(state.shape[0])], dtype=bool),
+            "aux": original_structure.aux, 
+            # Option-Critic
+            "option_idx": option_idx,
+            "gen_js_divergence": initial_gjsd
+        }
+        agent.storage.store(transition)
+        graph = structure.graph.clone()
+
+    _record_testing_rollout(agent, rec)
+
+    final_structure = structure if fail_reason == "minimum_section" else original_structure
+    logger.info("---> Constraint not satisfied, found optimal section at previous timestep")
+    logger.info(f"{final_structure.story_level_sections = }")
+    logger.info(f"Testing, fail name: {fail_name}, fail reason: {fail_reason}")
+
+    rec.record_in_end(final_structure, env, testing=True)
+    
+    score = sum(env.reward_record)
+    return score
+
+
+def _update_and_record(agent: OptionCriticAgent, rec: Record) -> None:
     returns = []
     advantages = []
     pred_values = []
@@ -433,7 +662,7 @@ def _train_an_episode(agent: OptionCriticAgent,
         gnn_grad_norms.append(info["gnn_grad_norm"])
         actor_grad_norms.append(info["actor_grad_norm"])
         critic_grad_norms.append(info["critic_grad_norm"])
-        agent.logger.info(f"Optimization epoch: {epoch+1:2d}, Loss - Actor: {info['actor_loss']:.4f}, Entropy: {info['entropy_loss']:.4f}, Critic: {info['critic_loss']:.4f}")
+        agent.logger.info(f"Optimization epoch: {epoch+1:2d}, Loss - Actor: {info['actor_loss']:.4f}, Entropy: {info['entropy_loss']:.4f}, Critic: {info['critic_loss']:.4f}, GJSD: {info['gjsd_loss']:.4f}")
         agent.logger.info(f"Gradient norm - GNN: {info['gnn_grad_norm']:.4f}, Actor: {info['actor_grad_norm']:.4f}, Critic: {info['critic_grad_norm']:.4f}")
     t_end = time.time()
     print(f"Total optimization time: {t_end - t_start:.3f} seconds")
@@ -473,69 +702,7 @@ def _train_an_episode(agent: OptionCriticAgent,
     agent._backprop_count += 1
     agent._number_timesteps = 0
 
-    final_structure = structure if fail_reason == "minimum_section" else original_structure
-    final_story_level_sections = final_structure.story_level_sections
-    logger.info("---> Constraint not satisfied, found optimal section at previous timestep")
-    logger.info(f"{final_story_level_sections = }")
-    logger.info(f"Episode: {agent._number_episodes:4d}, fail name: {fail_name}, fail reason: {fail_reason}")
-    
-    rec.record_in_end(final_structure, env, testing=False)
-
-    score = sum(env.reward_record)
-    return score
-
-def _testing(agent: OptionCriticAgent, 
-             env: Environment, 
-             rec: Record,
-             logger: logging.Logger,
-             option_idx: int) -> float:
-    """Test agent's performance with prescribed condition and greedy policy."""
-    structure = env.reset(testing=True)  # generate a fix-shaped structure
-    rec.record_in_beginning(structure, testing=True)
-    graph = structure.graph.clone()
-    score = 0
-    timestep = 0
-    done = False
-    while not done:
-        original_structure = deepcopy(structure)
-        # select and perform an action
-        with torch.no_grad():
-            graph = graph.to(agent.device)
-            state = agent.gnn.forward(graph.x, graph.edge_index, graph.edge_attr, None, structure.aux["story_batch"].to(agent.device), None)
-        
-        gjsd, logits, value, entropy, action, log_prob = agent.choose_action(state, structure.already_minimum_section_story_indexes, option_idx, greedy=True)
-        member_category = structure.story_level_categories[action]
-        update_story = (action % structure.story_num) + 1
-        print(f"*****Testing Episode, story_level_sections: {structure.story_level_sections}, option: {option_idx:2d}, action: {action:3d} [{update_story}F {member_category}]")
-        structure, reward, done, fail_name, fail_reason = env.step(structure, action)
-
-        # store the transition in memory
-        transition = {
-            # Actor-Critic
-            "graph": original_structure.graph.clone(),
-            "logits": logits,
-            "value": value,
-            "entropy": entropy,
-            "action": action,
-            "log_prob": log_prob,
-            "next_graph": structure.graph.clone(),
-            "reward": reward,
-            "done": done,
-            "infeasible_actions": np.array([True if i in structure.already_minimum_section_story_indexes else False for i in range(state.shape[0])], dtype=bool),
-            "aux": structure.aux, 
-            # Option-Critic
-            "option_idx": option_idx,
-            "gen_js_divergence": gjsd
-        }
-        agent.storage.store(transition)
-        graph = structure.graph.clone()
-
-        # record
-        score += reward
-        timestep += 1
-        logger.info(f"*****Testing Episode, timestep: {timestep:3d}, option: {option_idx:2d}, action: {action:3d}, reward: {reward:4f},  acculmulate_score: {score:.4f}")
-        print()
-
+def _record_testing_rollout(agent: OptionCriticAgent, rec: Record) -> None:
     if not agent.use_gae:
         returns = []
         ret = 0
@@ -564,17 +731,6 @@ def _testing(agent: OptionCriticAgent,
     rec.gen_js_divergences["test"].append(agent.storage.gen_js_divergence)
     agent.storage.reset()
 
-    final_structure = structure if fail_reason == "minimum_section" else original_structure
-    test_final_story_level_sections = final_structure.story_level_sections
-    logger.info("---> Constraint not satisfied, found optimal section at previous timestep")
-    logger.info(f"{test_final_story_level_sections = }")
-    logger.info(f"Testing, fail name: {fail_name}, fail reason: {fail_reason}")
-
-    rec.record_in_end(final_structure, env, testing=True)
-    
-    score = sum(env.reward_record)
-    return score
-
 
 def train(agent: OptionCriticAgent,
           env: Environment,
@@ -586,7 +742,10 @@ def train(agent: OptionCriticAgent,
     """Reinforcement learning training loop."""
 
     for i in range(train_episode_num):
-        score = _train_an_episode(agent, env, rec, logger)
+        if agent.if_hierarchical:
+            score = _hierarchical_training(agent, env, rec, logger)
+        else:
+            score = _flat_training(agent, env, rec, logger)
         logger.critical(f"Training Episode: {i+1}, score: {score:.3f}")
         logger.critical(f"Training Episode: {i+1}, saved_material: {sum(env.saved_material_record):.3f}, saved_material_SCWB: {sum(env.saved_material_record_SCWB):.3f}")
         logger.critical(f"Training Episode: {i+1}, total_reduction_amount: {env.material_usage_record[0] - env.material_usage_record[-1]:.3f}\n\n\n")
@@ -595,7 +754,10 @@ def train(agent: OptionCriticAgent,
             for j in range(test_episode_num):
                 for option_idx in range(agent.num_options):
                     agent.logger.critical(f"Testing with Option {option_idx}...")
-                    test_score = _testing(agent, env, rec, logger, option_idx)
+                    if agent.if_hierarchical:
+                        test_score = _hierarchical_testing(agent, env, rec, logger, option_idx)
+                    else:
+                        test_score = _flat_testing(agent, env, rec, logger, option_idx)
                     logger.critical(f"Testing Episode: {j+1}, Option: {option_idx}")
                     logger.critical(f"score: {test_score:.3f}")
                     logger.critical(f"saved_material: {sum(env.saved_material_record):.3f}, saved_material_SCWB: {sum(env.saved_material_record_SCWB):.3f}")

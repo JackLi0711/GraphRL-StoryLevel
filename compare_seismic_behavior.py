@@ -22,12 +22,12 @@ from Validation import generate_structural_graph
 
 thread_quota           = 4
 gm_level               = "World_processed_one_scaling_MCE"  # DBE, MCE, MCEx2, World_processed_one_scaling_MCE, TAP3_two_scaling_MCE
-strucutre_type         = "x6z6y7"  # testing, taller, random, x2z2y4, x6z6y7
+strucutre_type         = "testing"  # testing, taller, random, x2z2y4, x6z6y7
 chance                 = 0          # 0, 1, 2
 
-static_model_folder    = "2025_06_05__21_45_28__TaiModifiedModel_MatReward_StaResFeatures_SoftUpdate_LinearDecay010_Buffer10000_Batch256_Epoch1000"
-dynamic_model_folder   = ""
-model_date             = [static_model_folder.split("__")[0], static_model_folder.split("__")[1]]
+static_model_folder    = ""
+dynamic_model_folder   = "2026_03_17__17_12_00__PPO_MatReward_doNDA_UseGAE095_LR5e-4_ActLossCoef10_CriLossCoef001_EntroWei01to001_OptimEpoch5_Episode1000"
+model_date             = [dynamic_model_folder.split("__")[0], dynamic_model_folder.split("__")[1]]
 model_setting          = "__".join(model_date)
 
 working_dir            = f"./Validation/Final_Design_Comparison/{model_setting}/{strucutre_type}/{gm_level}"
@@ -188,21 +188,21 @@ if __name__ == '__main__':
     check_path(working_dir)
     
     # 2. Generate ipt files for each pair of ground motion
-    generate_seismic_ipt(working_dir, static_checkpoint_dir, scenario="static")
-    # generate_seismic_ipt(working_dir, dynamic_checkpoint_dir, scenario="dynamic")
+    # generate_seismic_ipt(working_dir, static_checkpoint_dir, scenario="static")
+    generate_seismic_ipt(working_dir, dynamic_checkpoint_dir, scenario="dynamic")
     
     # 3. Get alpha, beta
-    run_pisa_all(target_dir="static", analysis="modal")
-    make_file.set_Rayleigh_coeff(root=working_dir, target_dir="static")
-    # run_pisa_all(target_dir="dynamic", analysis="modal")
-    # make_file.set_Rayleigh_coeff(root=working_dir, target_dir="dynamic")
+    # run_pisa_all(target_dir="static", analysis="modal")
+    # make_file.set_Rayleigh_coeff(root=working_dir, target_dir="static")
+    run_pisa_all(target_dir="dynamic", analysis="modal")
+    make_file.set_Rayleigh_coeff(root=working_dir, target_dir="dynamic")
 
     # 4. Run dynamic analysis
-    run_pisa_all(target_dir="static", analysis="structure")
-    # run_pisa_all(target_dir="dynamic", analysis="structure")
+    # run_pisa_all(target_dir="static", analysis="structure")
+    run_pisa_all(target_dir="dynamic", analysis="structure")
 
     # 5. Generate graph
-    generate_structural_graph.generate_graph_NodeAsNode(os.path.join(working_dir, "static"))
-    # generate_structural_graph.generate_graph_NodeAsNode(os.path.join(working_dir, "dynamic"))
+    # generate_structural_graph.generate_graph_NodeAsNode(os.path.join(working_dir, "static"))
+    generate_structural_graph.generate_graph_NodeAsNode(os.path.join(working_dir, "dynamic"))
     
     

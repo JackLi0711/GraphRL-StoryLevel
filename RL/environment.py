@@ -1,4 +1,3 @@
-import os
 import torch
 import typing
 import logging
@@ -150,6 +149,11 @@ class Environment:
 
         # reward 
         self.reward_record = []
+
+        # Option-level
+        self.intra_option_saved_material_record = []
+        self.intra_option_material_usage_record = []
+        self.intra_option_update_actions_record = []
 
 
     def reset(self, testing=False, taller=False, initial_design=None) -> structure.Structure:
@@ -355,3 +359,86 @@ class Environment:
         return structure, reward, done, fail_name, fail_reason
         
 
+    def cheap_step(self, structure: structure.Structure, action: int) -> typing.Tuple[structure.Structure, float]:
+        """
+        1. Only update the structure and graph based on the member action **without analysis**, which is much faster and can be used for option rollout.
+        2. Record necessary information after updating.
+        - Return [updated structure, saved material amount (m^3)].
+        """
+        # update structure, graph and get saved material amount (m^3)
+        material_saved = structure.update_action(action)
+        structure.update_graph_GraphRL()
+        if self.do_nonlinear_dynamic_analysis:
+            structure.update_graph_GraphLSTM()
+
+        # record information after cheap updating
+        self.intra_option_update_actions_record.append(action)
+        self.intra_option_saved_material_record.append(material_saved)
+        self.intra_option_material_usage_record.append(structure.calculate_material_usage())
+
+        return structure, material_saved
+    
+
+    def expensive_step(self, structure: structure.Structure) -> typing.Tuple[structure.Structure, float, bool, str, str]:
+        """
+        1. Only do the analysis based on the current structure **without updating**, which is much slower and can be used for option rollout.
+        2. Record necessary information after analysis.
+        - Return [current structure, reward, whether meet terminal state, fail load name, fail reason].
+        """
+        # linear static analysis: check if response pass constraints
+        load_cases, static_responses = check.get_response(structure, self.code_analysis_dir)
+        static_constraint_condition, static_response_features, static_response_rewards = check.process_response(structure, load_cases, static_responses)
+        whether_pass, fail_name, fail_reason = check.check_pass(load_cases, static_constraint_condition, self.check_displacement)
+
+        # nonlinear dynamic analysis: check if response pass constraints
+        dynamic_response_features = None
+        dynamic_response_rewards = None
+        if self.do_nonlinear_dynamic_analysis and whether_pass == True:
+            dynamic_responses = check_nda.get_response(structure, self.nda_simulator, self.MCE_ground_motion_set, self.device)
+            dynamic_constraint_condition, dynamic_response_features, dynamic_response_rewards = check_nda.process_response(structure, dynamic_responses, self.nda_norm_dict)
+            whether_pass, fail_name, fail_reason = check_nda.check_pass(dynamic_constraint_condition, self.check_displacement)
+        
+        # record static response information
+        self.static_response_record.append(list(static_response_rewards.values()))
+        # record dynamic response information
+        if self.do_nonlinear_dynamic_analysis:
+            self.dynamic_response_record.append(list(dynamic_response_rewards.values())) if dynamic_response_rewards is not None else None
+            if "acceleration" in self.reward_type:
+                self.acc_record = check_nda.record_acc(structure, 
+                                                       self.nda_simulator, 
+                                                       self.MCE_ground_motion_set, 
+                                                       self.nda_norm_dict, 
+                                                       self.device,
+                                                       self.acc_record,
+                                                       self.logger)
+        
+        if whether_pass == False:
+            # fail constraints
+            reward = 0.0
+            done = True
+            self.static_response_record.pop(-1)
+            self.dynamic_response_record.pop(-1) if self.do_nonlinear_dynamic_analysis else None
+        else:
+            reward = sum(self.intra_option_saved_material_record)
+            if sum(structure.story_level_sections) == 0:
+                # pass all constraints & already has minimum sections
+                done = True
+                fail_name = None
+                fail_reason = "minimum_section"
+            else:
+                # pass all constraints & still has sections to reduce
+                done = False
+            self.saved_material_record.extend(self.intra_option_saved_material_record)
+            self.material_usage_record.extend(self.intra_option_material_usage_record)
+            self.update_actions_record.extend(self.intra_option_update_actions_record)
+            self.intra_option_saved_material_record = []
+            self.intra_option_material_usage_record = []
+            self.intra_option_update_actions_record = []
+        
+        self.reward_record.append(reward)
+        
+        if done:
+            self.fail_name = fail_name
+            self.fail_reason = fail_reason
+
+        return structure, reward, done, fail_name, fail_reason
