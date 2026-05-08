@@ -115,7 +115,8 @@ class Q_Network(nn.Module):
         q_value = self.q_stream(edge_state)  # shape: [total story_member_num, q_value_dim]
 
         return q_value
-    
+
+
 class Dueling_Q_Network(nn.Module):
     def __init__(self, member_state_dim, hidden_dim, q_value_dim):
         super().__init__()
@@ -128,6 +129,7 @@ class Dueling_Q_Network(nn.Module):
         q_value = value + (advantage - advantage.mean(dim=0, keepdim=True))  # shape: [total story_member_num, q_value_dim]
         
         return q_value
+
 
 def synchronize_q_networks(target_q_network: nn.Module, online_q_network: nn.Module):
     """In place, synchronization of target_q_network and online_q_network."""
@@ -169,6 +171,7 @@ class CategoricalActorCritic(nn.Module):
         value = self.critic(aggregated_state)   # (1,) or (batch_size, 1)
         
         return logits, value
+
 
 class MultiOptionActorCritic(nn.Module):
     def __init__(self, member_state_dim, hidden_dim, action_dim, num_options):
@@ -227,6 +230,43 @@ class MultiOptionActorCritic(nn.Module):
         return logits_all, value
 
 
+class OptionCritic(nn.Module):
+    def __init__(self, member_state_dim, hidden_dim, action_dim, num_options):
+        super().__init__()
+        
+        self.num_options = num_options
+
+        self.intra_option_actors = nn.ModuleList([
+            nn.Linear(member_state_dim, action_dim, bias=False)
+            for _ in range(num_options)
+        ])
+
+        self.option_actor = nn.Linear(member_state_dim, num_options, bias=False)
+        self.option_critic = nn.Linear(member_state_dim, num_options, bias=False)
+
+    def forward(self, edge_state: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """
+        edge_state:
+            (num_actions, member_state_dim)
+            or (batch_size, num_actions, member_state_dim)
+
+        return:
+            logits_all: (num_options, num_actions) or (batch_size, num_options, num_actions)
+            option_logits: (num_options,) or (batch_size, num_options)
+            option_values: (num_options,) or (batch_size, num_options)
+        """
+        logits_all = []
+        for actor in self.intra_option_actors:
+            logits_all.append(actor(edge_state).squeeze(-1))  # (num_actions,) or (batch_size, num_actions)
+        logits_all = torch.stack(logits_all, dim=-2)  # (num_options, num_actions) or (batch_size, num_options, num_actions)
+
+        aggregated_state = torch.mean(edge_state, dim=-2)  # (member_state_dim,) or (batch_size, member_state_dim)
+        # option_logits = self.option_actor(aggregated_state)  # (num_options,) or (batch_size, num_options)
+        option_values = self.option_critic(aggregated_state)  # (num_options,) or (batch_size, num_options)
+
+        return logits_all, option_values
+
+
 ### Japan's model ###
 import numpy as np
 
@@ -266,13 +306,11 @@ class GraphEmbedding(nn.Module):
         # else:
         #     self.to('cpu')
         #     self.device = torch.device('cpu')
-    
 
     def _initialize_weight(self):
         for m in self._modules.values():
             if isinstance(m, torch.nn.Linear):
                 torch.nn.init.normal_(m.weight, mean=INIT_MEAN, std=INIT_STD)
-
 
     def _connectivity(self, connectivity, n_nodes):
         n_edges = connectivity.shape[0]  # shape: [n_edges, 2], 2: node1_index, node2_index
@@ -290,7 +328,6 @@ class GraphEmbedding(nn.Module):
         incidence_2 = (incidence == 1).type(torch.float32)
 
         return incidence_A, incidence_1, incidence_2, adjacency
-
 
     def _mu(self, v, mu, w, incidence_A, incidence_1, incidence_2, adjacency, mu_iter):
         '''
@@ -313,7 +350,6 @@ class GraphEmbedding(nn.Module):
 
         return mu
 
-
     # def Q(self, mu, n_edges):
     #     if type(n_edges) is int: # normal operation
     #         mu_sum = torch.sum(mu, axis=0)
@@ -325,7 +361,6 @@ class GraphEmbedding(nn.Module):
 
     #     Q = self.l2_1(torch.cat((mu_sum,mu),1))
     #     return Q
-
 
     def forward(self, x, edge_index, edge_attr, batch, story_batch, structure_story_ptr) -> torch.Tensor:
         '''
@@ -376,9 +411,6 @@ class GraphEmbedding(nn.Module):
 
         return state
 
-
     def get_Q(self, edge_state) -> torch.Tensor:
-
         q_value = self.l2_1(edge_state)  # shape: [total n_story_members, n_action_types=2]
-        
         return q_value[:, 0]  # action_type = 0: dec, 1: inc

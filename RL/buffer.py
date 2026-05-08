@@ -171,7 +171,7 @@ class RolloutBuffer:
             "next_graph", "reward", "done", 
             "infeasible_actions", "aux", 
             # Option-Critic
-            "option_idx", "gen_js_divergence"
+            "option_idx", "option_value", "gen_js_divergence", "option_rollout_length"
         ]
         self.reset()
 
