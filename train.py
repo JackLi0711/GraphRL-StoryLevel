@@ -24,8 +24,13 @@ def parse_args() -> Namespace:
 	parser = ArgumentParser()
  
 	# comment
-	parser.add_argument("--comment", type=str, default="reward 0 for the fail action, proportional prioritized buffer(beta-annealing), epsilon linear decay, detached target Q-network")
- 
+	parser.add_argument("--comment", type=list[str], default=[
+		"reward 0 for the fail action", 
+		"proportional prioritized buffer w/ beta-annealing", 
+		"epsilon linear decay", 
+		"detached target Q-network",
+	])
+
 	# pretrained model
 	parser.add_argument("--pretrained_ckpt_dir", type=Path, default=None)
 
@@ -34,7 +39,7 @@ def parse_args() -> Namespace:
 		default="./Results/AdjustedMoreSections/RandomShape/OpenSees_RSA"
 	)
 	parser.add_argument("--suffix", type=str, 
-		default="DouDQN_MatReward_StaResFeatures_SoftUpdate_LinearDecay010_Buffer10000_Batch256_Epoch1000"
+		default="DuelDouDQN_MatReward_SoftUpdate_LinearDecay010_Buffer10000_Batch256_Epoch100"
 	)
 
 	# nonlinear dynamic analysis simulator
@@ -52,13 +57,13 @@ def parse_args() -> Namespace:
 	# structure
 	parser.add_argument("--structure_shape", type=str, default="random", help="fixed, small_random, random")
 	parser.add_argument("--add_geometry_feature", action="store_true", default=True)
-	parser.add_argument("--add_response_feature", action="store_true", default=True)
+	parser.add_argument("--add_response_feature", action="store_true", default=False)
 	parser.add_argument("--reward_type", type=str, default="material", choices=["material", "acceleration", "displacement", "normalized", "total", "combined"])
 	parser.add_argument("--restrict_action", action="store_true", default=False)
 	parser.add_argument("--scwb_driven_design", action="store_true", default=False)
 
 	# model
-	parser.add_argument("--model_type", type=str, default="Vanilla", choices=["Vanilla", "Dueling"])
+	parser.add_argument("--model_type", type=str, default="Dueling", choices=["Vanilla", "Dueling"])
 	parser.add_argument("--hidden_dim", type=int, default=100)
 	parser.add_argument("--layer_num", type=int, default=3)
 
@@ -77,7 +82,7 @@ def parse_args() -> Namespace:
 	parser.add_argument("--test_frequency", type=int, default=5)
 	parser.add_argument("--batch_size", type=int, default=256)
 	parser.add_argument("--lr", type=float, default=1e-5)
-	parser.add_argument("--num_episode", type=int, default=1000)
+	parser.add_argument("--num_episode", type=int, default=100)
 	parser.add_argument("--random_seed", type=int, default=731)
 
 	args = parser.parse_args()
@@ -114,27 +119,31 @@ def get_loggings(ckpt_dir):
 
 
 def main(args):
-	# set random seed
+	# Set random seed
 	set_random_seed(args.random_seed)
 
-	# set checkpoint directory
+	# Set checkpoint directory
 	if len(args.suffix) > 2:
 		args.ckpt_dir = args.ckpt_dir / f'{datetime.now().strftime("%Y_%m_%d__%H_%M_%S")}__{args.suffix}'
 	else:
 		args.ckpt_dir = args.ckpt_dir / f'{datetime.now().strftime("%Y_%m_%d__%H_%M_%S")}'
 	args.ckpt_dir.mkdir(parents=True, exist_ok=True)
 
-	# set logger
+	# Save training arguments
+	with open(args.ckpt_dir / "train_args.json", "w") as f:
+		args_dict = {k: str(v) if isinstance(v, Path) else v for k, v in vars(args).items()}
+		json.dump(args_dict, f, indent=2)
+
+	# Set logger
 	logger = get_loggings(args.ckpt_dir)
 	logger.critical(args.ckpt_dir)
-	logger.critical(args)
 
-	# set device
+	# Set device
 	device = "cuda" if torch.cuda.is_available() else "cpu"
 	device_name = torch.cuda.get_device_name(device) if device == "cuda" else "CPU"
 	logger.critical(f"Device: {device_name}")
 
-	# setup nonlinear dynamic analysis simulator
+	# Setup nonlinear dynamic analysis simulator
 	nda_simulator = None
 	nda_norm_dict = None
 	DBE_ground_motion_set = None
@@ -227,7 +236,7 @@ def main(args):
 		"Q_values": [[], []],  # Q_values[0] for training, Q_values[1] for testing
 	})
 	
-	# Training the DeepQAgent using Double DQN
+	# Training
 	_train_kwargs = {
 		"agent": agent_model,
 		"env": env,

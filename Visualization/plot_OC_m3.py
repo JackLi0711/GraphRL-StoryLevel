@@ -1,10 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.patches import Rectangle
 from pathlib import Path
-
 from RL.record import Record
-from RL.environment import Environment
 
 
 def plot_testing_behaviors(rec: Record, story_num: int, save_dir: Path, save=True) -> None:
@@ -74,11 +71,12 @@ def plot_testing_behaviors(rec: Record, story_num: int, save_dir: Path, save=Tru
     ax2.legend(loc='upper right', fontsize=14)
 
     plt.tight_layout()
-    plt.savefig(save_dir/"testing_behaviors.png", dpi=1000, bbox_inches='tight')
+    if save:
+        plt.savefig(save_dir/"testing_behaviors.png", dpi=1000, bbox_inches='tight')
     plt.close()
 
 
-def plot_advantage(advantage_record: dict, save_dir: Path, save=True) -> None:
+def plot_advantage(advantage_record: dict, name: str, save_dir: Path, save=True) -> None:
     # train_record: (episode_num, optimization_epoch, timestep_num)
     train_record = advantage_record["train"]
     train_episode_num = len(train_record)
@@ -116,9 +114,10 @@ def plot_advantage(advantage_record: dict, save_dir: Path, save=True) -> None:
     plt.grid()
     plt.tight_layout()
     if save:
-        plt.savefig(save_dir/"advantages.png", bbox_inches='tight')
+        plt.savefig(save_dir/f"{name}.png", bbox_inches='tight')
+    plt.close()
 
-def plot_entropy(entropy_record: dict, name: str, save_dir=None, save=True):
+def plot_entropy(entropy_record: dict, name: str, save_dir: Path, save=True):
     # train_record: (episode_num, timestep_num)
     train_record = entropy_record["train"]
     train_episode_num = len(train_record)
@@ -156,6 +155,7 @@ def plot_entropy(entropy_record: dict, name: str, save_dir=None, save=True):
     plt.tight_layout()
     if save:
         plt.savefig(save_dir/f"{name}.png", bbox_inches='tight')
+    plt.close()
 
 
 def plot_gjsd(gjsd_record: dict, num_options: int, save_dir: Path, save=True): 
@@ -201,6 +201,7 @@ def plot_gjsd(gjsd_record: dict, num_options: int, save_dir: Path, save=True):
     plt.tight_layout()
     if save:
         plt.savefig(save_dir/"gjsd.png", bbox_inches='tight')
+    plt.close()
 
 def plot_gjsd_return(test_gjsds: list[list[float]], test_scores: list[float], test_frequency: int, num_options: int, save_dir: Path, save=True):
     # gjsd_record: (episode_num, timestep_num)
@@ -238,6 +239,7 @@ def plot_gjsd_return(test_gjsds: list[list[float]], test_scores: list[float], te
     plt.tight_layout()
     if save:
         plt.savefig(save_dir/"testing_gjsd_return.png", bbox_inches='tight')
+    plt.close()
 
 def plot_option_usage(option_indices: list[list[int]], option_rollout_lengths: list[list[float]], num_options: int, name: str, save_dir: Path, save=True) -> None:
     episode_num = len(option_indices)
@@ -259,19 +261,20 @@ def plot_option_usage(option_indices: list[list[int]], option_rollout_lengths: l
     episode_x = np.arange(1, episode_num+1)
     bottom = np.zeros(episode_num, dtype=float)
 
-    cmap = plt.get_cmap("tab20")
-    colors = [cmap(i % cmap.N) for i in range(num_options)]
+    # cmap = plt.get_cmap("tab20")
+    # colors = [cmap(i % cmap.N) for i in range(num_options)]
+    colors = ["blue", "orange", "green", "red", "brown", "purple", "gray", "black"][:num_options]
 
     fig, ax = plt.subplots(figsize=(12, 6))
-    fig_width_inches = 12
-    bar_width = (fig_width_inches * 0.9) / episode_num
-    bar_width = min(bar_width, 0.8)
+    # fig_width_inches = 12
+    # bar_width = (fig_width_inches * 0.9) / episode_num
+    # bar_width = min(bar_width, 0.8)
     
     for opt in range(num_options):
         # bar chart
         heights = pct[:, opt]
         ax.bar(episode_x, heights, bottom=bottom, color=colors[opt],
-               width=bar_width, edgecolor="black", linewidth=0, label=f"option {opt}")
+               width=0.8, edgecolor="black", linewidth=0, label=f"option {opt}")
         for x, b, h, p in zip(episode_x, bottom, heights, pct[:, opt]):
             break
             if h >= 5:  # only label segments large enough to read
@@ -291,4 +294,6 @@ def plot_option_usage(option_indices: list[list[int]], option_rollout_lengths: l
     ax.grid()
     plt.tight_layout()
     if save:
-        plt.savefig(save_dir / f"option_usage_{name}.png", bbox_inches="tight")        
+        plt.savefig(save_dir/f"option_usage_{name}.png", bbox_inches="tight")        
+    plt.close()
+

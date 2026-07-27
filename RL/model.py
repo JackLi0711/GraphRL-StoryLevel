@@ -231,18 +231,67 @@ class MultiOptionActorCritic(nn.Module):
 
 
 class OptionCritic(nn.Module):
-    def __init__(self, member_state_dim, hidden_dim, action_dim, num_options):
+    def __init__(self, member_state_dim, hidden_dim, action_dim, num_options, use_bias):
         super().__init__()
         
         self.num_options = num_options
 
-        self.intra_option_actors = nn.ModuleList([
-            nn.Linear(member_state_dim, action_dim, bias=False)
-            for _ in range(num_options)
-        ])
+        # self.intra_option_actors = nn.ModuleList([
+        #     nn.Linear(member_state_dim, action_dim, use_bias) for _ in range(num_options)
+        # ])
+        self.fc_pi = nn.Linear(member_state_dim, num_options, use_bias)
+        # self.option_actor = nn.Linear(member_state_dim, num_options, use_bias)
+        self.option_critic = nn.Linear(member_state_dim, num_options, use_bias)
+        self.termination = nn.Linear(member_state_dim, num_options, use_bias)
 
-        self.option_actor = nn.Linear(member_state_dim, num_options, bias=False)
-        self.option_critic = nn.Linear(member_state_dim, num_options, bias=False)
+        self._init_params()
+
+    def _init_params_Kyle(self):
+        "Reference: Kyle's implementation"
+        # 採用 Xavier Uniform 將輸出方差控制在合理範圍，在初期對所有 Action 保持均等的探索率
+        # for actor in self.intra_option_actors:
+        #     nn.init.xavier_uniform_(actor.weight)
+        #     if actor.bias is not None:
+        #         nn.init.constant_(actor.bias, 0.0)
+
+        nn.init.xavier_uniform_(self.fc_pi.weight)
+        if self.fc_pi.bias is not None:
+            nn.init.constant_(self.fc_pi.bias, 0.0)
+
+        # 採用 Xavier Uniform 保持 Q 值輸出的方差穩定
+        nn.init.xavier_uniform_(self.option_critic.weight)
+        if self.option_critic.bias is not None:
+            nn.init.constant_(self.option_critic.bias, 0.0)
+
+        nn.init.xavier_uniform_(self.termination.weight)
+        if self.termination.bias is not None:
+            # 特殊技巧：將 bias 設為負常數降低初期的終止機率，避免 Option 頻繁切換 (e.g., sigmoid(-2.2) = 0.1)
+            nn.init.constant_(self.termination.bias, -2.2)
+
+    def _init_params(self, w_scale=1.0):
+        "Reference: https://github.com/ShangtongZhang/DeepRL/blob/master/deep_rl/network/network_utils.py"
+        # for actor in self.intra_option_actors:
+        #     nn.init.orthogonal_(actor.weight.data)
+        #     actor.weight.data.mul_(w_scale)
+        #     if actor.bias is not None:
+        #         nn.init.constant_(actor.bias.data, 0.0)
+
+        nn.init.orthogonal_(self.fc_pi.weight.data)
+        self.fc_pi.weight.data.mul_(w_scale)
+        if self.fc_pi.bias is not None:
+            nn.init.constant_(self.fc_pi.bias.data, 0.0)
+
+        nn.init.orthogonal_(self.option_critic.weight.data)
+        self.option_critic.weight.data.mul_(w_scale)
+        if self.option_critic.bias is not None:
+            nn.init.constant_(self.option_critic.bias.data, 0.0)
+
+        nn.init.orthogonal_(self.termination.weight.data)
+        self.termination.weight.data.mul_(w_scale)
+        if self.termination.bias is not None:
+            target_beta_init = 0.2
+            bias_init = torch.logit(torch.tensor(target_beta_init))
+            nn.init.constant_(self.termination.bias.data, 0.0)
 
     def forward(self, edge_state: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """
@@ -252,19 +301,26 @@ class OptionCritic(nn.Module):
 
         return:
             logits_all: (num_options, num_actions) or (batch_size, num_options, num_actions)
-            option_logits: (num_options,) or (batch_size, num_options)
             option_values: (num_options,) or (batch_size, num_options)
+            betas: (num_options,) or (batch_size, num_options)
         """
-        logits_all = []
-        for actor in self.intra_option_actors:
-            logits_all.append(actor(edge_state).squeeze(-1))  # (num_actions,) or (batch_size, num_actions)
-        logits_all = torch.stack(logits_all, dim=-2)  # (num_options, num_actions) or (batch_size, num_options, num_actions)
+        # logits_all = []
+        # for actor in self.intra_option_actors:
+        #     logits_all.append(actor(edge_state).squeeze(-1))  # (num_actions,) or (batch_size, num_actions)
+        # logits_all = torch.stack(logits_all, dim=-2)  # (num_options, num_actions) or (batch_size, num_options, num_actions)
+
+        pi = self.fc_pi(edge_state)  # (num_actions, num_options) or (batch_size, num_actions, num_options)
+        if pi.dim() == 2:
+            logits_all = pi.permute(1, 0)  # --> (num_options, num_actions)
+        else:
+            logits_all = pi.permute(0, 2, 1)  # --> (batch_size, num_options, num_actions)
 
         aggregated_state = torch.mean(edge_state, dim=-2)  # (member_state_dim,) or (batch_size, member_state_dim)
         # option_logits = self.option_actor(aggregated_state)  # (num_options,) or (batch_size, num_options)
         option_values = self.option_critic(aggregated_state)  # (num_options,) or (batch_size, num_options)
+        betas = F.sigmoid(self.termination(aggregated_state))  # (num_options,) or (batch_size, num_options)
 
-        return logits_all, option_values
+        return logits_all, option_values, betas
 
 
 ### Japan's model ###

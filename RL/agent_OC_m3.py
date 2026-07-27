@@ -120,7 +120,7 @@ class OptionCriticAgent(Agent):
         """
         Compute the Generalized Jensen-Shannon Divergence (GJSD) among the option policies.
 
-        - batched_probs: Tensor of shape (num_options, action_dim) representing the action probabilities for each option.
+        - batched_probs: Tensor of shape (num_options, num_actions) representing the action probabilities for each option.
         """
         def entropy(probs: torch.Tensor) -> torch.Tensor:
             return -torch.sum(probs * torch.log(probs + 1e-8), dim=-1)
@@ -168,50 +168,7 @@ class OptionCriticAgent(Agent):
 
         return gjsd.item(), selected_logits, selected_value.item(), entropy.item(), action.item(), log_prob.item()
 
-    def step(self):
-        if len(self.storage.option_rollout_length) == 0:
-            # flat training
-            option_rollout_lengths = [1 for _ in self.storage.reward]
-        else:
-            # hierarchical training 
-            option_rollout_lengths = [max(1, int(k)) for k in self.storage.option_rollout_length]
-
-        # compute returns and advantages
-        if not self.use_gae:
-            returns = []
-            ret = 0
-            for i in reversed(range(len(self.storage.reward))):
-                mask = 1 - self.storage.done[i]
-                discount = self.discount ** option_rollout_lengths[i]
-                ret = self.storage.reward[i] + discount * mask * ret
-                returns.insert(0, ret)
-            returns = torch.tensor(returns).to(self.device)
-            values = torch.tensor(self.storage.value).to(self.device)
-            advantages = returns - values
-        else:
-            returns = []
-            advantages = []
-            gae = 0
-            values = self.storage.value + [0]  # add a dummy value for the last state
-            for i in reversed(range(len(self.storage.reward))):
-                mask = 1 - self.storage.done[i]
-                discount = self.discount ** option_rollout_lengths[i]
-                delta = self.storage.reward[i] + discount * mask * values[i+1] - values[i]
-                gae = delta + self.gae_tau * discount * mask * gae
-                advantages.insert(0, gae)
-                returns.insert(0, gae+values[i])
-            returns = torch.tensor(returns).to(self.device)
-            advantages = torch.tensor(advantages).to(self.device)
-        normed_returns = (returns - returns.mean()) / (returns.std() + 1e-8)
-        normed_advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
-        print(f"\t{advantages.mean() = :.6f}, {advantages.std() = :.6f}")
-
-        # prepare batched data form storage
-        actions = torch.tensor(self.storage.action).to(self.device)
-        log_probs_old = torch.tensor(self.storage.log_prob).to(self.device)
-        infeasible_masks = torch.stack(self.storage.infeasible_actions).to(self.device)  # (batch_size, num_actions)
-
-        graphs = [graph for graph in self.storage.graph]
+    def _build_batched_states(self, graphs: List, auxs: List) -> Tuple[torch.Tensor, torch.Tensor]:
         member_numbers = [int(graph.edge_attr.shape[0]/2) for graph in graphs]
         member_ptr = torch.tensor([sum(member_numbers[:i]) for i in range(len(member_numbers)+1)])
 
@@ -221,7 +178,6 @@ class OptionCriticAgent(Agent):
         member_batch = torch.tensor(member_batch).to(self.device)
 
         # story-level pooling preparation
-        auxs = [aux for aux in self.storage.aux]
         structure_story_ptr = []
         story_batch = torch.zeros(member_batch.shape[0])
         story_count = 0
@@ -238,9 +194,22 @@ class OptionCriticAgent(Agent):
         loader = DataLoader(list(graphs), batch_size=len(graphs))
         graphs_batch = next(iter(loader)).to(self.device)
         states = self.gnn.forward(graphs_batch.x, graphs_batch.edge_index, graphs_batch.edge_attr, member_batch, story_batch, structure_story_ptr)
-        print(f"\t{states.shape = }")
         batched_states = states.split((structure_story_ptr[1:] - structure_story_ptr[:-1]).tolist())
+        
+        return states, batched_states
+
+    def step(self):
+        # prepare batched data form storage
+        actions = torch.tensor(self.storage.action).to(self.device)
+        log_probs_old = torch.tensor(self.storage.log_prob).to(self.device)
+        infeasible_masks = torch.stack(self.storage.infeasible_actions).to(self.device)  # (batch_size, num_actions)
         batched_options = torch.tensor(self.storage.option_idx).to(self.device)
+        graphs = [graph for graph in self.storage.graph]
+        auxs = [aux for aux in self.storage.aux]
+
+        # get current batched states
+        states, batched_states = self._build_batched_states(graphs, auxs)
+        print(f"\t{states.shape = }")
 
         if all(batch.shape == batched_states[0].shape for batch in batched_states):
             batched_states = torch.stack(batched_states)  # (batch_size, num_actions, member_state_dim)
@@ -302,6 +271,42 @@ class OptionCriticAgent(Agent):
 
         # In standard Option-Critic, option selection is value-based, e.g., epsilon-greedy over Q(s,o).
         # The intra-option policy pi(a|s,o) is updated by policy gradient, and Q(s,o) is updated by TD/SMDP returns.
+        if len(self.storage.option_rollout_length) == 0:
+            # flat training
+            option_rollout_lengths = [1 for _ in self.storage.reward]
+        else:
+            # hierarchical training 
+            option_rollout_lengths = [max(1, int(k)) for k in self.storage.option_rollout_length]
+
+        # compute returns and advantages
+        if not self.use_gae:
+            returns = []
+            ret = 0
+            for i in reversed(range(len(self.storage.reward))):
+                mask = 1 - self.storage.done[i]
+                discount = self.discount ** option_rollout_lengths[i]
+                ret = self.storage.reward[i] + discount * mask * ret
+                returns.insert(0, ret)
+            returns = torch.tensor(returns).to(self.device)
+            _values = torch.tensor(self.storage.value).to(self.device)
+            advantages = returns - _values
+        else:
+            returns = []
+            advantages = []
+            gae = 0
+            _values = self.storage.value + [0]  # add a dummy value for the last state
+            for i in reversed(range(len(self.storage.reward))):
+                mask = 1 - self.storage.done[i]
+                discount = self.discount ** option_rollout_lengths[i]
+                delta = self.storage.reward[i] + discount * mask * _values[i+1] - _values[i]
+                gae = delta + self.gae_tau * discount * mask * gae
+                advantages.insert(0, gae)
+                returns.insert(0, gae+_values[i])
+            returns = torch.tensor(returns).to(self.device)
+            advantages = torch.tensor(advantages).to(self.device)
+        normed_returns = (returns - returns.mean()) / (returns.std() + 1e-8)
+        normed_advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+        print(f"\t{advantages.mean() = :.6f}, {advantages.std() = :.6f}")
 
         # compute losses and update networks
         approx_kl = torch.mean(log_probs_old - log_probs)  # approximation
@@ -478,7 +483,7 @@ def _flat_testing(agent: OptionCriticAgent,
             "next_graph": structure.graph.clone(),
             "reward": reward,
             "done": done,
-            "infeasible_actions": np.array([True if i in original_structure.already_minimum_section_story_indexes else False for i in range(state.shape[0])], dtype=bool),
+            "infeasible_actions": torch.tensor([True if i in original_structure.already_minimum_section_story_indexes else False for i in range(state.shape[0])], dtype=torch.bool),
             "aux": original_structure.aux,
             # Option-Critic
             "option_idx": option_idx,
@@ -642,7 +647,7 @@ def _hierarchical_testing(agent: OptionCriticAgent,
             "next_graph": structure.graph.clone(),
             "reward": reward,
             "done": done,
-            "infeasible_actions": np.array([True if i in original_structure.already_minimum_section_story_indexes else False for i in range(state0.shape[0])], dtype=bool),
+            "infeasible_actions": torch.tensor([True if i in original_structure.already_minimum_section_story_indexes else False for i in range(state0.shape[0])], dtype=torch.bool),
             "aux": original_structure.aux,
             # Option-Critic
             "option_idx": option_idx,

@@ -39,6 +39,7 @@ def plot_advantage(advantage_record: dict, save_dir=None, save=True):
     plt.tight_layout()
     if save:
         plt.savefig(save_dir/"advantage.png", bbox_inches='tight')
+    plt.close()
 
 
 def plot_entropy(entropy_record: dict, save_dir=None, save=True):
@@ -75,6 +76,7 @@ def plot_entropy(entropy_record: dict, save_dir=None, save=True):
     plt.tight_layout()
     if save:
         plt.savefig(save_dir/"entropy.png", bbox_inches='tight')
+    plt.close()
 
 
 def plot_explained_variance(return_record, value_record, save_dir=None, save=True):
@@ -106,6 +108,7 @@ def plot_explained_variance(return_record, value_record, save_dir=None, save=Tru
     plt.tight_layout()
     if save:
         plt.savefig(save_dir/"explained_variance.png", bbox_inches='tight')
+    plt.close()
 
 
 def plot_kl_divergence(kl_record, target_kl=0.02, name="kl_divergence", save_dir=None, save=True):
@@ -132,6 +135,7 @@ def plot_kl_divergence(kl_record, target_kl=0.02, name="kl_divergence", save_dir
     plt.tight_layout()
     if save:
         plt.savefig(save_dir/f"{name}.png", bbox_inches='tight')
+    plt.close()
 
 
 def plot_clip_fraction(ratio_record, clip_eps=0.2, name="clip_fraction", save_dir=None, save=True):
@@ -160,6 +164,7 @@ def plot_clip_fraction(ratio_record, clip_eps=0.2, name="clip_fraction", save_di
     plt.tight_layout()
     if save:
         plt.savefig(save_dir/f"{name}.png", bbox_inches='tight')
+    plt.close()
 
 
 def plot_loss(loss_record, loss_type: str, save_dir=None, save=True):
@@ -181,11 +186,11 @@ def plot_loss(loss_record, loss_type: str, save_dir=None, save=True):
     plt.tight_layout()
     if save:
         plt.savefig(save_dir/f"loss_{loss_type}.png", bbox_inches='tight')
+    plt.close()
 
 
 def plot_grad_norm(grad_norm_record: dict, save_dir=None, save=True):
     # grad_norm_record shape: (episode_num, optimization_epoch)
-
     plt.figure(figsize=(12, 6))
     for model_part, norms in grad_norm_record.items():
         norm_array = np.array(norms)
@@ -206,7 +211,6 @@ def plot_grad_norm(grad_norm_record: dict, save_dir=None, save=True):
 
 def plot_param_change(param_change_record: dict, save_dir=None, save=True):
     # param_change_record shape: (episode_num)
-    
     plt.figure(figsize=(12, 6))
     for model_part, changes in param_change_record.items():
         change_array = np.array(changes)
@@ -222,3 +226,4 @@ def plot_param_change(param_change_record: dict, save_dir=None, save=True):
     plt.tight_layout()
     if save:
         plt.savefig(save_dir/f"param_change.png", bbox_inches='tight')
+    plt.close()
