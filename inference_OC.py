@@ -13,7 +13,7 @@ sys.path.append("RL/")
 sys.path.append("Visualization/")
 sys.path.append("NonlinearDynamicAnalysisSimulator/")
 
-from RL import agent_OC, environment
+from RL import environment, agent_OC, agent_OC_m3
 from Visualization import plot, visualize
 from NonlinearDynamicAnalysisSimulator import load_simulator
 
@@ -23,11 +23,11 @@ def parse_args() -> Namespace:
  
 	# trained model path
 	parser.add_argument("--trained_model_path", type=Path, 
-		default="./Results/AdjustedMoreSections/RandomShape/OpenSees_RSA/2026_04_05__18_00_42__OC_MatReward_LR5e-4_OptimEpoch5_OptNum4_GJSDLossCoef05_Episode1000/models/model_HighestSingleScore.pt"
+		default="./Results/AdjustedMoreSections/RandomShape/OpenSees_RSA/2026_05_02__13_47_39__OC_LR5eN4_LossCoef_A10_C001_GJSD01_OptimEpoch5_Opt_Num4_Hor1_LinDecay01_Episode2000/models/model_HighestScore.pt"
 	)
 	# checkpoint directory
 	parser.add_argument("--ckpt_dir", type=Path, 
-		default="./Results/AdjustedMoreSections/RandomShape/OpenSees_RSA/2026_04_05__18_00_42__OC_MatReward_LR5e-4_OptimEpoch5_OptNum4_GJSDLossCoef05_Episode1000"
+		default="./Results/AdjustedMoreSections/RandomShape/OpenSees_RSA/2026_05_02__13_47_39__OC_LR5eN4_LossCoef_A10_C001_GJSD01_OptimEpoch5_Opt_Num4_Hor1_LinDecay01_Episode2000"
 	)
 	# chances
 	parser.add_argument("--chances", type=int, default=0)
@@ -101,6 +101,11 @@ def main(args):
         raise ValueError(f"Invalid entropy weight schedule: {args.entropy_weight_schedule}")
     entropy_weight_schedule = lambda episode: schedule[episode]
 
+	# Linear decay schedule
+    def linear_decay_schedule(num_episode: int, total_episode: int, minimum_epsilon: float=1e-1) -> float:
+        return max(1.0 - num_episode/total_episode, minimum_epsilon)
+    straight_decay_schedule = lambda n: linear_decay_schedule(n, args.train_episode_num, 1e-1)
+
     # Agent
     node_feature_dim = 8 if args.add_geometry_feature else 5
     edge_feature_dim = 13 if args.add_response_feature else 11
@@ -123,12 +128,15 @@ def main(args):
         "optimization_epoch": args.optimization_epoch,
         "num_options": args.option_num,
         "gjsd_loss_coef": args.gjsd_loss_coef,
+        "if_hierarchical": args.if_hierarchical if "if_hierarchical" in args else False,
+        "option_horizon": args.option_horizon if "option_horizon" in args else None,
         "seed": args.random_seed,
         "logger": logger,
         "pretrained_model_path": args.trained_model_path,
         "device": device
     }
-    agent_model = agent_OC.OptionCriticAgent(**_agent_kwargs)
+    # agent_model = agent_OC.OptionCriticAgent(**_agent_kwargs)
+    agent_model = agent_OC_m3.OptionCriticAgent(**_agent_kwargs, epsilon_decay_schedule=straight_decay_schedule)
 
     # Environment
     _env_kwargs = {
@@ -154,7 +162,15 @@ def main(args):
     # visualize.visualize_design_process(agent_model, env, logger, testing_structure=True, initial_design=None, chances=args.chances)
 
     # Visualize t-SNE and cosine similarity between option policies --> .png
-    visualize.visualize_option_policy(agent_model, env, logger, testing_structure=True, initial_design=None, option_idx=0)
+    # visualize.visualize_option_policy(agent_model, env, logger, testing_structure=True, initial_design=None, option_idx=0)
+
+    # Get inference time statistics
+    geo_info_list = [
+        # [x_span_num, z_span_num, story_num, x_span_length, z_span_length, story_height]
+        [4, 4, 6, 6000, 8000, 3200],  # testing structure
+    ]
+    for geo_info in geo_info_list: 
+        visualize.get_inference_info(agent_model, env, geo_info, infos=["time", "pmm_ratio", "visualization"])  # infos: ["time", "pmm_ratio", "visualization"]
 
 
 

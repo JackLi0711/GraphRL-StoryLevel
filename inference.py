@@ -1,3 +1,4 @@
+import json
 import torch
 import random
 import logging
@@ -22,27 +23,27 @@ def parse_args() -> Namespace:
  
 	# trained model path
 	parser.add_argument("--trained_model_path", type=Path, 
-		default="./Results/AdjustedMoreSections/RandomShape/OpenSees_RSA/DQN_Experiment_Jack/2026_02_01__23_28_10__DouDQN_MatReward_SoftUpdate_DoNDA_LinearDecay010_Buffer10000_Batch256_Epoch1000/models/model_HighestScore.pt"
+		default="./Results/AdjustedMoreSections/RandomShape/OpenSees_RSA/DQN_Experiment_Jack/2026_01_05__11_59_47__DouDQN_MatReward_SoftUpdate_LinearDecay010_Buffer10000_Batch256_Epoch1000/models/model_HighestScore.pt"
 	)
 	# checkpoint directory
 	parser.add_argument("--ckpt_dir", type=Path, 
-		default="./Results/AdjustedMoreSections/RandomShape/OpenSees_RSA/DQN_Experiment_Jack/2026_02_01__23_28_10__DouDQN_MatReward_SoftUpdate_DoNDA_LinearDecay010_Buffer10000_Batch256_Epoch1000"
+		default="./Results/AdjustedMoreSections/RandomShape/OpenSees_RSA/DQN_Experiment_Jack/2026_01_05__11_59_47__DouDQN_MatReward_SoftUpdate_LinearDecay010_Buffer10000_Batch256_Epoch1000"
 	)
 
 	# chances
 	parser.add_argument("--chances", type=int, default=0)
 
 	# nonlinear dynamic analysis simulator
-	parser.add_argument("--do_nda", action="store_true", default=True)
+	parser.add_argument("--do_nda", action="store_true", default=False)
 	parser.add_argument("--check_acc", action="store_true", default=False)
 	parser.add_argument("--check_disp", action="store_true", default=True)
 	parser.add_argument("--graph_lstm_dir", type=Path, 
 		# "./NonlinearDynamicAnalysisSimulator/trained_GraphLSTM/2025_05_19__22_59_28"
-		default="./NonlinearDynamicAnalysisSimulator/trained_GraphLSTM/2025_05_19__22_59_28"
+		default=None
 	)
 	parser.add_argument("--gm_dir", type=Path, 
 		# "./NonlinearDynamicAnalysisSimulator/ground_motions/selected_ground_motions_World_processed_one_scaling_MCE/"
-		default="./NonlinearDynamicAnalysisSimulator/ground_motions/selected_ground_motions_World_processed_one_scaling_MCE/"
+		default=None
 	)
 	parser.add_argument("--gm_num", type=int, default=11, help="ASCE says 11 is better")
 
@@ -111,6 +112,14 @@ def get_loggings(ckpt_dir):
 
 
 def main(args):
+	# Load training arguments
+	train_args_path = args.ckpt_dir / "train_args.json" 
+	with open(train_args_path, 'r') as f:
+		train_args = json.load(f)
+		for key, value in train_args.items():
+			if not hasattr(args, key):
+				setattr(args, key, value)
+	
 	# Set random seed
 	set_random_seed(args.random_seed)
 
@@ -208,7 +217,7 @@ def main(args):
 	}
 	env = environment.Environment(**_env_kwargs)
 
-	# load best-validation model
+	# Load best-validation model
 	checkpoint = torch.load(args.trained_model_path, map_location=torch.device(agent_model.device))
 	checkpoint['online_q_network'] = {k.replace('l2_1', 'q_stream'): v for k, v in checkpoint['online_q_network'].items()}
 	checkpoint['target_q_network'] = {k.replace('l2_1', 'q_stream'): v for k, v in checkpoint['target_q_network'].items()}
@@ -216,8 +225,13 @@ def main(args):
 	agent_model.online_q_network.load_state_dict(checkpoint["online_q_network"])    
 	agent_model.target_q_network.load_state_dict(checkpoint["target_q_network"])
 
-	initial_design = [14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 13, 9, 5, 4, 4, 1, 13, 12, 10, 9, 8, 4]
-	visualize.visualize_design_process(agent_model, env, logger, testing_structure=True, initial_design=None, chances=args.chances)
+    # Visualize design process --> .png, .gif, .ipt
+	# initial_design = [14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 13, 9, 5, 4, 4, 1, 13, 12, 10, 9, 8, 4]
+	# visualize.visualize_design_process(agent_model, env, logger, testing_structure=True, initial_design=None, chances=args.chances)
+
+	# Get inference behavior
+	geo_info = [4, 2, 4, 7000, 7000, 3200]
+	visualize.get_inference_info(agent_model, env, geo_info, infos=["visualization"])  # infos: ["time", "pmm_ratio", "visualization"]
 
 
 

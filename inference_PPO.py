@@ -23,11 +23,11 @@ def parse_args() -> Namespace:
  
 	# trained model path
 	parser.add_argument("--trained_model_path", type=Path, 
-		default="./Results/AdjustedMoreSections/RandomShape/OpenSees_RSA/2026_03_14__20_06_42__PPO_MatReward_doNDA_UseGAE095_LR5e-4_ActLossCoef10_CriLossCoef001_EntroWei01to001_OptimEpoch5_Episode1000/models/model_HighestScore.pt"
+		default="./Results/AdjustedMoreSections/RandomShape/OpenSees_RSA/2026_03_10__13_19_18__PPO_MatReward_UseGAE095_LR5e-4_ActLossCoef10_CriLossCoef001_EntroWei01to001_OptimEpoch5_Episode1000/models/model_HighestScore.pt"
 	)
 	# checkpoint directory
 	parser.add_argument("--ckpt_dir", type=Path, 
-		default="./Results/AdjustedMoreSections/RandomShape/OpenSees_RSA/2026_03_14__20_06_42__PPO_MatReward_doNDA_UseGAE095_LR5e-4_ActLossCoef10_CriLossCoef001_EntroWei01to001_OptimEpoch5_Episode1000"
+		default="./Results/AdjustedMoreSections/RandomShape/OpenSees_RSA/2026_03_10__13_19_18__PPO_MatReward_UseGAE095_LR5e-4_ActLossCoef10_CriLossCoef001_EntroWei01to001_OptimEpoch5_Episode1000"
 	)
 	# chances
 	parser.add_argument("--chances", type=int, default=0)
@@ -145,7 +145,10 @@ def main(args):
     agent_model.actor_critic_network.load_state_dict(checkpoint['actor_critic'])
     logger.info(f"model are loaded from {args.trained_model_path}")
 
-    visualize.visualize_design_process(agent_model, env, logger, testing_structure=True, initial_design=None, chances=args.chances)
+    # visualize.visualize_design_process(agent_model, env, logger, testing_structure=True, initial_design=None, chances=args.chances)
+	
+    geo_info = [4, 4, 6, 6000, 8000, 3200]
+    visualize.get_inference_info(agent_model, env, geo_info, infos=["visualization"])  # infos: ["time", "pmm_ratio", "visualization"]
 
 
 

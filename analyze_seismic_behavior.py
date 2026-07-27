@@ -234,8 +234,8 @@ def compare_drift_ratio():
     gm_peak_story_peak_drift_ratio_static = story_peak_drift_ratio_static.max(axis=0)  # shape: (story_num, 2)
 
     story_mean_drift_ratio_dynamic, story_peak_drift_ratio_dynamic = get_story_level_drift_ratio(structure, scenario="dynamic")  # shape: (gm_num, story_num, 2)
-    # # gm_mean_story_mean_drift_ratio_dynamic = story_mean_drift_ratio_dynamic.mean(axis=0)  # shape: (story_num, 2)
-    # # gm_peak_story_mean_drift_ratio_dynamic = story_mean_drift_ratio_dynamic.max(axis=0)  # shape: (story_num, 2)
+    # gm_mean_story_mean_drift_ratio_dynamic = story_mean_drift_ratio_dynamic.mean(axis=0)  # shape: (story_num, 2)
+    # gm_peak_story_mean_drift_ratio_dynamic = story_mean_drift_ratio_dynamic.max(axis=0)  # shape: (story_num, 2)
     gm_mean_story_peak_drift_ratio_dynamic = story_peak_drift_ratio_dynamic.mean(axis=0)  # shape: (story_num, 2)
     gm_peak_story_peak_drift_ratio_dynamic = story_peak_drift_ratio_dynamic.max(axis=0)  # shape: (story_num, 2)
 

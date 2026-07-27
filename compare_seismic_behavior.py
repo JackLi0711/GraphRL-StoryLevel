@@ -26,13 +26,13 @@ strucutre_type         = "testing"  # testing, taller, random, x2z2y4, x6z6y7
 chance                 = 0          # 0, 1, 2
 
 static_model_folder    = ""
-dynamic_model_folder   = "2026_03_17__17_12_00__PPO_MatReward_doNDA_UseGAE095_LR5e-4_ActLossCoef10_CriLossCoef001_EntroWei01to001_OptimEpoch5_Episode1000"
+dynamic_model_folder   = "2026_02_01__23_28_10__DouDQN_MatReward_SoftUpdate_DoNDA_LinearDecay010_Buffer10000_Batch256_Epoch1000"
 model_date             = [dynamic_model_folder.split("__")[0], dynamic_model_folder.split("__")[1]]
 model_setting          = "__".join(model_date)
 
 working_dir            = f"./Validation/Final_Design_Comparison/{model_setting}/{strucutre_type}/{gm_level}"
-static_checkpoint_dir  = f"./Results/AdjustedMoreSections/RandomShape/OpenSees_RSA/{static_model_folder}"
-dynamic_checkpoint_dir = f"./Results/AdjustedMoreSections/RandomShape/OpenSees_RSA/{dynamic_model_folder}"
+static_checkpoint_dir  = f"./Results/AdjustedMoreSections/RandomShape/OpenSees_RSA/DQN_Experiment_Jack/{static_model_folder}"
+dynamic_checkpoint_dir = f"./Results/AdjustedMoreSections/RandomShape/OpenSees_RSA/DQN_Experiment_Jack/{dynamic_model_folder}"
 pisa                   = "PISA3D_Batch_500nodes.exe"
 
 ground_motion_num      = 11
@@ -204,5 +204,4 @@ if __name__ == '__main__':
     # 5. Generate graph
     # generate_structural_graph.generate_graph_NodeAsNode(os.path.join(working_dir, "static"))
     generate_structural_graph.generate_graph_NodeAsNode(os.path.join(working_dir, "dynamic"))
-    
     

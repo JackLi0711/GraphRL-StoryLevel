@@ -1,5 +1,6 @@
 import os
 import glob
+import time
 import torch
 import matplotlib
 
@@ -16,9 +17,10 @@ from logging import Logger
 from sklearn.manifold import TSNE
 from torch_geometric.loader import DataLoader
 
-from RL import environment, agent_DQN, agent_PPO, agent_OC
-from Structure import structure, pisa
-from Structure.sections import beam_sections, column_sections
+from RL import environment, agent_DQN, agent_PPO, agent_OC, agent_OC_m3, new_strategy
+from Structure import pisa, check, opensees
+from Structure.structure import Structure
+from Structure.sections import beam_sections, column_sections, YIELDING_STRESS
 
 
 @torch.no_grad()
@@ -233,7 +235,7 @@ def visualize_option_policy(agent: agent_OC.OptionCriticAgent,
 
 
 
-def _visualize_one_iteration(structure: structure.Structure, 
+def _visualize_one_iteration(structure: Structure, 
                              iteration: int, 
                              env: environment.Environment, 
                              vis_values: torch.Tensor, 
@@ -536,3 +538,240 @@ def visualize_design_process(agent: Union[agent_DQN.DeepQAgent, agent_PPO.PPOAge
     print(f"final design: {original_structure.story_level_sections}")
     print(f"material usage: {env.material_usage_record[-1]:5.2f} m3")
     print(f"reduced material: {np.sum(env.saved_material_record):5.2f} m3")  
+
+
+
+
+def get_axial_moment_interaction_ratio(structure: Structure, response: opensees.NewResponse) -> np.ndarray:
+    """
+    Get axial-moment-interaction ratio given a specific structure and response.
+    - [鋼構規範(LRFD) 8.2 對稱構材承受彎矩及軸力之作用](https://www.nlma.gov.tw/filesys/file/chinese/publication/law/law/3495-8.pdf)
+    """
+    PHI, PHI_b = 0.85, 0.90
+    
+    # demand
+    axial_force = np.array(list(response.member_response["axial"].values()))
+    Pu = np.abs(axial_force)
+    Mux = np.abs(np.array(list(response.member_response["momentZ"].values())))
+    Muy = np.abs(np.array(list(response.member_response["momentY"].values())))
+
+    # capacity
+    A = np.array(list(structure.member_A_dict.values()))  # mm2
+    Fcr = np.array(list(structure.member_Fcr_dict.values()))  # kN/mm2
+    Puc = Fcr * A  # kN
+    Put = YIELDING_STRESS * A  # kN
+
+    Pn = np.zeros_like(Pu)
+    Pn += Put * (axial_force > 0)  # tension condition
+    Pn += Puc * (axial_force <= 0)  # compression condition
+    phi_Pn = PHI * Pn
+
+    Mnx = np.array(list(structure.member_Mnx_dict.values()))
+    Mny = np.array(list(structure.member_Mny_dict.values()))
+    phi_Mnx = PHI_b * Mnx
+    phi_Mny = PHI_b * Mny
+    
+    # interaction ratio
+    case_1 = ((Pu / phi_Pn) >= 0.2)
+    ratio_1 = ((Pu / phi_Pn) + 8/9 * (Mux / phi_Mnx + Muy / phi_Mny)) * case_1
+    case_2 = ((Pu / phi_Pn) < 0.2)
+    ratio_2 = ((Pu / (2 * phi_Pn)) + (Mux / phi_Mnx + Muy / phi_Mny)) * case_2
+    ratio = ratio_1 + ratio_2
+
+    return ratio
+
+
+def process_pmm_ratio(structure: Structure, analysis_dir: Path):
+    load_cases, static_responses = check.get_response(structure, analysis_dir)
+    stress_ratios = np.zeros((structure.member_number, len(load_cases)))
+    pmm_ratios = np.zeros((structure.member_number, len(load_cases)))
+    for i, (load_case, response) in enumerate(zip(load_cases, static_responses)):
+        beam_com_ratios = check.get_ratio_beam_compression_strength(structure, response)
+        beam_ten_ratios = check.get_ratio_beam_tension_strength(structure, response)
+        col_com_ratios = check.get_ratio_column_compression_strength(structure, response)
+        col_ten_ratios = check.get_ratio_column_tension_strength(structure, response)
+        stress_ratios[structure.member_beam_index_list, i] = beam_com_ratios + beam_ten_ratios
+        stress_ratios[structure.member_column_index_list, i] = col_com_ratios + col_ten_ratios
+        
+        beam_pmm_ratios = check.get_ratio_beam_axial_moment(structure, response)
+        pmm_ratios[structure.member_beam_index_list, i] = beam_pmm_ratios
+        pmm_ratios[structure.member_column_index_list, i] = col_com_ratios + col_ten_ratios
+
+    pmm_ratios_max = pmm_ratios.max(axis=1)
+    print(f"max beam PMM ratio: {pmm_ratios_max[structure.member_beam_index_list].max():.3f}, limit: {check.BEAM_AXIAL_MOMENT_LIMIT:.3f}")
+    print(f"max colu PMM ratio: {pmm_ratios_max[structure.member_column_index_list].max():.3f}, limit: {check.PHI_C:.3f}")
+
+    pmm_ratio_story_member_group_infos = np.zeros((len(structure.story_level_sections), 2))  # 2: max/mean of story member group
+    for i, story_member_indices in enumerate(structure.story_level_actions):
+        pmm_ratios_story_member_group = pmm_ratios_max[story_member_indices]
+        pmm_ratio_story_member_group_infos[i, 0] = pmm_ratios_story_member_group.max()
+        pmm_ratio_story_member_group_infos[i, 1] = pmm_ratios_story_member_group.mean()
+    
+    return pmm_ratio_story_member_group_infos
+
+
+def get_inference_info(agent: Union[agent_DQN.DeepQAgent, agent_PPO.PPOAgent, agent_OC.OptionCriticAgent, agent_OC_m3.OptionCriticAgent], 
+                       env: environment.Environment, 
+                       geo_info: list[int],
+                       initial_design: list[int] = None, 
+                       infos: list[str] = None):
+    x_span_num, z_span_num, story_num, x_span_len, z_span_len, story_height = geo_info
+    geo_name = f"x{x_span_num}_z{z_span_num}_y{story_num}_{x_span_len}_{z_span_len}_{story_height}"
+    save_dir = env.checkpoint_dir / "inference" / geo_name
+    save_dir.mkdir(parents=True, exist_ok=True)
+    if "visualization" in infos:
+        frame_dir = save_dir / "design_process"
+        frame_dir.mkdir(parents=True, exist_ok=True)
+
+    structure_kwargs = {
+        'x_span_num': x_span_num,
+        'x_span_lens': [x_span_len] * x_span_num,
+        'z_span_num': z_span_num,
+        'z_span_lens': [z_span_len] * z_span_num,
+        'story_num': story_num,
+        'story_height': story_height,
+        'story_level_sections': None if initial_design is None else initial_design,
+        'add_structure_geometry': env.add_structure_geometry,
+        'add_response_features': env.add_response_features,
+        'do_nonlinear_dynamic_analysis': env.do_nonlinear_dynamic_analysis,
+        'nda_norm_dict': env.nda_norm_dict,
+        'analysis_dir': env.checkpoint_dir/"Modal_Analysis"
+    }
+    structure = Structure(**structure_kwargs)
+    print(structure)
+    if env.scwb_driven_design:
+        new_strategy.strong_column_weak_beam_driven_update(structure, env.code_analysis_dir)
+    env.init_records(structure)
+    graph = structure.graph.clone()
+    
+    done = False
+    timestep = 0
+    accumulated_reward = 0
+    action_list = []
+    times = [[], []]  # agent.choose_action(), env.step()
+    pmm_ratio_infos = [[], []]  # max and mean of PMM ratio
+    while not done:
+        original_structure = deepcopy(structure)
+        # go through gnn and get state
+        with torch.no_grad():
+            graph = graph.to(agent.device)
+            state = agent.gnn(graph.x, graph.edge_index, graph.edge_attr, None, structure.aux["story_batch"].to(agent.device), None)
+        
+        # record time for choose_action
+        t_start = time.time()
+        dont_select_story_member_indexes = structure.restrict_action_space() if agent.restrict_action else []
+        infeasible_actions = list(set(structure.already_minimum_section_story_indexes + dont_select_story_member_indexes))
+        if isinstance(agent, agent_DQN.DeepQAgent):
+            action, _ = agent.choose_action(state, infeasible_actions, greedy=True)
+            q_values = agent.online_q_network(state).squeeze().detach().cpu().numpy()
+            vis_values = (q_values - np.min(q_values)) / (np.max(q_values) - np.min(q_values))  # noamalize q_values to [0, 1]
+        elif isinstance(agent, agent_PPO.PPOAgent):
+            logits, _, _, action, _ = agent.choose_action(state, infeasible_actions, greedy=True)
+            vis_values = torch.softmax(logits, dim=-1).squeeze().detach().cpu().numpy()  # use action probabilities as vis values
+        elif isinstance(agent, agent_OC.OptionCriticAgent):
+            option_idx = 0
+            _, logits, _, _, action, _ = agent.choose_action(state, infeasible_actions, option_idx, greedy=True)
+            vis_values = torch.softmax(logits, dim=-1).squeeze().detach().cpu().numpy()  # use action probabilities as vis values
+        elif isinstance(agent, agent_OC_m3.OptionCriticAgent):
+            option_idx, _ = agent.choose_option(state, greedy=True)
+            _, logits, _, _, action, _ = agent.choose_action(state, infeasible_actions, option_idx, greedy=True)
+            vis_values = torch.softmax(logits, dim=-1).squeeze().detach().cpu().numpy()  # use action probabilities as vis values
+        else:
+            raise ValueError("agent type not supported.")
+        t_end = time.time()
+        times[0].append(t_end - t_start)
+        print(f"used time for agent.choose_action(): {t_end - t_start:.3f}s")
+        
+        # visualize
+        if "visualization" in infos:
+            vis_path = frame_dir / f"{timestep}.png"
+            _visualize_one_iteration(structure, timestep, env, vis_values, vis_path)
+
+        # update structure
+        t_start = time.time()
+        structure, reward, done, fail_name, fail_reason = env.step(structure, action)
+        member_category = structure.story_level_categories[action]
+        update_story = (action % structure.story_num) + 1
+        action_info = f"{update_story}F_{member_category}"        
+        t_end = time.time()
+        times[1].append(t_end - t_start)
+        print(f"used time for env.step(): {t_end - t_start:.3f}s")
+
+        # get PMM ratio
+        if "pmm_ratio" in infos:
+            pmm_ratio_story_member_group_infos = process_pmm_ratio(structure, env.checkpoint_dir)
+            member_max_group_max, member_mean_group_max = np.max(pmm_ratio_story_member_group_infos, axis=0)
+            member_max_group_min, member_mean_group_min = np.min(pmm_ratio_story_member_group_infos, axis=0)
+            member_max_group_med, member_mean_group_med = np.median(pmm_ratio_story_member_group_infos, axis=0)
+            member_max_choose_max, member_mean_choose_mean = pmm_ratio_story_member_group_infos[action]
+            # member_max_choose_max_rank = np.sum(pmm_ratio_story_member_group_infos[:, 0] > member_max_choose_max) + 1
+            pmm_ratio_infos[0].append([member_max_group_max, member_max_group_min, member_max_group_med, member_max_choose_max])
+            pmm_ratio_infos[1].append([member_mean_group_max, member_mean_group_min, member_mean_group_med, member_mean_choose_mean])
+
+        # get next state
+        graph = structure.graph.clone()
+        timestep += 1
+        accumulated_reward += reward
+        action_list.append(action)
+        print(f"timestep: {timestep:3d}, action: {action:3d} [{action_info}], reward: {reward:6.3f}, accumulated_reward: {accumulated_reward:6.3f}\n")
+
+        # check if can't select anymore
+        if agent.restrict_action:
+            dont_select = list(set(structure.already_minimum_section_story_indexes + structure.restrict_action_space()))
+        else:
+            dont_select = structure.already_minimum_section_story_indexes
+        if len(dont_select) >= len(structure.story_level_actions):
+            done = True    
+
+    print(original_structure)
+    print(f"action list: {action_list[:-1]}")
+    print(f"final design: {original_structure.story_level_sections}")
+    print(f"material usage: {env.material_usage_record[-1]:5.2f} m3")
+    print(f"reduced material: {np.sum(env.saved_material_record):5.2f} m3") 
+
+    inference_times = {'agent_inference': times[0], 'env_step': times[1]}
+    if "time" in infos:
+        print("\ninference times:")
+        for category, times_list in inference_times.items():
+            print(f"  {category}: {np.mean(times_list):.3f} ± {np.std(times_list):.3f} s")
+
+    if "pmm_ratio" in infos:
+        pmm_ratio_array = np.array(pmm_ratio_infos)  # (2, num_timesteps, 4)
+        max_pmm_ratios, mean_pmm_ratios = pmm_ratio_array[0], pmm_ratio_array[1]  # max/mean of member within the same group
+        timesteps = np.arange(len(max_pmm_ratios))
+        stats = ["max", "min", "med"]
+        plt.figure(figsize=(12, 6))
+        for i, stat in enumerate(stats):
+            plt.plot(timesteps, max_pmm_ratios[:, i], label=f"{stat}", color="red", linestyle="--", alpha=0.5)
+        plt.plot(timesteps, max_pmm_ratios[:, 3], label=f"chosen", color="red", linewidth=2)
+        # for i, stat in enumerate(stats):
+        #     plt.plot(timesteps, mean_pmm_ratios[:, i], label=f"member: mean, group: {stat}", color="blue", alpha=0.5)
+        # plt.plot(timesteps, mean_pmm_ratios[:, 3], label=f"member: mean, chosen group", color="blue", linewidth=2)
+
+        plt.xlabel("Timestep", fontsize=14)
+        plt.ylabel("PMM Ratio", fontsize=14)
+        plt.title("PMM Ratio of Story Member Groups During Design Process", fontsize=16)
+        plt.legend(loc="best", fontsize=14)
+        plt.grid()
+        plt.tight_layout()
+        save_path = save_dir / "pmm_ratio.png"
+        plt.savefig(save_path, bbox_inches="tight")
+
+    if "visualization" in infos:
+        # generate final pisa ipt file
+        save_ipt_path = save_dir / f"final_design.ipt"
+        pisa._generate_analysis_ipt(original_structure, save_ipt_path, analysis="modal")
+
+        # generate animation
+        frame_names = [image for image in glob.glob(f"{frame_dir}/*.png")]
+        frame_names = [str(frame_dir / f"{i}.png") for i in range(0, len(frame_names))]
+        print(f"frame names length: {len(frame_names)}")
+        frames = [Image.open(name) for name in frame_names]
+        last_frame = frames[-1]
+        frames += [last_frame] * 5
+        
+        # frame_duration_ms = 1000 if not short else 200
+        frame_duration_ms = 200
+        frame_one = frames[0]
+        save_animation_path = save_dir / "design_animation.gif"            
+        frame_one.save(save_animation_path, format="GIF", append_images=frames, save_all=True, duration=frame_duration_ms, loop=0)
