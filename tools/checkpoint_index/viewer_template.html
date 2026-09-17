@@ -1,0 +1,727 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Checkpoint Index</title>
+<style>
+  :root{
+    --bg:#fbfbfa; --fg:#1d1c1a; --muted:#6b6862; --line:#e2e0db;
+    --card:#fff; --accent:#2f6f4f; --warn:#a8422e; --chip:#efeee9;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;padding:0 16px 64px;background:var(--bg);color:var(--fg);
+       font:14px/1.5 "Segoe UI","Noto Sans TC",system-ui,sans-serif}
+  header{padding:20px 0 12px;border-bottom:1px solid var(--line);margin-bottom:16px}
+  h1{margin:0 0 4px;font-size:19px;font-weight:650;letter-spacing:-.01em}
+  .sub{color:var(--muted);font-size:12.5px}
+  .sub code{background:var(--chip);padding:1px 5px;border-radius:3px}
+  .bar{display:flex;flex-wrap:wrap;gap:14px;align-items:flex-start;margin:14px 0}
+  .grp{display:flex;flex-wrap:wrap;gap:5px;align-items:center}
+  .grp>b{font-size:11px;color:var(--muted);font-weight:600;margin-right:2px;
+         text-transform:uppercase;letter-spacing:.04em}
+  .chip{border:1px solid var(--line);background:var(--card);border-radius:12px;
+        padding:2px 10px;font-size:12.5px;cursor:pointer;user-select:none}
+  .chip.on{background:var(--accent);border-color:var(--accent);color:#fff}
+  input[type=search]{border:1px solid var(--line);border-radius:6px;padding:5px 9px;
+       font:inherit;font-size:13px;min-width:220px;background:var(--card)}
+  table{border-collapse:collapse;width:100%;font-size:13px;background:var(--card)}
+  th,td{text-align:left;padding:5px 8px;border-bottom:1px solid var(--line);
+        white-space:nowrap}
+  th{position:sticky;top:0;background:var(--bg);cursor:pointer;font-size:11.5px;
+     text-transform:uppercase;letter-spacing:.04em;color:var(--muted);z-index:2}
+  th.sorted{color:var(--fg)}
+  tbody tr:hover{background:#f5f4f0}
+  td.num{text-align:right;font-variant-numeric:tabular-nums}
+  td.name{white-space:normal;min-width:280px;font-size:12px;line-height:1.35}
+  .tag{display:inline-block;padding:0 6px;border-radius:3px;background:var(--chip);
+       font-size:11px;color:var(--muted)}
+  .bad{color:var(--warn);font-weight:600}
+  .wrap{overflow-x:auto;border:1px solid var(--line);border-radius:8px}
+  section.panel{margin-top:26px;border:1px solid var(--line);border-radius:8px;
+                background:var(--card);padding:16px}
+  section.panel h2{margin:0 0 3px;font-size:15px}
+  .hint{color:var(--muted);font-size:12px;margin-bottom:12px}
+  .diff td:first-child{font-family:ui-monospace,Consolas,monospace;font-size:12px}
+  .diff td{white-space:normal;vertical-align:top}
+  .diffval{font-family:ui-monospace,Consolas,monospace;font-size:12px}
+  details{margin-top:10px}
+  summary{cursor:pointer;color:var(--muted);font-size:12.5px}
+  .grids{display:flex;flex-wrap:wrap;gap:18px;margin-top:6px}
+  .gcard{border:1px solid var(--line);border-radius:6px;padding:9px}
+  .gcard h3{margin:0 0 7px;font-size:12px;font-weight:600;max-width:260px;
+            white-space:normal;line-height:1.3}
+  .grid{display:grid;grid-template-columns:auto repeat(var(--n),26px);gap:2px}
+  .grid div{font-size:10.5px;text-align:center;line-height:20px;height:20px;
+            border-radius:2px}
+  .grid .lbl{text-align:right;padding-right:5px;color:var(--muted);font-size:10.5px;
+             background:none}
+  .legend{display:flex;gap:2px;align-items:center;margin-top:8px;font-size:11px;
+          color:var(--muted)}
+  .legend i{width:14px;height:12px;border-radius:2px;display:inline-block}
+  .empty{color:var(--muted);padding:8px 0}
+  input[type=date]{border:1px solid var(--line);border-radius:6px;padding:3px 6px;
+       font:inherit;font-size:12.5px;background:var(--card);color:var(--fg)}
+  .grp label.lbltxt{font-size:12.5px;color:var(--muted);display:flex;gap:4px;
+       align-items:center}
+  details.dd{position:relative}
+  details.dd>summary{list-style:none;border:1px solid var(--line);background:var(--card);
+       border-radius:12px;padding:2px 10px;font-size:12.5px;cursor:pointer;
+       user-select:none;color:var(--fg)}
+  details.dd>summary::-webkit-details-marker{display:none}
+  details.dd>summary::after{content:" ▾";color:var(--muted)}
+  details.dd>summary.on{background:var(--accent);border-color:var(--accent);color:#fff}
+  details.dd>summary.on::after{color:#fff}
+  .dd .menu{position:absolute;top:calc(100% + 4px);left:0;z-index:10;
+       background:var(--card);border:1px solid var(--line);border-radius:8px;
+       box-shadow:0 6px 18px rgba(0,0,0,.08);padding:6px;max-height:280px;
+       overflow:auto;min-width:130px}
+  .dd .menu label{display:flex;align-items:center;gap:6px;padding:3px 6px;
+       font-size:12.5px;border-radius:4px;cursor:pointer;white-space:nowrap}
+  .dd .menu label:hover{background:var(--chip)}
+  .dd .menu.days{display:grid;grid-template-columns:repeat(4,auto);min-width:280px}
+  .dd .cnt{margin-left:auto;color:var(--muted);font-size:11px}
+  .stars{display:inline-flex;gap:0}
+  .stars button{border:0;background:none;padding:0 1px;font-size:15px;line-height:1;
+       cursor:pointer;color:#c9c5bc}
+  .stars button.on{color:#c98a12}
+  .stars button:hover{color:#e0a526}
+  button.note{border:1px dashed var(--line);background:none;border-radius:5px;
+       padding:1px 7px;font:inherit;font-size:12px;color:var(--muted);cursor:pointer;
+       max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+       text-align:left}
+  button.note.has{border-style:solid;color:var(--fg);background:#fffbef;
+       border-color:#eadfbf}
+  #annStatus.bad{font-weight:500}
+  dialog#noteDlg{border:1px solid var(--line);border-radius:10px;padding:16px;
+       width:min(560px,calc(100vw - 32px));background:var(--card);color:var(--fg)}
+  dialog#noteDlg::backdrop{background:rgba(20,18,15,.35)}
+  #noteDlg h3{margin:0 0 4px;font-size:13px;font-weight:600;word-break:break-all}
+  #noteDlg textarea{width:100%;min-height:140px;border:1px solid var(--line);
+       border-radius:6px;padding:8px;font:inherit;font-size:13px;resize:vertical}
+  #noteDlg .dlgbtn{display:flex;justify-content:flex-end;gap:8px;margin-top:10px}
+  #noteDlg button{border:1px solid var(--line);background:var(--card);border-radius:6px;
+       padding:4px 14px;font:inherit;font-size:13px;cursor:pointer}
+  #noteDlg button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+  td.stars-cell,td.note-cell{white-space:nowrap}
+  .tierh{font-size:12px;font-weight:600;color:var(--muted);margin:12px 0 4px}
+  .tag.warn{background:#fbe9e4;color:var(--warn);cursor:help}
+  ul.warnlist{margin:0;padding-left:18px;font-size:12.5px}
+  ul.warnlist ul{padding-left:16px;color:var(--warn);font-family:ui-monospace,Consolas,monospace;
+       font-size:12px;word-break:break-all}
+  .cmt{font-size:12.5px;line-height:1.45;min-width:180px;max-width:360px}
+  ul.cmt{margin:0;padding-left:16px}
+  ul.cmt li{margin:1px 0}
+  .defs{border:1px solid var(--line);border-radius:8px;background:var(--card);
+        padding:10px 16px;margin-bottom:6px}
+  .defs summary{font-size:13px;color:var(--fg);font-weight:600}
+  .defs dl{margin:10px 0 2px;display:grid;grid-template-columns:auto 1fr;
+           gap:8px 16px;font-size:13px}
+  .defs dt{font-weight:650;font-family:ui-monospace,Consolas,monospace}
+  .defs dd{margin:0}
+  .defs .f{font-family:ui-monospace,Consolas,monospace;background:var(--chip);
+           padding:1px 6px;border-radius:3px;white-space:nowrap}
+  .defs p{margin:8px 0 2px;color:var(--muted);font-size:12px}
+  @media (max-width:560px){.defs dl{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<header>
+  <h1>Checkpoint Index</h1>
+  <div class="sub">
+    <span id="scope"></span> · <span id="count"></span>
+    · 重新產生：<code>python tools/checkpoint_index/build_index.py</code>
+    · 唯讀，不會更動 <code>Results/</code>
+  </div>
+</header>
+
+<details class="defs">
+  <summary>指標定義：best / last / gap</summary>
+  <dl>
+    <dt>Saving Ratio</dt>
+    <dd>每個測試點 <i>i</i> 的節材比例：
+      <span class="f">r<sub>i</sub> = (V<sub>0,i</sub> − V<sub>f,i</sub>) / V<sub>0,i</sub></span>。
+      V<sub>0</sub> = <code>initial_volume</code>（初始設計材料體積），
+      V<sub>f</sub> = <code>final_volume</code>（該測試回合結束時的設計材料體積），
+      皆取自 <code>testing_record.txt</code>。訓練期間每 <code>test_frequency</code>
+      個 episode 做一次測試，共 N 個測試點（表中「測試點」欄）。</dd>
+
+    <dt>best</dt>
+    <dd><span class="f">best = max<sub>i</sub> r<sub>i</sub></span>，全部測試點中最高的 Saving Ratio。
+      點欄位標題可依此排序；比較區的「最終設計」與「score / 結束原因」都取自這個測試點
+      （若有並列，取最早出現者）。</dd>
+
+    <dt>last</dt>
+    <dd><span class="f">last = r<sub>N</sub></span>，最後一個測試點的 Saving Ratio，
+      代表訓練結束時的表現。</dd>
+
+    <dt>gap</dt>
+    <dd><span class="f">gap = best − last</span>（Convergence Gap）。
+      衡量訓練穩定度：gap 越大，表示模型曾達到的好表現在訓練後期沒有維持住。
+      <span class="bad">gap &gt; 0.1</span> 標為紅字，視為<b>未收斂</b>。</dd>
+  </dl>
+  <p>三者皆與 <code>reward_type</code> 無關，可跨 Run 直接比較；best、last 先四捨五入到小數 5 位，gap 由捨入後的值相減。
+     以 best 而非 last 作為排序依據的理由見 <code>docs/adr/0001</code>。</p>
+</details>
+
+<div class="bar" id="filters"></div>
+<div class="bar" id="dateBar">
+  <div class="grp"><b>date</b>
+    <label class="lbltxt">from <input type="date" id="dFrom"></label>
+    <label class="lbltxt">to <input type="date" id="dTo"></label>
+  </div>
+  <div class="grp" id="dParts"></div>
+  <span class="chip" id="dClear">清除日期</span>
+  <span class="bad" id="dWarn" style="font-size:12.5px"></span>
+</div>
+<div class="bar">
+  <input type="search" id="q" placeholder="搜尋名稱 / 附註 / comment / 參數值…">
+  <label class="chip" id="convOnly">只顯示已收斂</label>
+  <span class="sub" id="shown"></span>
+</div>
+<div class="bar">
+  <div class="grp" id="starFilter"><b>star</b></div>
+  <span class="chip" id="annSave" title="將星號與附註寫入 tools/checkpoint_index/annotations.json">儲存到 annotations.json</span>
+  <label class="chip" title="合併另一份 annotations.json（同一個 Run 以較新的修改為準）">匯入<input type="file" id="annImport" accept=".json,application/json" hidden></label>
+  <span class="sub" id="annStatus"></span>
+</div>
+
+<dialog id="noteDlg">
+  <form method="dialog">
+    <h3 id="noteTitle"></h3>
+    <div class="hint">Ctrl+Enter 儲存 · Esc 取消 · 清空內容即刪除附註</div>
+    <textarea id="noteText"></textarea>
+    <div class="dlgbtn">
+      <button value="cancel">取消</button>
+      <button value="save" class="primary">儲存</button>
+    </div>
+  </form>
+</dialog>
+
+<div class="wrap"><table id="tbl">
+  <thead><tr id="head"></tr></thead>
+  <tbody id="body"></tbody>
+</table></div>
+
+<section class="panel" id="cmp">
+  <h2>比較</h2>
+  <div class="hint" id="cmphint">勾選 2–5 個 Run 進行比較。</div>
+  <div id="cmpbody"></div>
+</section>
+
+<script>
+const DATA = /*__INDEX_JSON__*/{};
+const RUNS = DATA.runs, FIELDS = DATA.fields;
+const AXES = ["algorithm","purpose","operator","device"];
+const sel = new Set();
+let filt = {}, q = "", convOnly = false;
+// 預設依日期排序，早的在上
+let sortKey = "date", sortDir = 1;
+
+/* ---- 標註（星號 / 附註）----------------------------------------------------
+   來源有二：建置時內嵌的 annotations.json，以及瀏覽器 localStorage。
+   以 Run 的路徑為 key（ADR-0002）；每筆帶 updated 時間，兩邊衝突時較新者勝。
+   清除的標註保留為空白紀錄（含 updated），避免被較舊的檔案內容復活。 */
+const ANN_EMBEDDED = /*__ANNOTATIONS_JSON__*/{};
+const LS_KEY = "ckpt-index-annotations:v1";
+const RUN_IDS = new Set(RUNS.map(r=>r.id));
+const RUN_BY_NAME = {};
+RUNS.forEach(r=>{ const b=r.id.split("/").pop(); (RUN_BY_NAME[b]=RUN_BY_NAME[b]||[]).push(r.id); });
+
+// 附註欄位名為 note（CONTEXT.md: Note，避免與 args 的 comment 混淆）。
+// version 1 的檔案與舊的 localStorage 把附註存在 comment 欄位：讀取時相容，寫出一律用 note。
+const canonAnn = e => ({stars: Math.max(0, Math.min(3, +(e&&e.stars)||0)),
+                        note: (e && (e.note ?? e.comment)) || "", updated: (e&&e.updated)||""});
+const isEmptyAnn = e => !e || (!e.stars && !(e.note||"").trim());
+const newerAnn = (a,b) => !a ? b : !b ? a : ((a.updated||"") >= (b.updated||"") ? a : b);
+
+// Run 被 Filing 搬移後路徑會變：找不到路徑時，以資料夾名稱（唯一）重新對應（ADR-0002 記載的唯一例外）
+function rekeyAnn(obj){
+  const out={};
+  for(const [id,e] of Object.entries(obj||{})){
+    let k=id;
+    if(!RUN_IDS.has(id)){ const c=RUN_BY_NAME[id.split("/").pop()]; if(c&&c.length===1) k=c[0]; }
+    out[k]=newerAnn(out[k], canonAnn(e));
+  }
+  return out;
+}
+function mergeAnn(a,b){
+  const out={};
+  new Set([...Object.keys(a),...Object.keys(b)]).forEach(id=>{ out[id]=newerAnn(a[id],b[id]); });
+  return out;
+}
+// 寫入檔案時只保留非空標註，依 key 排序讓 git diff 穩定
+function exportAnn(ann){
+  const a={};
+  Object.keys(ann).sort().forEach(id=>{ if(!isEmptyAnn(ann[id])) a[id]=canonAnn(ann[id]); });
+  return {version:2, annotations:a};
+}
+const annSnapshot = ann => JSON.stringify(exportAnn(ann));
+
+function readLocalAnn(){
+  try { return JSON.parse(localStorage.getItem(LS_KEY)||"{}"); } catch(e){ return {}; }
+}
+const FILE_ANN = rekeyAnn((ANN_EMBEDDED && ANN_EMBEDDED.annotations) || {});
+let ANN = mergeAnn(FILE_ANN, rekeyAnn(readLocalAnn()));
+let fileSnap = annSnapshot(FILE_ANN);
+let fileHandle = null, saveTimer = null, starFilt = new Set();
+const ann = r => ANN[r.id] || {stars:0, note:"", updated:""};
+const thRun = r => "<th>"+esc(r.name.slice(0,34))+"…</th>";
+const esc = s => String(s).replace(/[&<>"']/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+
+function saveLocalAnn(){
+  try { localStorage.setItem(LS_KEY, JSON.stringify(ANN)); } catch(e){}
+}
+
+function setAnn(id, patch){
+  ANN[id] = {...canonAnn(ANN[id]), ...patch, updated: new Date().toISOString()};
+  saveLocalAnn();
+  if(fileHandle){ clearTimeout(saveTimer); saveTimer=setTimeout(()=>writeAnnFile(), 600); }
+  annStatus(); render(); compare();
+}
+
+function annStatus(msg){
+  const el=document.getElementById("annStatus");
+  const cur=exportAnn(ANN).annotations;
+  const n=Object.keys(cur).filter(id=>RUN_IDS.has(id)).length;
+  const orphan=Object.keys(cur).length-n;
+  const dirty=annSnapshot(ANN)!==fileSnap;
+  let s=n+" 個 Run 有標註";
+  if(orphan) s+=" · "+orphan+" 筆找不到對應 Run（仍會保留在檔案中）";
+  s+= dirty ? " · 有修改尚未寫入 annotations.json（已暫存於此瀏覽器）"
+            : " · 與 annotations.json 一致";
+  if(msg) s=msg+" · "+s;
+  el.textContent=s; el.classList.toggle("bad", dirty);
+}
+
+async function writeAnnFile(){
+  const text=JSON.stringify(exportAnn(ANN), null, 1)+"\n";
+  if(window.showSaveFilePicker){
+    try{
+      if(!fileHandle) fileHandle = await window.showSaveFilePicker({
+        suggestedName:"annotations.json",
+        types:[{description:"JSON", accept:{"application/json":[".json"]}}]});
+      const w=await fileHandle.createWritable(); await w.write(text); await w.close();
+      fileSnap=annSnapshot(ANN);
+      annStatus("已寫入 "+fileHandle.name+"，此分頁之後的修改會自動寫入");
+    }catch(e){
+      if(e.name!=="AbortError"){ fileHandle=null; annStatus("寫入失敗："+e.message); }
+    }
+  } else {
+    // 不支援 File System Access API 的瀏覽器（如 Firefox）：改為下載
+    const a=document.createElement("a");
+    a.href=URL.createObjectURL(new Blob([text],{type:"application/json"}));
+    a.download="annotations.json"; document.body.appendChild(a); a.click(); a.remove();
+    fileSnap=annSnapshot(ANN);
+    annStatus("已下載 annotations.json，請放到 tools/checkpoint_index/ 取代舊檔");
+  }
+}
+
+function starsEl(r){
+  const s=ann(r).stars||0, box=document.createElement("span"); box.className="stars";
+  for(let i=1;i<=3;i++){
+    const b=document.createElement("button"); b.type="button";
+    b.textContent = i<=s ? "★" : "☆"; if(i<=s) b.className="on";
+    b.title = i===s ? "清除星號" : "標為 "+i+" 顆星";
+    b.onclick=e=>{ e.stopPropagation(); setAnn(r.id, {stars: i===s ? 0 : i}); };
+    box.appendChild(b);
+  }
+  return box;
+}
+function noteEl(r){
+  const note=(ann(r).note||"").trim(), b=document.createElement("button");
+  b.type="button"; b.className="note"+(note?" has":"");
+  b.textContent = note ? note.replace(/\s+/g," ") : "＋ 附註";
+  b.title = note || "新增附註";
+  b.onclick=()=>openNote(r);
+  return b;
+}
+function openNote(r){
+  const dlg=document.getElementById("noteDlg"), ta=document.getElementById("noteText");
+  document.getElementById("noteTitle").textContent=r.name;
+  ta.value=ann(r).note||"";
+  dlg.returnValue="";
+  dlg.onclose=()=>{
+    if(dlg.returnValue==="save" && ta.value!==(ann(r).note||""))
+      setAnn(r.id, {note: ta.value.trim() ? ta.value : ""});
+  };
+  ta.onkeydown=e=>{ if(e.key==="Enter" && (e.ctrlKey||e.metaKey)){ e.preventDefault(); dlg.close("save"); } };
+  dlg.showModal(); ta.focus();
+}
+
+function buildAnnControls(){
+  const box=document.getElementById("starFilter");
+  [[0,"無"],[1,"★"],[2,"★★"],[3,"★★★"]].forEach(([n,label])=>{
+    const c=document.createElement("span"); c.className="chip"; c.textContent=label;
+    c.onclick=()=>{ starFilt.has(n)?starFilt.delete(n):starFilt.add(n);
+                    c.classList.toggle("on"); render(); };
+    box.appendChild(c);
+  });
+  document.getElementById("annSave").onclick=()=>writeAnnFile();
+  document.getElementById("annImport").onchange=async e=>{
+    const f=e.target.files[0]; if(!f) return;
+    try{
+      const obj=JSON.parse(await f.text());
+      const incoming=rekeyAnn(obj.annotations||{});
+      ANN=mergeAnn(ANN, incoming);
+      saveLocalAnn();
+      annStatus("已匯入 "+Object.keys(incoming).length+" 筆"); render(); compare();
+    }catch(err){ annStatus("匯入失敗："+err.message); }
+    e.target.value="";
+  };
+  annStatus();
+}
+
+const val = (r,k) => ({
+  stars:ann(r).stars||0, note:(ann(r).note||"").trim(),
+  name:r.name, date:r.date||"", algorithm:r.algorithm, purpose:r.purpose,
+  operator:r.operator, device:r.device,
+  best:r.metrics.best ?? -1, last:r.metrics.last ?? -1,
+  gap:r.metrics.gap ?? -1, n:r.metrics.test_points ?? 0
+}[k]);
+
+const COLS = [
+  ["stars","★"],["name","Run"],["note","附註"],["date","日期"],["algorithm","演算法"],["purpose","Purpose"],
+  ["operator","Operator"],["device","Device"],["best","best"],["last","last"],
+  ["gap","gap"],["n","測試點"]
+];
+
+const TIPS = {
+  best: "best = max(r_i)，所有測試點中最高的 Saving Ratio\nr_i = (initial_volume − final_volume) / initial_volume",
+  last: "last = r_N，最後一個測試點的 Saving Ratio",
+  gap:  "gap = best − last；> 0.1 視為未收斂",
+  n:    "測試點數 N（每 test_frequency 個 episode 測試一次）"
+};
+
+function buildFilters(){
+  const box = document.getElementById("filters");
+  AXES.forEach(ax=>{
+    filt[ax] = new Set();
+    const vals = [...new Set(RUNS.map(r=>r[ax]))].sort();
+    const g = document.createElement("div"); g.className="grp";
+    g.innerHTML = "<b>"+ax+"</b>";
+    vals.forEach(v=>{
+      const c=document.createElement("span"); c.className="chip"; c.textContent=v;
+      c.onclick=()=>{ filt[ax].has(v)?filt[ax].delete(v):filt[ax].add(v);
+                      c.classList.toggle("on"); render(); };
+      g.appendChild(c);
+    });
+    box.appendChild(g);
+  });
+}
+
+/* ---- 日期篩選：區間 AND 年 AND 月 AND 日；空集合 = 不限制 ---- */
+const DATE = {from:"", to:"", year:new Set(), month:new Set(), day:new Set()};
+const DATE_PART = {year:0, month:1, day:2};
+const fmtPart = (key,v) => key==="year" ? v : (+v)+(key==="month"?"月":"日");
+
+function matchDate(r){
+  const active = DATE.from || DATE.to ||
+                 DATE.year.size || DATE.month.size || DATE.day.size;
+  if(!active) return true;
+  if(!r.date) return false;                       // 無日期的 Run 在日期篩選下一律排除
+  const iso = r.date.replace(/_/g,"-");           // 2026_06_11 -> 2026-06-11，可直接字串比較
+  const [y,m,d] = r.date.split("_");
+  if(DATE.from && iso < DATE.from) return false;  // 區間兩端皆包含
+  if(DATE.to   && iso > DATE.to)   return false;
+  if(DATE.year.size  && !DATE.year.has(y))  return false;
+  if(DATE.month.size && !DATE.month.has(m)) return false;
+  if(DATE.day.size   && !DATE.day.has(d))   return false;
+  return true;
+}
+
+function buildDateFilters(){
+  const from=document.getElementById("dFrom"), to=document.getElementById("dTo");
+  const dated=RUNS.filter(r=>r.date);
+  const isos=dated.map(r=>r.date.replace(/_/g,"-")).sort();
+  if(isos.length){ from.min=to.min=isos[0]; from.max=to.max=isos[isos.length-1]; }
+  from.onchange=()=>{ DATE.from=from.value; render(); };
+  to.onchange  =()=>{ DATE.to=to.value;     render(); };
+
+  const box=document.getElementById("dParts");
+  [["year","年份"],["month","月份"],["day","日"]].forEach(([key,label])=>{
+    const counts={};
+    dated.forEach(r=>{ const v=r.date.split("_")[DATE_PART[key]];
+                       counts[v]=(counts[v]||0)+1; });
+    const dd=document.createElement("details"); dd.className="dd";
+    const sm=document.createElement("summary");
+    const menu=document.createElement("div");
+    menu.className="menu"+(key==="day"?" days":"");
+    const upd=()=>{
+      const s=[...DATE[key]].sort().map(v=>fmtPart(key,v));
+      sm.textContent=label+"："+(!s.length ? "全部" :
+        s.length>3 ? s.slice(0,3).join(", ")+" 等 "+s.length+" 項" : s.join(", "));
+      sm.classList.toggle("on", s.length>0);
+    };
+    Object.keys(counts).sort().forEach(v=>{
+      const lab=document.createElement("label");
+      const cb=document.createElement("input"); cb.type="checkbox";
+      cb.onchange=()=>{ cb.checked?DATE[key].add(v):DATE[key].delete(v); upd(); render(); };
+      const cnt=document.createElement("span"); cnt.className="cnt"; cnt.textContent=counts[v];
+      lab.append(cb, fmtPart(key,v), cnt);
+      menu.appendChild(lab);
+    });
+    upd();
+    dd._upd=upd;
+    dd.append(sm, menu);
+    dd.addEventListener("toggle",()=>{ if(dd.open)
+      box.querySelectorAll("details.dd[open]").forEach(o=>{ if(o!==dd) o.open=false; }); });
+    box.appendChild(dd);
+  });
+
+  document.getElementById("dClear").onclick=()=>{
+    DATE.from=DATE.to=""; from.value=to.value="";
+    ["year","month","day"].forEach(k=>DATE[k].clear());
+    box.querySelectorAll("input[type=checkbox]").forEach(c=>c.checked=false);
+    box.querySelectorAll("details.dd").forEach(d=>{ d._upd(); d.open=false; });
+    render();
+  };
+  // 點選下拉選單以外的地方時收合
+  document.addEventListener("click",e=>{
+    box.querySelectorAll("details.dd[open]").forEach(d=>{
+      if(!d.contains(e.target)) d.open=false; });
+  });
+}
+
+function match(r){
+  for(const ax of AXES) if(filt[ax].size && !filt[ax].has(r[ax])) return false;
+  if(!matchDate(r)) return false;
+  if(convOnly && r.metrics.unconverged) return false;
+  if(starFilt.size && !starFilt.has(ann(r).stars||0)) return false;
+  if(q){
+    // 同時搜尋 Note（事後附註）與 args 的 comment（訓練當下的說明）—— 兩者不同，見 CONTEXT.md
+    const hay = (r.name+" "+(ann(r).note||"")+" "+JSON.stringify(r.comment||"")+" "+
+                 JSON.stringify(r.args)).toLowerCase();
+    if(!hay.includes(q)) return false;
+  }
+  return true;
+}
+
+function render(){
+  const head=document.getElementById("head"); head.innerHTML="<th></th>";
+  COLS.forEach(([k,label])=>{
+    const th=document.createElement("th"); th.textContent=label;
+    if(TIPS[k]) th.title=TIPS[k];
+    if(k===sortKey){ th.classList.add("sorted"); th.textContent=label+(sortDir<0?" ↓":" ↑"); }
+    th.onclick=()=>{ if(sortKey===k) sortDir=-sortDir; else {sortKey=k;sortDir=-1;} render(); };
+    head.appendChild(th);
+  });
+
+  const rows = RUNS.filter(match).sort((a,b)=>{
+    const x=val(a,sortKey), y=val(b,sortKey);
+    // 同值時以名稱排序：名稱開頭含時分秒，同一天的 Run 仍會依時間先後排列
+    const c = x<y?-1:x>y?1:0;
+    return (c || (a.name<b.name?-1:a.name>b.name?1:0))*sortDir;
+  });
+
+  const body=document.getElementById("body"); body.innerHTML="";
+  rows.forEach(r=>{
+    const tr=document.createElement("tr");
+    const cb=document.createElement("input"); cb.type="checkbox";
+    cb.checked=sel.has(r.id);
+    cb.onchange=()=>{ cb.checked?sel.add(r.id):sel.delete(r.id); compare(); };
+    const td0=document.createElement("td"); td0.appendChild(cb); tr.appendChild(td0);
+    COLS.forEach(([k])=>{
+      const td=document.createElement("td");
+      if(k==="stars"){ td.className="stars-cell"; td.appendChild(starsEl(r)); }
+      else if(k==="note"){ td.className="note-cell"; td.appendChild(noteEl(r)); }
+      else if(k==="name"){ td.className="name"; td.textContent=r.name;
+        if(r.moved) td.innerHTML+=' <span class="tag" title="訓練當下位於 '+
+          esc(r.recorded_ckpt_dir)+'">moved</span>';
+        if(r.warnings && r.warnings.length){
+          const wt=document.createElement("span"); wt.className="tag warn";
+          wt.textContent="⚠ "+r.warnings.length; wt.title=r.warnings.join("\n");
+          td.append(" ", wt);
+        } }
+      else if(["best","last","gap","n"].includes(k)){
+        td.className="num";
+        const v=val(r,k);
+        td.textContent = k==="n" ? v : v.toFixed(3);
+        if(k==="gap" && r.metrics.unconverged){ td.className+=" bad";
+          td.title="Convergence Gap > 0.1，視為未收斂 (ADR-0001)"; }
+      } else td.textContent=val(r,k);
+      tr.appendChild(td);
+    });
+    body.appendChild(tr);
+  });
+  document.getElementById("shown").textContent =
+    rows.length+" / "+RUNS.length+" 個 Run";
+  document.getElementById("dWarn").textContent =
+    DATE.from && DATE.to && DATE.from > DATE.to ? "起始日期晚於結束日期" : "";
+}
+
+/* ---- 比較 ---- */
+const CATS=["xdir_beam","zdir_beam","outer_col","inner_col"];
+function shade(v,max){
+  const t = max? v/max : 0;
+  const l = 96 - t*52;                      // 淺 = 薄, 深 = 厚
+  return "hsl(28 30% "+l.toFixed(0)+"%)";
+}
+function gridEl(design, story, initial){
+  const max=Math.max(...initial,1);
+  const d=document.createElement("div");
+  d.className="grid"; d.style.setProperty("--n",story);
+  d.appendChild(Object.assign(document.createElement("div"),
+      {className:"lbl",textContent:""}));
+  for(let s=1;s<=story;s++)
+    d.appendChild(Object.assign(document.createElement("div"),
+      {className:"lbl",textContent:s+"F"}));
+  CATS.forEach((c,ci)=>{
+    d.appendChild(Object.assign(document.createElement("div"),
+      {className:"lbl",textContent:c}));
+    for(let s=0;s<story;s++){
+      const i=ci*story+s, v=design[i], delta=v-initial[i];
+      const cell=document.createElement("div");
+      cell.style.background=shade(v,max);
+      cell.style.color = v/max>0.55 ? "#fff":"#333";
+      cell.textContent = delta===0? v : delta;
+      cell.title=CATS[ci]+" "+(s+1)+"F：斷面 "+v+
+                 "（初始 "+initial[i]+"，"+(delta===0?"未變動":"減 "+(-delta)+" 級")+"）";
+      d.appendChild(cell);
+    }
+  });
+  return d;
+}
+
+function compare(){
+  const chosen = RUNS.filter(r=>sel.has(r.id));
+  const hint=document.getElementById("cmphint"), out=document.getElementById("cmpbody");
+  out.innerHTML="";
+  if(chosen.length<2){ hint.textContent="勾選 2–5 個 Run 進行比較。（已選 "+
+      chosen.length+" 個）"; return; }
+  if(chosen.length>5){ hint.textContent="一次最多比較 5 個，目前選了 "+
+      chosen.length+" 個。"; return; }
+  hint.textContent="比較 "+chosen.length+" 個 Run。相同的參數與從不變動的參數已摺疊。";
+
+  // ---- 參數，依三層欄位分組：通用 / 演算法專屬 / 從不變動 ----
+  // 演算法專屬參數只在「有此參數的 Run」之間比較：沒有此參數（顯示 —）代表該 Run 的
+  // 演算法不使用它，本身不算相異。否則 DQN 與 PPO 並排時，另一邊的專屬參數會全部被誤判為相異。
+  const UNIVERSAL="通用", INVARIANT="從不變動";
+  const tierOf=k=>{
+    if(FIELDS.invariant.includes(k)) return INVARIANT;
+    if(FIELDS.universal.includes(k)) return UNIVERSAL;
+    for(const[t,ks]of Object.entries(FIELDS.algorithm_specific))
+      if(ks.includes(k)) return t;
+    return "";
+  };
+  const keys=[...new Set(chosen.flatMap(r=>Object.keys(r.args)))].sort();
+  const rowOf=k=>[k, chosen.map(r=> k in r.args ? JSON.stringify(r.args[k]) : "—")];
+  const differs=k=>new Set(chosen.filter(r=>k in r.args).map(r=>JSON.stringify(r.args[k]))).size>1;
+  const invariantKeys=keys.filter(k=>tierOf(k)===INVARIANT);
+  const varyingKeys=keys.filter(k=>tierOf(k)!==INVARIANT);
+  const diffKeys=varyingKeys.filter(differs), sameKeys=varyingKeys.filter(k=>!differs(k));
+  const tierOrder=[UNIVERSAL, ...Object.keys(FIELDS.algorithm_specific)];
+  const tierLabel=t=> t===UNIVERSAL ? "通用" : "演算法專屬（"+t+"）";
+
+  const mk=rows=>{
+    const t=document.createElement("table"); t.className="diff";
+    t.innerHTML="<thead><tr><th>參數</th>"+
+      chosen.map(thRun).join("")+"</tr></thead>";
+    const tb=document.createElement("tbody");
+    tb.innerHTML=rows.map(([k,vs])=>"<tr><td>"+esc(k)+"</td>"+
+      vs.map(v=>"<td class='diffval'>"+esc(v)+"</td>").join("")+"</tr>").join("");
+    t.appendChild(tb); return t;
+  };
+  // 依層級分段輸出：每個有內容的層級一個小標題 + 表格
+  const byTier=(container, ks)=>{
+    tierOrder.forEach(t=>{
+      const inTier=ks.filter(k=>tierOf(k)===t);
+      if(!inTier.length) return;
+      container.insertAdjacentHTML("beforeend","<h4 class='tierh'>"+tierLabel(t)+"（"+inTier.length+"）</h4>");
+      container.appendChild(mk(inTier.map(rowOf)));
+    });
+  };
+
+  // ---- 警告：args 雙來源不一致等（C2）----
+  const warned=chosen.filter(r=>r.warnings && r.warnings.length);
+  if(warned.length) out.insertAdjacentHTML("beforeend",
+    "<h3 class='bad' style='font-size:13px;margin:14px 0 6px'>⚠ 警告</h3>"+
+    "<ul class='warnlist'>"+warned.map(r=>"<li><b>"+esc(r.name)+"</b><ul>"+
+      r.warnings.map(x=>"<li>"+esc(x)+"</li>").join("")+"</ul></li>").join("")+"</ul>");
+
+  // 訓練當下寫在 args 裡的 comment：train_args.json 為字串陣列，log 的 Namespace 為單一字串。
+  // 字串不依逗號切分 —— 內容本身可能含逗號，例如 "(alpha=0, beta=0)"。
+  const commentHtml = c => {
+    if(c==null || (Array.isArray(c) ? !c.length : !String(c).trim())) return "<span class='empty'>—</span>";
+    return Array.isArray(c)
+      ? "<ul class='cmt'>"+c.map(x=>"<li>"+esc(x)+"</li>").join("")+"</ul>"
+      : "<div class='cmt'>"+esc(c)+"</div>";
+  };
+  out.insertAdjacentHTML("beforeend",
+    "<h3 style='font-size:13px;margin:14px 0 6px'>comment</h3>"+
+    "<div class='hint'>訓練時寫在 args 裡的 comment（來源：train_args.json 或 record.log）。</div>"+
+    "<table class='diff'><thead><tr>"+chosen.map(thRun).join("")+
+    "</tr></thead><tbody><tr>"+chosen.map(r=>"<td>"+commentHtml(r.comment)+"</td>").join("")+
+    "</tr></tbody></table>");
+
+  out.insertAdjacentHTML("beforeend",
+    "<h3 style='font-size:13px;margin:14px 0 6px'>相異參數（"+diffKeys.length+"）</h3>"+
+    "<div class='hint'>依欄位層級分組。— 表示該 Run 的演算法沒有此參數，不計為相異。</div>");
+  const diffBox=document.createElement("div"); diffBox.className="diffgroup";
+  if(diffKeys.length) byTier(diffBox, diffKeys); else
+    diffBox.innerHTML="<div class='empty'>沒有相異參數 —— 這幾個 Run 的設定完全相同。</div>";
+  out.appendChild(diffBox);
+
+  const det=document.createElement("details"); det.className="samegroup";
+  det.innerHTML="<summary>相同參數（"+sameKeys.length+"）</summary>";
+  byTier(det, sameKeys);
+  out.appendChild(det);
+
+  const inv=document.createElement("details"); inv.className="invariantgroup";
+  inv.innerHTML="<summary>從不變動（"+invariantKeys.length+"）—— 所有 Run 中只出現過一種值</summary>";
+  if(invariantKeys.length) inv.appendChild(mk(invariantKeys.map(rowOf)));
+  out.appendChild(inv);
+
+  const mh=document.createElement("div");
+  mh.innerHTML="<h3 style='font-size:13px;margin:20px 0 6px'>指標</h3>";
+  out.appendChild(mh);
+  const mt=document.createElement("table"); mt.className="diff";
+  mt.innerHTML="<thead><tr><th>指標</th>"+chosen.map(thRun).join("")+"</tr></thead><tbody>"+
+    [["best","best"],["last","last"],["gap","gap"],["test_points","測試點"],
+     ["score_best","score (best 點)"],["fail_reason","結束原因 (best 點)"]]
+    .map(([k,l])=>"<tr><td>"+l+"</td>"+chosen.map(r=>{
+      let v=r.metrics[k]; if(typeof v==="number"&&k!=="test_points") v=v.toFixed(4);
+      const bad = k==="gap" && r.metrics.unconverged;
+      return "<td class='diffval"+(bad?" bad":"")+"'>"+v+"</td>";}).join("")+"</tr>")
+    .join("")+"</tbody>";
+  mt.tBodies[0].insertAdjacentHTML("afterbegin",
+    "<tr><td>★</td>"+chosen.map(r=>"<td class='diffval'>"+
+      ("★".repeat(ann(r).stars||0)||"—")+"</td>").join("")+"</tr>"+
+    "<tr><td>附註</td>"+chosen.map(r=>"<td style='white-space:pre-wrap'>"+
+      (esc((ann(r).note||"").trim())||"—")+"</td>").join("")+"</tr>");
+  out.appendChild(mt);
+
+  const gh=document.createElement("div");
+  gh.innerHTML="<h3 style='font-size:13px;margin:20px 0 4px'>最終設計（best 測試點）</h3>"+
+    "<div class='hint'>格子內是與初始斷面的差距（負數 = 減了幾級），"+
+    "未變動者顯示斷面索引。色深 = 斷面厚度。</div>";
+  out.appendChild(gh);
+  const gs=document.createElement("div"); gs.className="grids";
+  chosen.forEach(r=>{
+    const c=document.createElement("div"); c.className="gcard";
+    c.innerHTML="<h3>"+esc(r.name.slice(0,40))+"…</h3>";
+    c.appendChild(gridEl(r.metrics.final_design, r.metrics.story_num,
+                         r.metrics.initial_design));
+    // best 必須與 last、gap 一起出現，避免單看 best 誤判為穩定（ADR-0001）
+    const m=r.metrics;
+    c.insertAdjacentHTML("beforeend","<div class='legend'>節材 best "+(m.best*100).toFixed(1)+
+      "% · last "+(m.last*100).toFixed(1)+"% · <span class='"+(m.unconverged?"bad":"")+"'>gap "+
+      m.gap.toFixed(3)+(m.unconverged?"（未收斂）":"")+"</span></div>");
+    gs.appendChild(c);
+  });
+  out.appendChild(gs);
+}
+
+document.getElementById("scope").textContent=DATA.scope;
+{
+  const nWarn=RUNS.filter(r=>r.warnings && r.warnings.length).length;
+  document.getElementById("count").textContent=RUNS.length+" 個 Run"+
+    (nWarn ? " · ⚠ "+nWarn+" 個 Run 有警告（見表格中的 ⚠ 標籤）" : "");
+}
+document.getElementById("q").oninput=e=>{q=e.target.value.toLowerCase();render();};
+document.getElementById("convOnly").onclick=e=>{
+  convOnly=!convOnly; e.target.classList.toggle("on"); render(); };
+buildFilters(); buildDateFilters(); buildAnnControls(); render(); compare();
+</script>
+</body>
+</html>

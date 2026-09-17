@@ -1,0 +1,11 @@
+{
+  "name": "checkpoint-index-tests",
+  "private": true,
+  "description": "Tests for tools/checkpoint_index viewer (runs the generated index.html in jsdom)",
+  "scripts": {
+    "test": "node run.js"
+  },
+  "devDependencies": {
+    "jsdom": "^24.1.3"
+  }
+}

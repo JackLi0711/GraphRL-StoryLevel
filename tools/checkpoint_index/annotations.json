@@ -1,0 +1,45 @@
+{
+ "version": 2,
+ "annotations": {
+  "Results/AdjustedMoreSections/RandomShape/OpenSees_RSA/2025_06_05__21_45_28__TaiModifiedModel_MatReward_StaResFeatures_SoftUpdate_LinearDecay010_Buffer10000_Batch256_Epoch1000": {
+   "stars": 1,
+   "note": "GraphRL manuscript",
+   "updated": "2026-09-17T06:57:09.733Z"
+  },
+  "Results/AdjustedMoreSections/RandomShape/OpenSees_RSA/2025_06_11__22_23_53__TaiModifiedModel_MatReward_StaResFeatures_SoftUpdate_doNDA_LinearDecay010_Buffer10000_Batch256_Epoch1000": {
+   "stars": 1,
+   "note": "GraphRL manuscript",
+   "updated": "2026-09-17T06:57:16.017Z"
+  },
+  "Results/AdjustedMoreSections/RandomShape/OpenSees_RSA/2026_03_10__13_19_18__PPO_MatReward_UseGAE095_LR5e-4_ActLossCoef10_CriLossCoef001_EntroWei01to001_OptimEpoch5_Episode1000": {
+   "stars": 1,
+   "note": "Master thesis",
+   "updated": "2026-09-17T07:04:35.947Z"
+  },
+  "Results/AdjustedMoreSections/RandomShape/OpenSees_RSA/2026_03_17__17_12_00__PPO_MatReward_doNDA_UseGAE095_LR5e-4_ActLossCoef10_CriLossCoef001_EntroWei01to001_OptimEpoch5_Episode1000": {
+   "stars": 1,
+   "note": "Master thesis",
+   "updated": "2026-09-17T07:04:40.788Z"
+  },
+  "Results/AdjustedMoreSections/RandomShape/OpenSees_RSA/2026_06_08__09_21_19__OC_LR5eN4_LossCoef_OCA10_C001_B1H0Reg0Tar05_GJSD0_OptNum2_OptimEpo1_SyncFreq10_LinDecay01_Episode1000": {
+   "stars": 1,
+   "note": "Master thesis",
+   "updated": "2026-09-17T07:05:25.572Z"
+  },
+  "Results/AdjustedMoreSections/RandomShape/OpenSees_RSA/2026_06_11__09_40_07__OC_doNDA_LR5eN4_LossCoef_OCA10_C001_B1H0Reg0Tar05_GJSD0_OptNum2_OptimEpo1_SyncFreq10_LinDecay01_Episode1000": {
+   "stars": 1,
+   "note": "Master thesis",
+   "updated": "2026-09-17T07:05:29.631Z"
+  },
+  "Results/AdjustedMoreSections/RandomShape/OpenSees_RSA/DQN_Experiment_Jack/2026_01_05__11_59_47__DouDQN_MatReward_SoftUpdate_LinearDecay010_Buffer10000_Batch256_Epoch1000": {
+   "stars": 1,
+   "note": "Master thesis",
+   "updated": "2026-09-17T07:02:17.476Z"
+  },
+  "Results/AdjustedMoreSections/RandomShape/OpenSees_RSA/DQN_Experiment_Jack/2026_02_01__23_28_10__DouDQN_MatReward_SoftUpdate_DoNDA_LinearDecay010_Buffer10000_Batch256_Epoch1000": {
+   "stars": 1,
+   "note": "Master thesis",
+   "updated": "2026-09-17T07:02:23.111Z"
+  }
+ }
+}
