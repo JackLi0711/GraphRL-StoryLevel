@@ -296,6 +296,7 @@ class Environment:
         # 2-1. linear static analysis: check if response pass constraints
         static_constraint_condition, static_response_features, static_response_rewards = check.process_response(structure, load_cases, static_responses)
         whether_pass, fail_name, fail_reason = check.check_pass(load_cases, static_constraint_condition, self.check_displacement)
+        check_detail = None if whether_pass else check.failure_detail(load_cases, static_constraint_condition, fail_name, fail_reason)
         # 2-2. nonlinear dynamic analysis: check if response pass constraints
         dynamic_response_features = None
         dynamic_response_rewards = None
@@ -304,6 +305,10 @@ class Environment:
             dynamic_responses = check_nda.get_response(structure, self.nda_simulator, self.MCE_ground_motion_set, self.device)
             dynamic_constraint_condition, dynamic_response_features, dynamic_response_rewards = check_nda.process_response(structure, dynamic_responses, self.nda_norm_dict)
             whether_pass, fail_name, fail_reason = check_nda.check_pass(dynamic_constraint_condition, self.check_displacement)
+            check_detail = None if whether_pass else check_nda.failure_detail(dynamic_constraint_condition, fail_reason)
+        # kept for Rollout consumers; the return value is unchanged
+        self.last_step_passed = whether_pass
+        self.last_check_detail = check_detail
 
         structure.update_graph_GraphRL(static_response_features, dynamic_response_features)
 
