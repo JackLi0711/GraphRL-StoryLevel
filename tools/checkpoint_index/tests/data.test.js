@@ -32,6 +32,7 @@ module.exports = async () => {
     [...new Set(RUNS.map(r => r.operator))].join(', '));
   t.ok('no run has an unresolved operator on current data', RUNS.every(r => !r.operator.startsWith('Unknown-') && !r.operator.endsWith('-unknown')));
   t.ok('every run has a yyyy_mm_dd date', RUNS.every(r => /^\d{4}_\d{2}_\d{2}$/.test(r.date || '')));
+  t.ok('has_behaviors_png is a boolean on every run', RUNS.every(r => typeof r.has_behaviors_png === 'boolean'));
   t.ok('run ids are unique', new Set(RUNS.map(r => r.id)).size === RUNS.length);
   t.ok('run folder names are unique (annotations re-match on this after Filing)',
     new Set(RUNS.map(r => r.id.split('/').pop())).size === RUNS.length);

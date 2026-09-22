@@ -13,6 +13,7 @@ import argparse
 import ast
 import collections
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -23,6 +24,9 @@ from key_map import canonicalize, NON_PARAMETER_KEYS  # noqa: E402
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_SCOPE = "Results/AdjustedMoreSections/RandomShape/OpenSees_RSA"
 DEFAULT_OUT = Path(__file__).resolve().parent / "index.json"
+
+# 比較區顯示的訓練行為圖；檔案留在 Results/ 原處，頁面以相對路徑參照（共約 128 MB，不可能內嵌）
+BEHAVIORS_PNG = "testing_behaviors.png"
 
 # Convergence Gap 超過此值視為未收斂 (ADR-0001)
 UNCONVERGED_GAP = 0.1
@@ -297,6 +301,7 @@ def build(scope_rel: str) -> dict:
             "comment": args.get("comment"),
             "args": {k: v for k, v in args.items() if k not in NON_PARAMETER_KEYS},
             "metrics": metrics,
+            "has_behaviors_png": (run / BEHAVIORS_PNG).exists(),
             "warnings": warns,
         })
 
@@ -329,6 +334,11 @@ def load_annotations(runs) -> dict:
 
 
 VIEWER_TEMPLATE = Path(__file__).resolve().parent / "viewer_template.html"
+
+
+def viewer_to_repo_root(viewer_dir: Path) -> str:
+    """檢視頁面要用相對路徑指向 Results/ 底下的圖檔，這裡算出從頁面到 repo 根目錄的前綴。"""
+    return os.path.relpath(REPO_ROOT, viewer_dir).replace(os.sep, "/")
 
 
 def embed_json(obj) -> str:
@@ -375,6 +385,7 @@ def main() -> None:
     cli = parser.parse_args()
 
     index = build(cli.scope)
+    index["viewer_to_repo_root"] = viewer_to_repo_root(cli.out.parent)
     cli.out.write_text(json.dumps(index, ensure_ascii=False, indent=1), encoding="utf-8")
     print("indexed {} runs -> {} ({:.0f} KB)".format(
         len(index["runs"]), cli.out, cli.out.stat().st_size / 1024))

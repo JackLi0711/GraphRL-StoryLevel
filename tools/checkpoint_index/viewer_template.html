@@ -105,6 +105,11 @@
   #noteDlg button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
   td.stars-cell,td.note-cell{white-space:nowrap}
   .tierh{font-size:12px;font-weight:600;color:var(--muted);margin:12px 0 4px}
+  .behaviors{display:flex;flex-wrap:wrap;gap:14px;margin-top:6px}
+  .bcard{border:1px solid var(--line);border-radius:6px;padding:8px;
+       max-width:min(560px,100%);flex:1 1 380px}
+  .bcard h4{white-space:normal;word-break:break-all;margin-top:0}
+  .bcard img{width:100%;height:auto;display:block;border-radius:4px;background:#fff}
   .tag.warn{background:#fbe9e4;color:var(--warn);cursor:help}
   ul.warnlist{margin:0;padding-left:18px;font-size:12.5px}
   ul.warnlist ul{padding-left:16px;color:var(--warn);font-family:ui-monospace,Consolas,monospace;
@@ -690,6 +695,36 @@ function compare(){
     "<tr><td>附註</td>"+chosen.map(r=>"<td style='white-space:pre-wrap'>"+
       (esc((ann(r).note||"").trim())||"—")+"</td>").join("")+"</tr>");
   out.appendChild(mt);
+
+  // ---- testing_behaviors.png ----
+  // 圖檔留在 Results/ 原處，以相對路徑參照：全部約 128 MB，內嵌進單檔頁面不可行。
+  // 代價是此頁必須留在原本的資料夾，否則相對路徑找不到圖。
+  const REPO_REL=(DATA.viewer_to_repo_root||"../..").replace(/\/+$/,"");
+  const behaviorsSrc=r=>encodeURI(REPO_REL+"/"+r.id+"/testing_behaviors.png");
+  out.insertAdjacentHTML("beforeend",
+    "<h3 style='font-size:13px;margin:20px 0 4px'>testing_behaviors.png</h3>"+
+    "<div class='hint'>圖檔未複製，直接讀取 Results/ 底下的原檔；點圖可開原尺寸。</div>");
+  const bwrap=document.createElement("div"); bwrap.className="behaviors";
+  chosen.forEach(r=>{
+    const card=document.createElement("div"); card.className="bcard";
+    card.innerHTML="<h4 class='tierh'>"+esc(r.name.slice(0,40))+"…</h4>";
+    if(r.has_behaviors_png){
+      const src=behaviorsSrc(r);
+      const a=document.createElement("a"); a.href=src; a.target="_blank"; a.rel="noopener";
+      const img=document.createElement("img");
+      // 用 setAttribute：loading 必須在 src 之前生效，且並非每個環境都會把屬性反射回來
+      img.setAttribute("loading","lazy");
+      img.alt=r.name+" testing_behaviors.png"; img.src=src;
+      img.onerror=()=>{ a.replaceWith(Object.assign(document.createElement("div"),
+        {className:"empty", textContent:"讀不到圖檔："+decodeURI(src)+
+          "（此頁是否被移出 tools/checkpoint_index/？）"})); };
+      a.appendChild(img); card.appendChild(a);
+    } else {
+      card.insertAdjacentHTML("beforeend","<div class='empty'>沒有 testing_behaviors.png</div>");
+    }
+    bwrap.appendChild(card);
+  });
+  out.appendChild(bwrap);
 
   const gh=document.createElement("div");
   gh.innerHTML="<h3 style='font-size:13px;margin:20px 0 4px'>最終設計（best 測試點）</h3>"+

@@ -122,6 +122,19 @@ class OperatorRulesTest(unittest.TestCase):
             self.assertEqual(build_index.read_device(run), "V100")
 
 
+class ViewerPathTest(unittest.TestCase):
+    def test_prefix_from_default_viewer_location(self):
+        viewer_dir = build_index.REPO_ROOT / "tools" / "checkpoint_index"
+        self.assertEqual(build_index.viewer_to_repo_root(viewer_dir), "../..")
+
+    def test_prefix_from_repo_root(self):
+        self.assertEqual(build_index.viewer_to_repo_root(build_index.REPO_ROOT), ".")
+
+    def test_prefix_uses_forward_slashes(self):
+        deep = build_index.REPO_ROOT / "a" / "b" / "c"
+        self.assertEqual(build_index.viewer_to_repo_root(deep), "../../..")
+
+
 class EmbedJsonTest(unittest.TestCase):
     def test_script_close_tag_cannot_end_the_script_block(self):
         out = build_index.embed_json({"comment": "</script><script>alert(1)</script>"})

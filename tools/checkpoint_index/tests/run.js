@@ -8,7 +8,7 @@
 //
 // 測試讀的是本機 Results/ 產生的真實資料（Results/ 不在版控中），
 // 並以記憶體中的 fixture 取代標註，不會讀寫 annotations.json。
-const SUITES = ['data', 'date', 'sort', 'annotations', 'legacy-annotations', 'comment', 'compare', 'tiers', 'warnings'];
+const SUITES = ['data', 'date', 'sort', 'annotations', 'legacy-annotations', 'comment', 'compare', 'behaviors', 'tiers', 'warnings'];
 
 (async () => {
   let pass = 0, fail = 0;
