@@ -187,3 +187,6 @@ cython_debug/
 tools/checkpoint_index/index.json
 tools/checkpoint_index/index.html
 tools/checkpoint_index/tests/node_modules/
+
+# rollout demo
+tools/rollout_demo/tests/node_modules/
