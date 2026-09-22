@@ -1,0 +1,11 @@
+{
+  "name": "rollout-demo-tests",
+  "private": true,
+  "description": "Tests for tools/rollout_demo page (builds it from fixtures and runs it in jsdom)",
+  "scripts": {
+    "test": "node run.js"
+  },
+  "devDependencies": {
+    "jsdom": "^24.1.3"
+  }
+}
