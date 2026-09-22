@@ -38,6 +38,8 @@ module.exports = async () => {
   key(w, ' ');
   t.ok('Space pauses again', d.getElementById('play').textContent.includes('Play'));
 
+  const speeds = [...d.querySelectorAll('#speed option')].map(o => o.value).join(',');
+  t.ok('speed options 0.5× to 4×', speeds === '0.5,1,1.5,2,3,4', speeds);
   d.getElementById('speed').value = '4';
   click(d, 'play');
   await sleep(900 / 4 * (last + 2));

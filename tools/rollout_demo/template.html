@@ -22,9 +22,9 @@
   --chosen: #e8a000;
   --na: #ecebe6;
   --na-hatch: #d6d4cc;
-  /* section size: small -> large (one hue, ordinal) */
-  --sec-0: #86b6ef; --sec-1: #5598e7; --sec-2: #3987e5; --sec-3: #2a78d6;
-  --sec-4: #256abf; --sec-5: #1c5cab; --sec-6: #104281; --sec-7: #0d366b;
+  /* section size: small -> large, matplotlib viridis (reversed, t = 0.8 -> 0) so larger = darker on the light surface */
+  --sec-0: #7ad151; --sec-1: #3dbc74; --sec-2: #1fa187; --sec-3: #24868e;
+  --sec-4: #306a8e; --sec-5: #3e4c8a; --sec-6: #482979; --sec-7: #440154;
   /* Action Preference: low -> high (one hue, sequential) */
   --pref-0: #fbe8df; --pref-1: #f7c9b3; --pref-2: #f2a584; --pref-3: #ec8157;
   --pref-4: #d95926; --pref-5: #a8401a; --pref-6: #7d2f12;
@@ -35,10 +35,11 @@
     color-scheme: dark;
     --bg: #121211; --panel: #1a1a19; --border: #34342f; --grid: #2a2a27;
     --text: #ffffff; --text2: #c3c2b7; --muted: #9a998f;
-    --focus: #5598e7; --line: #5598e7; --good: #2fbf2f; --critical: #e66767; --halo: #ffffff; --chosen: #f2b600;
+    --focus: #5598e7; --line: #5598e7; --good: #2fbf2f; --critical: #e66767; --halo: #ffffff; --chosen: #ffffff;
     --na: #242422; --na-hatch: #34342f;
-    --sec-0: #184f95; --sec-1: #1c5cab; --sec-2: #256abf; --sec-3: #3987e5;
-    --sec-4: #5598e7; --sec-5: #86b6ef; --sec-6: #9ec5f4; --sec-7: #cde2fb;
+    /* viridis t = 0.2 -> 1: larger = brighter on the dark surface */
+    --sec-0: #414487; --sec-1: #33638d; --sec-2: #277f8e; --sec-3: #1f9a8a;
+    --sec-4: #32b67a; --sec-5: #69cd5b; --sec-6: #b2dd2d; --sec-7: #fde725;
     --pref-0: #33231b; --pref-1: #53301f; --pref-2: #7a3d22; --pref-3: #a84b26;
     --pref-4: #d95926; --pref-5: #ec835a; --pref-6: #f7b394;
     --pref-ink-lo: #ffffff; --pref-ink-hi: #0b0b0b;
@@ -48,10 +49,11 @@
   color-scheme: dark;
   --bg: #121211; --panel: #1a1a19; --border: #34342f; --grid: #2a2a27;
   --text: #ffffff; --text2: #c3c2b7; --muted: #9a998f;
-  --focus: #5598e7; --line: #5598e7; --good: #2fbf2f; --critical: #e66767; --halo: #ffffff; --chosen: #f2b600;
+  --focus: #5598e7; --line: #5598e7; --good: #2fbf2f; --critical: #e66767; --halo: #ffffff; --chosen: #ffffff;
   --na: #242422; --na-hatch: #34342f;
-  --sec-0: #184f95; --sec-1: #1c5cab; --sec-2: #256abf; --sec-3: #3987e5;
-  --sec-4: #5598e7; --sec-5: #86b6ef; --sec-6: #9ec5f4; --sec-7: #cde2fb;
+  /* viridis t = 0.2 -> 1: larger = brighter on the dark surface */
+  --sec-0: #414487; --sec-1: #33638d; --sec-2: #277f8e; --sec-3: #1f9a8a;
+  --sec-4: #32b67a; --sec-5: #69cd5b; --sec-6: #b2dd2d; --sec-7: #fde725;
   --pref-0: #33231b; --pref-1: #53301f; --pref-2: #7a3d22; --pref-3: #a84b26;
   --pref-4: #d95926; --pref-5: #ec835a; --pref-6: #f7b394;
   --pref-ink-lo: #ffffff; --pref-ink-hi: #0b0b0b;
@@ -203,8 +205,8 @@ button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px s
       <input id="slider" type="range" min="0" max="0" value="0" aria-label="Design Step">
       <span id="pos"></span>
       <label>Speed <select id="speed">
-        <option value="0.5">0.5×</option><option value="1" selected>1×</option>
-        <option value="2">2×</option><option value="4">4×</option>
+        <option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="1.5">1.5×</option>
+        <option value="2">2×</option><option value="3">3×</option><option value="4">4×</option>
       </select></label>
       <span class="keys"><kbd>←</kbd> <kbd>→</kbd> step · <kbd>Space</kbd> play</span>
     </div>
@@ -293,14 +295,17 @@ function drawFrame(r, v) {
   const rejected = v.step && !v.step.passed;
   let out = "";
   if (state.hoverGroup !== null) members.filter(m => m.g === state.hoverGroup).forEach(m => out += line(m, "hover"));
-  if (v.chosen !== null) members.filter(m => m.g === v.chosen).forEach(m => out += line(m, "halo" + (rejected ? " rejected" : "")));
-  members.forEach(m => {
-    if (m.g === null || m.g === undefined) { out += line(m, "m", ' style="stroke:var(--muted)"'); return; }
-    const kind = r.groups[m.g].kind;
-    const cls = ["m", kind, "s" + secStep(r, m.g, v.sections[m.g])];
+  const member = m => {
+    if (m.g === null || m.g === undefined) return line(m, "m", ' style="stroke:var(--muted)"');
+    const cls = ["m", r.groups[m.g].kind, "s" + secStep(r, m.g, v.sections[m.g])];
     if (m.g === v.chosen) cls.push("chosen");
-    out += line(m, cls.join(" "), ` data-group="${m.g}"`);
-  });
+    return line(m, cls.join(" "), ` data-group="${m.g}"`);
+  };
+  members.filter(m => m.g !== v.chosen).forEach(m => out += member(m));
+  // the chosen group goes on top so members in front of it cannot hide its halo
+  const chosen = members.filter(m => m.g === v.chosen);
+  chosen.forEach(m => out += line(m, "halo" + (rejected ? " rejected" : "")));
+  chosen.forEach(m => out += member(m));
   members.forEach(m => { if (m.g !== null && m.g !== undefined) out += line(m, "hit", ` data-group="${m.g}"`); });
   // story labels on the front-left column line
   const levels = [...new Set(r.topology.nodes.map(n => n[1]))].sort((a, b) => a - b).slice(1);
