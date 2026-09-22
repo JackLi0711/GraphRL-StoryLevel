@@ -13,9 +13,29 @@
 _Avoid_: test case, benchmark, 測試結構
 
 **Saving Ratio**:
-單一測試點的節材比例，`(initial_volume - final_volume) / initial_volume`。
+節材比例，`(initial_volume - current_volume) / initial_volume`，可在 Rollout 的任一 Design Step 計算。
+單一測試點或一個 Rollout 的 Saving Ratio 指的是其最終設計（最後一個通過檢核的設計）的值。
 與獎勵函數的設計無關，因此可跨 Run 比較。
 _Avoid_: score, reward, performance
+
+**Rollout**:
+以某個 Run 訓練完的模型，在某個結構上以 greedy 策略從初始斷面一路設計到終止的一次完整過程。
+與訓練時的 episode 不同：Rollout 不更新模型，且只在訓練結束後進行。
+_Avoid_: inference, episode, test
+
+**Design Step**:
+Rollout 中的一步：代理人選定一個樓層構件群組降級一級，接著進行結構分析與規範檢核。
+_Avoid_: timestep, iteration, action
+
+**Rejected Step**:
+未通過規範檢核的 Design Step。它會終止 Rollout，且其降級被撤銷：最終設計是它之前那一步的設計。
+一個 Rollout 至多只有一個 Rejected Step（必為最後一步）；若所有群組都降到最小斷面仍通過，則沒有 Rejected Step。
+_Avoid_: failed episode, invalid action
+
+**Action Preference**:
+代理人在一個 Design Step 對每個樓層構件群組的偏好程度，是總稱。
+PPO 的 Action Preference 是動作機率（softmax）；DQN 的是 Q 值。兩者不可互換，也不可直接比較數值。
+_Avoid_: probability（當指 DQN 時）, score, attention
 
 ### 訓練紀錄
 
