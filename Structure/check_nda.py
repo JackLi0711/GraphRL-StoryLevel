@@ -99,8 +99,19 @@ def check_pass(constraint_condition: np.ndarray, check_displacement: bool) -> tu
     elif np.sum(constraint_condition[:, 1]) > constraint_condition.shape[0] // 2:
         print(f"fail at NDA, total plastic hinge occurrence of all gms: {np.sum(constraint_condition[:, 1])} > {constraint_condition.shape[0] // 2}")
         return False, "nda", "nda_plastic_hinge"
-    else: 
+    else:
         return True, None, None
+
+
+def failure_detail(constraint_condition: np.ndarray, fail_reason: str) -> dict:
+    '''Governing value and limit of the failure reported by check_pass().'''
+    if fail_reason == "nda_mean_drift":
+        value, limit = np.mean(constraint_condition[:, 0]), NDA_MEAN_DRIFT_RATIO_LIMIT
+    elif fail_reason == "nda_peak_drift":
+        value, limit = np.max(constraint_condition[:, 0]), NDA_PEAK_DRIFT_RATIO_LIMIT
+    else:  # nda_plastic_hinge
+        value, limit = np.sum(constraint_condition[:, 1]), constraint_condition.shape[0] // 2
+    return {"check": fail_reason, "load_case": "nda", "value": float(value), "limit": float(limit), "comparator": ">"}
 
 
 def _get_nda_drift_ratio(structure: Structure, response: np.ndarray) -> np.ndarray:

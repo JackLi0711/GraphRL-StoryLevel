@@ -17,7 +17,7 @@ from logging import Logger
 from sklearn.manifold import TSNE
 from torch_geometric.loader import DataLoader
 
-from RL import environment, agent_DQN, agent_PPO, agent_OC, agent_OC_m3, new_strategy
+from RL import environment, agent_DQN, agent_PPO, agent_OC, agent_OC_m3, new_strategy, rollout
 from Structure import pisa, check, opensees
 from Structure.structure import Structure
 from Structure.sections import beam_sections, column_sections, YIELDING_STRESS
@@ -642,60 +642,29 @@ def get_inference_info(agent: Union[agent_DQN.DeepQAgent, agent_PPO.PPOAgent, ag
     if env.scwb_driven_design:
         new_strategy.strong_column_weak_beam_driven_update(structure, env.code_analysis_dir)
     env.init_records(structure)
-    graph = structure.graph.clone()
     
-    done = False
     timestep = 0
     accumulated_reward = 0
     action_list = []
     times = [[], []]  # agent.choose_action(), env.step()
     pmm_ratio_infos = [[], []]  # max and mean of PMM ratio
-    while not done:
-        original_structure = deepcopy(structure)
-        # go through gnn and get state
-        with torch.no_grad():
-            graph = graph.to(agent.device)
-            state = agent.gnn(graph.x, graph.edge_index, graph.edge_attr, None, structure.aux["story_batch"].to(agent.device), None)
-        
-        # record time for choose_action
-        t_start = time.time()
-        dont_select_story_member_indexes = structure.restrict_action_space() if agent.restrict_action else []
-        infeasible_actions = list(set(structure.already_minimum_section_story_indexes + dont_select_story_member_indexes))
-        if isinstance(agent, agent_DQN.DeepQAgent):
-            action, _ = agent.choose_action(state, infeasible_actions, greedy=True)
-            q_values = agent.online_q_network(state).squeeze().detach().cpu().numpy()
-            vis_values = (q_values - np.min(q_values)) / (np.max(q_values) - np.min(q_values))  # noamalize q_values to [0, 1]
-        elif isinstance(agent, agent_PPO.PPOAgent):
-            logits, _, _, action, _ = agent.choose_action(state, infeasible_actions, greedy=True)
-            vis_values = torch.softmax(logits, dim=-1).squeeze().detach().cpu().numpy()  # use action probabilities as vis values
-        elif isinstance(agent, agent_OC.OptionCriticAgent):
-            option_idx = 0
-            _, logits, _, _, action, _ = agent.choose_action(state, infeasible_actions, option_idx, greedy=True)
-            vis_values = torch.softmax(logits, dim=-1).squeeze().detach().cpu().numpy()  # use action probabilities as vis values
-        elif isinstance(agent, agent_OC_m3.OptionCriticAgent):
-            option_idx, _ = agent.choose_option(state, greedy=True)
-            _, logits, _, _, action, _ = agent.choose_action(state, infeasible_actions, option_idx, greedy=True)
-            vis_values = torch.softmax(logits, dim=-1).squeeze().detach().cpu().numpy()  # use action probabilities as vis values
-        else:
-            raise ValueError("agent type not supported.")
-        t_end = time.time()
-        times[0].append(t_end - t_start)
-        print(f"used time for agent.choose_action(): {t_end - t_start:.3f}s")
-        
+
+    def before_step(step: rollout.DesignStep, structure_before_step: Structure):
+        print(f"used time for agent.choose_action(): {step.choose_time:.3f}s")
         # visualize
         if "visualization" in infos:
-            vis_path = frame_dir / f"{timestep}.png"
-            _visualize_one_iteration(structure, timestep, env, vis_values, vis_path)
+            vis_path = frame_dir / f"{step.index}.png"
+            _visualize_one_iteration(structure_before_step, step.index, env, step.vis_values, vis_path)
 
-        # update structure
-        t_start = time.time()
-        structure, reward, done, fail_name, fail_reason = env.step(structure, action)
+    for step in rollout.design_steps(agent, env, structure, before_step=before_step):
+        original_structure = step.structure_before
+        structure, action, reward = step.structure_after, step.action, step.reward
+        times[0].append(step.choose_time)
         member_category = structure.story_level_categories[action]
         update_story = (action % structure.story_num) + 1
         action_info = f"{update_story}F_{member_category}"        
-        t_end = time.time()
-        times[1].append(t_end - t_start)
-        print(f"used time for env.step(): {t_end - t_start:.3f}s")
+        times[1].append(step.step_time)
+        print(f"used time for env.step(): {step.step_time:.3f}s")
 
         # get PMM ratio
         if "pmm_ratio" in infos:
@@ -708,20 +677,10 @@ def get_inference_info(agent: Union[agent_DQN.DeepQAgent, agent_PPO.PPOAgent, ag
             pmm_ratio_infos[0].append([member_max_group_max, member_max_group_min, member_max_group_med, member_max_choose_max])
             pmm_ratio_infos[1].append([member_mean_group_max, member_mean_group_min, member_mean_group_med, member_mean_choose_mean])
 
-        # get next state
-        graph = structure.graph.clone()
         timestep += 1
         accumulated_reward += reward
         action_list.append(action)
         print(f"timestep: {timestep:3d}, action: {action:3d} [{action_info}], reward: {reward:6.3f}, accumulated_reward: {accumulated_reward:6.3f}\n")
-
-        # check if can't select anymore
-        if agent.restrict_action:
-            dont_select = list(set(structure.already_minimum_section_story_indexes + structure.restrict_action_space()))
-        else:
-            dont_select = structure.already_minimum_section_story_indexes
-        if len(dont_select) >= len(structure.story_level_actions):
-            done = True    
 
     print(original_structure)
     print(f"action list: {action_list[:-1]}")

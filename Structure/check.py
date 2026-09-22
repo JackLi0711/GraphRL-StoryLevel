@@ -125,6 +125,33 @@ def check_pass(load_cases: list[load.NodalLoad], constraint_condition: np.ndarra
     return True, None, None
 
 
+# fail_reason --> (column of constraint_condition, limit, comparator that means failure)
+FAILURE_RULES = {
+    "beam_compression": (0, PHI_C, ">"),
+    "beam_tension": (1, PHI_C, ">"),
+    "beam_axial_moment": (2, BEAM_AXIAL_MOMENT_LIMIT, ">"),
+    "strong_column_weak_beam": (3, SCWB_RATIO_LIMIT, "<"),
+    "soft_story": (4, STORY_SHEAR_RATIO_LIMIT, "<"),
+    "drift_ratio": (5, STORY_DRIFT_RATIO_LIMIT, ">"),
+    "column_compression": (6, PHI_C, ">"),
+    "column_tension": (7, PHI_C, ">"),
+}
+
+
+def failure_detail(load_cases: list[load.NodalLoad], constraint_condition: np.ndarray, fail_name: str, fail_reason: str) -> dict:
+    '''Governing value and limit of the failure reported by check_pass(); value is None if it cannot be located.'''
+    column, limit, comparator = FAILURE_RULES[fail_reason]
+    value = None
+    for i, load_case in enumerate(load_cases):
+        if load_case.load_name != fail_name:
+            continue
+        v = float(constraint_condition[i, column])
+        if (v > limit) if comparator == ">" else (v < limit):
+            value = v
+            break
+    return {"check": fail_reason, "load_case": fail_name, "value": value, "limit": float(limit), "comparator": comparator}
+
+
 def get_ratio_beam_compression_strength(structure: Structure, response: opensees.Response) -> np.ndarray:
     """Get beam-compression-strength ratio given a specific structure and response."""
     beam_axial_force = np.array(list(response.member_response["axial"].values()))[structure.member_beam_index_list]

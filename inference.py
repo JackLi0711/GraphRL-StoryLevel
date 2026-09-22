@@ -111,7 +111,8 @@ def get_loggings(ckpt_dir):
 
 
 
-def main(args):
+def load_agent_and_env(args):
+	"""Build the trained agent and the environment exactly as this script does; used by tools/rollout_demo too."""
 	# Load training arguments
 	train_args_path = args.ckpt_dir / "train_args.json" 
 	with open(train_args_path, 'r') as f:
@@ -224,6 +225,12 @@ def main(args):
 	agent_model.gnn.load_state_dict(checkpoint["gnn"])    
 	agent_model.online_q_network.load_state_dict(checkpoint["online_q_network"])    
 	agent_model.target_q_network.load_state_dict(checkpoint["target_q_network"])
+
+	return agent_model, env
+
+
+def main(args):
+	agent_model, env = load_agent_and_env(args)
 
     # Visualize design process --> .png, .gif, .ipt
 	# initial_design = [14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 13, 9, 5, 4, 4, 1, 13, 12, 10, 9, 8, 4]
